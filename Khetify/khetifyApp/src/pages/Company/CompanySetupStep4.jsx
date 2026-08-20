@@ -244,9 +244,6 @@ const handleFileChange = (e) => {
                     className="w-full h-11 px-3 border border-stone-300 rounded-lg outline-none focus:ring-2 focus:ring-[#f20d0d] uppercase tracking-wide"
                     onChange={handleChange}
                   />
-                  <p className="text-stone-400 text-[11px] leading-snug">
-                    15 characters 
-                  </p>
                   {errors.gstinNumber && <p className="text-red-500 text-xs font-medium">⚠ {errors.gstinNumber}</p>}
                 </div>
                 <div className="flex flex-col space-y-2">
@@ -328,9 +325,6 @@ const handleFileChange = (e) => {
                     className="w-full h-11 px-3 border border-stone-300 rounded-lg outline-none focus:ring-2 focus:ring-[#f20d0d] uppercase tracking-wide"
                     onChange={handleChange}
                   />
-                  <p className="text-stone-400 text-[11px] leading-snug">
-                    10 characters
-                  </p>
                   {errors.panNumber && <p className="text-red-500 text-xs font-medium">⚠ {errors.panNumber}</p>}
                 </div>
                 {/* --- NEW: PAN Upload Input --- */}
