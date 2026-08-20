@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import axios from 'axios';
 import Swal from 'sweetalert2';
 import 'sweetalert2/dist/sweetalert2.min.css'; 
@@ -52,6 +52,22 @@ const MAX_BULK_ATTR_VALUES = 25;
 const MAX_BULK_TEXT_LEN = 60;
 // Suggestions only — the user is free to type any attribute name.
 const BULK_ATTR_SUGGESTIONS = ['Color', 'Material', 'Size', 'Capacity', 'Finish', 'Model'];
+
+// Pure utility: cartesian product of an array of arrays.
+// e.g. cartesian([['Red','Blue'],['S','M']]) → [['Red','S'],['Red','M'],['Blue','S'],['Blue','M']]
+const cartesian = (arrays) => {
+  if (!arrays.length) return [[]];
+  const [first, ...rest] = arrays;
+  const restCombos = cartesian(rest);
+  return first.flatMap(v => restCombos.map(r => [v, ...r]));
+};
+
+// Auto-generate a SKU from product name + variant combination values.
+const autoSku = (productName, combo) => {
+  const prefix = (productName || 'PRD').replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 4) || 'PRD';
+  const suffix = combo.map(v => v.replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 5)).join('-');
+  return `${prefix}-${suffix}`;
+};
 
 const CompanyUploadProduct = () => {
   const navigate = useNavigate();
@@ -109,7 +125,39 @@ const CompanyUploadProduct = () => {
   const makeBulkAttr = () => ({ id: bulkAttrId.current++, name: '', values: [], draft: '' });
   const [bulkAttrs, setBulkAttrs] = useState([]);
 
-  const [selectedFiles, setSelectedFiles] = useState([]); 
+  // Each row: { label, attrMap, sku, mrp, stock }
+  // Auto-computed from bulkAttrs; existing edits are preserved when attrs change.
+  const [variantRows, setVariantRows] = useState([]);
+
+  const patchVariantRow = (label, patch) =>
+    setVariantRows(prev => prev.map(r => (r.label === label ? { ...r, ...patch } : r)));
+
+  const applyBaseMrpToAll = () =>
+    setVariantRows(prev => prev.map(r => ({ ...r, mrp: formData.mrp })));
+
+  const resetAllStock = () =>
+    setVariantRows(prev => prev.map(r => ({ ...r, stock: '0' })));
+
+  const handleVariantImageChange = (label, file) => {
+    if (!file) return;
+    const preview = URL.createObjectURL(file);
+    setVariantRows(prev => prev.map(r => {
+      if (r.label !== label) return r;
+      // Revoke old preview URL to avoid memory leaks.
+      if (r.imagePreview) URL.revokeObjectURL(r.imagePreview);
+      return { ...r, image: file, imagePreview: preview };
+    }));
+  };
+
+  const removeVariantImage = (label) => {
+    setVariantRows(prev => prev.map(r => {
+      if (r.label !== label) return r;
+      if (r.imagePreview) URL.revokeObjectURL(r.imagePreview);
+      return { ...r, image: null, imagePreview: null };
+    }));
+  };
+
+  const [selectedFiles, setSelectedFiles] = useState([]);
   const [previews, setPreviews] = useState([]); 
 
   const handleInputChange = (e) => {
@@ -189,6 +237,31 @@ const CompanyUploadProduct = () => {
   const handleToggle = () => {
     setFormData(prev => ({ ...prev, isActive: !prev.isActive }));
   };
+
+  // Recompute the combinations table whenever variant attributes or the toggle changes.
+  // Existing row edits are preserved for unchanged combinations.
+  useEffect(() => {
+    if (formData.bulk_has_variants !== 'yes') { setVariantRows([]); return; }
+    const filled = bulkAttrs.filter(a => a.name.trim() && a.values.length > 0);
+    if (!filled.length) { setVariantRows([]); return; }
+    const combos = cartesian(filled.map(a => a.values));
+    setVariantRows(prev =>
+      combos.map(combo => {
+        const label = combo.join(' / ');
+        const attrMap = Object.fromEntries(filled.map((a, i) => [a.name, combo[i]]));
+        const existing = prev.find(r => r.label === label);
+        return {
+          label,
+          attrMap,
+          sku: existing?.sku ?? autoSku(formData.product_name, combo),
+          mrp: existing?.mrp ?? formData.mrp ?? '',
+          stock: existing?.stock ?? '',
+          image: existing?.image ?? null,
+          imagePreview: existing?.imagePreview ?? null,
+        };
+      })
+    );
+  }, [bulkAttrs, formData.bulk_has_variants]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ================= BULK PACKAGING VARIANTS ================= */
   // Answering "Yes" seeds one empty attribute row; "No" clears the list so no
@@ -433,7 +506,28 @@ const CompanyUploadProduct = () => {
     data.append('safetyInstructions', formData.handling_inst);
     data.append('productStatus', formData.isActive ? 'active' : 'inactive');
     data.append('productUpload', uploadStatus === 'draft' ? 'saveDraft' : 'uploaded');
-    
+    if (formData.bulk_has_variants === 'yes' && variantRows.length > 0) {
+      // Build sequential file index: only rows that have an image get an index
+      // (0, 1, 2…). Rows without an image send imageIndex: undefined so the
+      // backend knows to leave that variant's image field empty.
+      let fileIdx = 0;
+      data.append('variants', JSON.stringify(
+        variantRows.map((r) => ({
+          label: r.label,
+          attributes: r.attrMap,
+          sku: r.sku,
+          mrp: r.mrp !== '' ? Number(r.mrp) : undefined,
+          stock: r.stock !== '' ? Number(r.stock) : undefined,
+          imageIndex: r.image != null ? fileIdx++ : undefined,
+        }))
+      ));
+      // Append variant image files in row order under the same field name so
+      // multer collects them as an ordered array (req.files.variantImages[]).
+      variantRows.forEach((r) => {
+        if (r.image) data.append('variantImages', r.image);
+      });
+    }
+
     selectedFiles.forEach((file) => data.append('productImages', file));
 
     try {
@@ -788,16 +882,10 @@ const CompanyUploadProduct = () => {
               <div><label className={labelClass}>MRP (₹) <span className="text-[#EA2831]">*</span></label>
               <input id="mrp" type="number" className={inputClass} value={formData.mrp} onChange={handleInputChange} placeholder="0.00" required /></div>
               <div>
-                {/* <label className="block text-sm font-semibold text-stone-700 mb-1.5 flex justify-between">Cost Price (₹) <span className="text-[#EA2831]">*</span> <span className="text-[9px] bg-stone-100 px-1.5 py-0.5 rounded border border-stone-200 text-stone-500 font-bold uppercase">INTERNAL ONLY</span></label> */}
                 <label className="block text-sm font-semibold text-stone-700 mb-1.5 flex justify-between">
-  <span>
-    Cost Price (₹)<span className="text-[#EA2831]">*</span>
-  </span>
-
-  <span className="text-[9px] bg-stone-100 px-1.5 py-0.5 rounded border border-stone-200 text-stone-500 font-bold uppercase">
-    INTERNAL ONLY
-  </span>
-</label>
+                  <span>Cost Price (₹)<span className="text-[#EA2831]">*</span></span>
+                  <span className="text-[9px] bg-stone-100 px-1.5 py-0.5 rounded border border-stone-200 text-stone-500 font-bold uppercase">INTERNAL ONLY</span>
+                </label>
                 <input id="cost_price" type="number" className={inputClass} value={formData.cost_price} onChange={handleInputChange} placeholder="0.00" required />
               </div>
               <div><label className={labelClass}>GST (%)</label>
@@ -812,90 +900,44 @@ const CompanyUploadProduct = () => {
             </div>
           </section>
 
-          {/* Section 4: Supply & Logistics */}
+          {/* Section 4: Product Variants */}
           <section>
-            <h3 className="text-lg font-bold text-stone-900 mb-6 border-b border-stone-100 pb-2 uppercase tracking-wide">Supply & Logistics</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* <div><label className="block text-sm font-semibold text-stone-700 mb-1.5">Available Stock <span className="text-[#EA2831]">*</span></label><input id="stock" type="number" className={inputClass} value={formData.stock} onChange={handleInputChange} placeholder="e.g., 5000" required /></div> */}
-              <div><label className={labelClass}>Minimum Order Quantity (MOQ)</label><input id="moq" type="number" className={inputClass} value={formData.moq} onChange={handleInputChange} placeholder="e.g., 10" /></div>
-              <div><label className={labelClass}>Monthly Production Capacity</label><input id="capacity" className={inputClass} value={formData.capacity} onChange={handleInputChange} placeholder="e.g., 20000 Units" /></div>
-              {/* Packaging Type now lives in "Packaging & Measurement" above — kept
-                  here only as a pointer so nothing is asked for twice. */}
-              <div>
-                <label className={labelClass}>Bulk Packaging Type</label>
-                <select id="bulk_type" className={inputClass} value={formData.bulk_type} onChange={handleInputChange}>
-                  <option value="">Select Bulk Packaging</option>
-                  <option value="Carton">Carton</option>
-                  <option value="Bag">Bag</option>
-                  <option value="Box">Box</option>
-                  <option value="Sack">Sack</option>
-                  <option value="Drum">Drum</option>
-                  <option value="Other">Other…</option>
-                </select>
-                {formData.bulk_type === 'Other' && (
-                  <input
-                    id="bulk_custom_type"
-                    className={`${inputClass} mt-2`}
-                    value={formData.bulk_custom_type}
-                    onChange={handleInputChange}
-                    placeholder="Enter bulk packaging type"
-                  />
-                )}
-              </div>
-              <div>
-                <label className={labelClass}>Capacity Bulk Package</label>
-                <div className="flex gap-2">
-                  <input
-                    id="bulk_capacity"
-                    type="number"
-                    min="0"
-                    className={inputClass}
-                    value={formData.bulk_capacity}
-                    onChange={handleInputChange}
-                    placeholder="e.g., 50"
-                  />
-                  <input
-                    id="bulk_capacity_unit"
-                    className={`${inputClass} max-w-[120px]`}
-                    value={formData.bulk_capacity_unit}
-                    onChange={handleInputChange}
-                    placeholder="units"
-                  />
+            <h3 className="text-lg font-bold text-stone-900 mb-6 border-b border-stone-100 pb-2 uppercase tracking-wide">Product Variants</h3>
+            <div className="rounded-xl border border-stone-200 bg-stone-50/60 p-5">
+              {/* Toggle */}
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <label className={labelClass}>Does this product have variants?</label>
+                  <p className="text-xs text-stone-400">
+                    Choose Yes if the same product ships in different options (e.g. Size, Color, Capacity).
+                  </p>
                 </div>
-                <p className="text-xs text-stone-400 mt-1">e.g. 1 Carton contains 50 units</p>
+                <div className="flex rounded-lg border border-stone-200 bg-white p-1">
+                  {['no', 'yes'].map((answer) => (
+                    <button
+                      key={answer}
+                      type="button"
+                      onClick={() => setHasBulkVariants(answer)}
+                      aria-pressed={formData.bulk_has_variants === answer}
+                      className={`px-6 py-1.5 text-xs font-bold uppercase tracking-wider rounded-md transition-all ${
+                        formData.bulk_has_variants === answer
+                          ? 'bg-[#EA2831] text-white shadow-sm'
+                          : 'text-stone-400 hover:text-stone-600'
+                      }`}
+                    >
+                      {answer === 'yes' ? 'Yes' : 'No'}
+                    </button>
+                  ))}
+                </div>
               </div>
 
-              {/* ===== Bulk packaging variants ===== */}
-              <div className="md:col-span-2">
-                <div className="rounded-xl border border-stone-200 bg-stone-50/60 p-5">
-                  <div className="flex flex-wrap items-center justify-between gap-4">
-                    <div>
-                      <label className={labelClass}>Is there a variant of product?</label>
-                      <p className="text-xs text-stone-400">
-                        Choose Yes if the same product ships in different options (e.g. Color, Material, Size).
-                      </p>
-                    </div>
-                    <div className="flex rounded-lg border border-stone-200 bg-white p-1">
-                      {['no', 'yes'].map((answer) => (
-                        <button
-                          key={answer}
-                          type="button"
-                          onClick={() => setHasBulkVariants(answer)}
-                          aria-pressed={formData.bulk_has_variants === answer}
-                          className={`px-6 py-1.5 text-xs font-bold uppercase tracking-wider rounded-md transition-all ${
-                            formData.bulk_has_variants === answer
-                              ? 'bg-[#EA2831] text-white shadow-sm'
-                              : 'text-stone-400 hover:text-stone-600'
-                          }`}
-                        >
-                          {answer === 'yes' ? 'Yes' : 'No'}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+              {formData.bulk_has_variants === 'yes' && (
+                <div className="mt-6 space-y-6 animate__animated animate__fadeIn">
 
-                  {formData.bulk_has_variants === 'yes' && (
-                    <div className="mt-5 space-y-4 animate__animated animate__fadeIn">
+                  {/* Part A: Attribute builder */}
+                  <div>
+                    <p className="text-xs font-bold text-stone-500 uppercase tracking-wider mb-3">Variant Attributes</p>
+                    <div className="space-y-3">
                       {bulkAttrs.map((attr, index) => (
                         <div key={attr.id} className="rounded-lg border border-stone-200 bg-white p-4">
                           <div className="flex items-start justify-between gap-3">
@@ -909,20 +951,19 @@ const CompanyUploadProduct = () => {
                                   className={inputClass}
                                   value={attr.name}
                                   onChange={(e) => patchBulkAttr(attr.id, { name: e.target.value })}
-                                  placeholder="e.g., Color"
+                                  placeholder="e.g., Size"
                                   list="bulk-attr-suggestions"
                                   maxLength={MAX_BULK_TEXT_LEN}
                                 />
                               </div>
                               <div>
-                                <label className="block text-xs font-semibold text-stone-500 mb-1.5">Available Values</label>
+                                <label className="block text-xs font-semibold text-stone-500 mb-1.5">Values</label>
                                 <div className="flex gap-2">
                                   <input
                                     className={inputClass}
                                     value={attr.draft}
                                     onChange={(e) => patchBulkAttr(attr.id, { draft: e.target.value })}
                                     onKeyDown={(e) => {
-                                      // Enter adds a value without submitting the form.
                                       if (e.key === 'Enter' || e.key === ',') {
                                         e.preventDefault();
                                         commitBulkValue(attr.id);
@@ -973,22 +1014,190 @@ const CompanyUploadProduct = () => {
                           </div>
                         </div>
                       ))}
+                    </div>
 
-                      <datalist id="bulk-attr-suggestions">
-                        {BULK_ATTR_SUGGESTIONS.map((name) => <option key={name} value={name} />)}
-                      </datalist>
+                    <datalist id="bulk-attr-suggestions">
+                      {BULK_ATTR_SUGGESTIONS.map((name) => <option key={name} value={name} />)}
+                    </datalist>
 
-                      {bulkAttrs.length < MAX_BULK_ATTRS && (
-                        <button type="button" onClick={addBulkAttr} className="text-xs font-bold text-[#EA2831] hover:underline">
-                          + Add another attribute
-                        </button>
-                      )}
-                      
+                    {bulkAttrs.length < MAX_BULK_ATTRS && (
+                      <button
+                        type="button"
+                        onClick={addBulkAttr}
+                        className="mt-3 text-xs font-bold text-[#EA2831] hover:underline"
+                      >
+                        + Add another attribute
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Part B: Generated combinations table */}
+                  {variantRows.length === 0 && (
+                    <div className="rounded-lg border border-dashed border-stone-200 bg-white px-6 py-8 text-center">
+                      <span className="material-symbols-outlined text-stone-300 text-4xl block mb-2">table_rows</span>
+                      <p className="text-sm font-semibold text-stone-400">Variant table will appear here</p>
+                      <p className="text-xs text-stone-300 mt-1">
+                        Enter an attribute name (e.g. <b>Size</b>) and add at least one value (e.g. <b>500g</b>) — press <kbd className="bg-stone-100 border border-stone-200 rounded px-1 py-0.5 text-[10px]">Enter</kbd> to confirm each value.
+                      </p>
+                    </div>
+                  )}
+                  {variantRows.length > 0 && (
+                    <div className="animate__animated animate__fadeIn">
+                      <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+                        <p className="text-xs font-bold text-stone-500 uppercase tracking-wider">
+                          {variantRows.length} variant{variantRows.length !== 1 ? 's' : ''} generated
+                        </p>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={applyBaseMrpToAll}
+                            className="text-xs font-semibold text-[#EA2831] border border-[#EA2831]/30 rounded-lg px-3 py-1.5 hover:bg-[#EA2831]/5 transition-all"
+                          >
+                            Apply base MRP to all
+                          </button>
+                          <button
+                            type="button"
+                            onClick={resetAllStock}
+                            className="text-xs font-semibold text-stone-500 border border-stone-200 rounded-lg px-3 py-1.5 hover:bg-stone-100 transition-all"
+                          >
+                            Set stock to 0
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border border-stone-200 overflow-hidden">
+                        {/* Table header */}
+                        <div className="grid grid-cols-[1.5fr_1.5fr_1fr_1fr_72px] bg-stone-100 border-b border-stone-200 px-4 py-2.5 gap-3">
+                          <span className="text-[10px] font-black uppercase tracking-widest text-stone-400">Variant</span>
+                          <span className="text-[10px] font-black uppercase tracking-widest text-stone-400">SKU</span>
+                          <span className="text-[10px] font-black uppercase tracking-widest text-stone-400">MRP (₹)</span>
+                          <span className="text-[10px] font-black uppercase tracking-widest text-stone-400">Stock</span>
+                          <span className="text-[10px] font-black uppercase tracking-widest text-stone-400">Photo</span>
+                        </div>
+                        {/* Table rows */}
+                        {variantRows.map((row, i) => (
+                          <div
+                            key={row.label}
+                            className={`grid grid-cols-[1.5fr_1.5fr_1fr_1fr_72px] gap-3 px-4 py-3 items-center ${
+                              i % 2 === 0 ? 'bg-white' : 'bg-stone-50/50'
+                            } ${i < variantRows.length - 1 ? 'border-b border-stone-100' : ''}`}
+                          >
+                            <span className="text-sm font-semibold text-stone-700 truncate" title={row.label}>
+                              {row.label}
+                            </span>
+                            <input
+                              className={inputClass}
+                              value={row.sku}
+                              onChange={e => patchVariantRow(row.label, { sku: e.target.value })}
+                              placeholder="SKU"
+                            />
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              className={inputClass}
+                              value={row.mrp}
+                              onChange={e => patchVariantRow(row.label, { mrp: e.target.value })}
+                              placeholder="0.00"
+                            />
+                            <input
+                              type="number"
+                              min="0"
+                              step="1"
+                              className={inputClass}
+                              value={row.stock}
+                              onChange={e => patchVariantRow(row.label, { stock: e.target.value })}
+                              placeholder="0"
+                            />
+                            {/* Per-variant image upload */}
+                            <div className="relative w-[60px] h-[60px] shrink-0">
+                              {row.imagePreview ? (
+                                <>
+                                  <img
+                                    src={row.imagePreview}
+                                    alt={row.label}
+                                    className="w-full h-full object-cover rounded-lg border border-stone-200"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => removeVariantImage(row.label)}
+                                    className="absolute -top-1.5 -right-1.5 bg-[#EA2831] text-white rounded-full w-4 h-4 flex items-center justify-center shadow hover:bg-black transition-colors"
+                                    aria-label="Remove photo"
+                                  >
+                                    <span className="material-symbols-outlined text-[10px] leading-none">close</span>
+                                  </button>
+                                </>
+                              ) : (
+                                <label className="w-full h-full flex flex-col items-center justify-center border border-dashed border-stone-300 rounded-lg bg-stone-50 hover:bg-stone-100 hover:border-[#EA2831]/50 cursor-pointer transition-colors group">
+                                  <input
+                                    type="file"
+                                    accept="image/*"
+                                    className="sr-only"
+                                    onChange={e => handleVariantImageChange(row.label, e.target.files[0])}
+                                  />
+                                  <span className="material-symbols-outlined text-stone-300 group-hover:text-[#EA2831] text-xl transition-colors">add_photo_alternate</span>
+                                </label>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>
+              )}
+            </div>
+          </section>
+
+          {/* Section 5: Supply & Logistics */}
+          <section>
+            <h3 className="text-lg font-bold text-stone-900 mb-6 border-b border-stone-100 pb-2 uppercase tracking-wide">Supply & Logistics</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div><label className={labelClass}>Minimum Order Quantity (MOQ)</label><input id="moq" type="number" className={inputClass} value={formData.moq} onChange={handleInputChange} placeholder="e.g., 10" /></div>
+              <div><label className={labelClass}>Monthly Production Capacity</label><input id="capacity" className={inputClass} value={formData.capacity} onChange={handleInputChange} placeholder="e.g., 20000 Units" /></div>
+              <div>
+                <label className={labelClass}>Bulk Packaging Type</label>
+                <select id="bulk_type" className={inputClass} value={formData.bulk_type} onChange={handleInputChange}>
+                  <option value="">Select Bulk Packaging</option>
+                  <option value="Carton">Carton</option>
+                  <option value="Bag">Bag</option>
+                  <option value="Box">Box</option>
+                  <option value="Sack">Sack</option>
+                  <option value="Drum">Drum</option>
+                  <option value="Other">Other…</option>
+                </select>
+                {formData.bulk_type === 'Other' && (
+                  <input
+                    id="bulk_custom_type"
+                    className={`${inputClass} mt-2`}
+                    value={formData.bulk_custom_type}
+                    onChange={handleInputChange}
+                    placeholder="Enter bulk packaging type"
+                  />
+                )}
               </div>
-              {/* <div className="md:col-span-2"><label className="block text-sm font-semibold text-stone-700 mb-1.5">Dispatch Location</label><input id="dispatch_location" className={inputClass} value={formData.dispatch_location} onChange={handleInputChange} placeholder="City, State (e.g., Pune, Maharashtra)" /></div> */}
+              <div>
+                <label className={labelClass}>Capacity Bulk Package</label>
+                <div className="flex gap-2">
+                  <input
+                    id="bulk_capacity"
+                    type="number"
+                    min="0"
+                    className={inputClass}
+                    value={formData.bulk_capacity}
+                    onChange={handleInputChange}
+                    placeholder="e.g., 50"
+                  />
+                  <input
+                    id="bulk_capacity_unit"
+                    className={`${inputClass} max-w-[120px]`}
+                    value={formData.bulk_capacity_unit}
+                    onChange={handleInputChange}
+                    placeholder="units"
+                  />
+                </div>
+                <p className="text-xs text-stone-400 mt-1">e.g. 1 Carton contains 50 units</p>
+              </div>
             </div>
           </section>
 
