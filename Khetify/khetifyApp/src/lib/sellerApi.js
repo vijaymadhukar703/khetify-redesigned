@@ -60,6 +60,16 @@ export const updateSellerMember = (id, body) => data(api.patch(`team/${id}`, bod
 export const deleteSellerMember = (id) => data(api.delete(`team/${id}`));
 
 /* ---- authorization status (read-only; now PC-derived) ---- */
+/* ---- ACCOUNT SECURITY -------------------------------------------------- */
+// CHANGE PASSWORD is seller-namespaced. The shared /api/users/change-password
+// would have suited it, but middlewares/principalRouteGuard refuses a seller
+// token on any route outside /api/seller ("Company access only"), so the seller
+// portal has its own endpoint with the identical rules.
+export const changeMySellerPassword = (body) => data(api.post("change-password", body));
+// FORGOT PASSWORD is seller-specific: /api/users/forgot-password only matches
+// company members, so the seller portal has its own public endpoint.
+export const requestSellerPasswordReset = (body) => data(api.post("forgot-password", body));
+
 export const getSellerLink = () => data(api.get("link"));
 export const ackSellerApproval = () => data(api.post("ack-approval"));
 

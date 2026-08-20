@@ -89,7 +89,10 @@ const resolveSellerCrumb = (pathname) => {
 const SellerLayout = () => {
   const navigate = useNavigate();
   const { sellerCan } = useSellerSubscription();
-  const { sellerCan: hasCap } = useSellerPermission();
+  // `role` comes from the same context — it decides whether the Settings entry
+  // is offered (warehouse side only). Destructured alongside the existing
+  // capability helper rather than as a second hook call.
+  const { sellerCan: hasCap, role } = useSellerPermission();
   const canBill = hasCap("billing:manage"); // only seller_admin can switch plans
 
   const [seller, setSeller] = useState(null);
@@ -180,15 +183,33 @@ const SellerLayout = () => {
     if (e.lockReason === "plan" && canBill) navigate("/seller/billing");
   };
 
+  /**
+   * SETTINGS IS FOR THE WAREHOUSE SIDE ONLY.
+   *
+   * A seller WAREHOUSE MANAGER is a `User` with their own password, so changing
+   * or resetting it is a real need. A seller_admin signs in as the seller
+   * ACCOUNT itself — its token's `id` is the Seller record, not a User — so
+   * /api/users/change-password would not find an account for them and the page
+   * would be a dead end. The entry is therefore gated to the warehouse role
+   * rather than shown to everyone, which is also exactly the brief: add it to
+   * the Seller Warehouse, not to the ordinary seller side.
+   *
+   * The same rule that already decides a warehouse-scoped view elsewhere in the
+   * portal — anyone who is not seller_admin and is a member.
+   */
+  const isWarehouseSide = role !== "seller_admin" && !!seller?.isMember;
+
   // Mirror the company dropdown: Profile + Administration (when the role can see
   // ≥1 admin section) + Logout. Administration deep-links to the existing seller
-  // admin hub.
+  // admin hub. Settings is appended for the warehouse side; the three existing
+  // entries are untouched and keep their order.
   const profile = {
     name: displayName,
     secondary: secondaryLabel,
     menuItems: [
       { icon: "person", label: "Profile", onClick: () => navigate("/seller/profile") },
       ...(adminVisible ? [{ icon: "apps", label: "Administration", onClick: () => navigate(SELLER_ADMIN_NAV.path) }] : []),
+      ...(isWarehouseSide ? [{ icon: "settings", label: "Settings", onClick: () => navigate("/seller/settings") }] : []),
       { divider: true },
       { icon: "logout", label: "Logout", danger: true, onClick: logout },
     ],

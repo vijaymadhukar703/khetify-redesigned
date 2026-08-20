@@ -371,7 +371,7 @@ const Hub = () => {
           return (
             <button
               key={m.key}
-              onClick={() => (isLocked ? navigate('/billing') : navigate(m.path))}
+              onClick={() => (isLocked ? navigate('/billing', { state: { fromKey: m.key, fromTitle: m.title } }) : navigate(m.path))}
               aria-disabled={isLocked}
               title={isLocked ? 'Upgrade to unlock' : undefined}
               className={`group text-left bg-white border border-stone-200 rounded-2xl p-6 shadow-sm transition-all ${

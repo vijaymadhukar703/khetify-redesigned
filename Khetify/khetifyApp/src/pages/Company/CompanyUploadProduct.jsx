@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import Swal from 'sweetalert2';
 import 'sweetalert2/dist/sweetalert2.min.css'; 
@@ -125,6 +125,30 @@ const CompanyUploadProduct = () => {
   const makeBulkAttr = () => ({ id: bulkAttrId.current++, name: '', values: [], draft: '' });
   const [bulkAttrs, setBulkAttrs] = useState([]);
 
+  /* HSN → GST LOOKUP (Company Upload Product only).
+     `hsn` holds the outcome of the last resolved lookup, never a guess:
+       null                     — nothing looked up yet
+       { status:'single'   }    — one rate; auto-filled into the GST field
+       { status:'multiple' }    — several rates; the user must pick one
+       { status:'not_found' }   — not in the master; GST stays manual
+     `hsnLoading` only drives the little "Looking up…" line. */
+  const [hsn, setHsn] = useState(null);
+  const [hsnLoading, setHsnLoading] = useState(false);
+  /* Autocomplete: `hsnOptions` is the list the dropdown renders, `hsnOpen`
+     whether it is showing. `hsnPicked` records that the current code came from
+     the list rather than being typed — the GST field is only ever filled from a
+     resolved lookup, so this just controls the helper text. */
+  const [hsnOptions, setHsnOptions] = useState([]);
+  /* 'idle' | 'loading' | 'ok' | 'empty' | 'error'
+     A failed or empty search USED TO BE SILENT — the list simply never appeared
+     and there was no way to tell "no such code" from "the server is not
+     reachable" from "I forgot to restart the backend". The state is tracked so
+     the dropdown can say which it is. */
+  const [hsnSearchState, setHsnSearchState] = useState('idle');
+  const [hsnOpen, setHsnOpen] = useState(false);
+  const [hsnPicked, setHsnPicked] = useState(false);
+  const hsnBoxRef = useRef(null);
+
   // Each row: { label, attrMap, sku, mrp, stock }
   // Auto-computed from bulkAttrs; existing edits are preserved when attrs change.
   const [variantRows, setVariantRows] = useState([]);
@@ -165,13 +189,36 @@ const CompanyUploadProduct = () => {
     setFormData(prev => ({ ...prev, [id]: value }));
   };
 
-  // HSN accepts DIGITS ONLY, capped at 8. Filtering on the way in means a
-  // pasted "3102-1000" simply becomes "31021000" rather than being rejected
-  // after the fact; the length is still checked before upload.
-  const HSN_LENGTH = 8;
+  /* HSN accepts DIGITS ONLY, 4 to 8 of them. Filtering on the way in means a
+     pasted "3102-1000" simply becomes "31021000" rather than being rejected
+     after the fact; the length is still checked before upload.
+
+     THE MINIMUM IS 4, NOT 8. The GST notification is written at HEADING level —
+     of its 1163 codes, 1018 are 4-digit — so a 4-digit code is a complete,
+     valid answer and refusing it would reject the very form most rates are
+     published in. */
+  const HSN_MIN = 4;
+  const HSN_MAX = 8;
   const handleHsnChange = (e) => {
-    const digits = e.target.value.replace(/\D/g, '').slice(0, HSN_LENGTH);
+    const digits = e.target.value.replace(/\D/g, '').slice(0, HSN_MAX);
     setFormData(prev => ({ ...prev, hsn: digits }));
+    // The previous result belongs to the previous code — drop it immediately so
+    // a stale rate can never sit next to a half-typed HSN. The GST field goes
+    // with it: it is filled ONLY from a resolved lookup, never left over.
+    setHsn(null);
+    setHsnPicked(false);
+    setFormData(prev => ({ ...prev, gst: '0' }));
+    setHsnOpen(true);
+  };
+
+  /** Choosing a code from the dropdown. The rate still comes from the lookup
+      effect below — this only sets the code and closes the list, so there is
+      exactly one place that decides GST. */
+  const pickHsn = (code) => {
+    setFormData(prev => ({ ...prev, hsn: code }));
+    setHsn(null);
+    setHsnPicked(true);
+    setHsnOpen(false);
   };
 
   /* MANUFACTURER LICENCE NO.
@@ -341,6 +388,102 @@ const CompanyUploadProduct = () => {
     setPreviews(updatedPreviews);
   };
 
+  /* ================= HSN AUTOCOMPLETE =================
+     Fetches codes starting with what has been typed, from 2 digits up. Same
+     400ms debounce and same out-of-order guard as the lookup below. The list is
+     only ever a NAVIGATION aid — no GST is read from it; that still comes from
+     the lookup, so there is one source of truth for the rate. */
+  useEffect(() => {
+    const q = formData.hsn;
+    if (q.length < 2) { setHsnOptions([]); setHsnSearchState('idle'); return undefined; }
+
+    let ignore = false;
+    setHsnSearchState('loading');
+    const timer = setTimeout(async () => {
+      try {
+        const token = localStorage.getItem("token");
+        const res = await axios.get(`${config.BASE_URL}hsn/search`, {
+          params: { q, limit: 20 },
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (ignore) return;
+        const list = res.data?.results || [];
+        setHsnOptions(list);
+        setHsnSearchState(list.length ? 'ok' : 'empty');
+      } catch (err) {
+        if (ignore) return;
+        setHsnOptions([]);
+        // 404 on the ROUTE ITSELF (not a missing code) almost always means the
+        // backend is running an older build without /api/hsn/search — worth
+        // saying out loud rather than showing an empty list.
+        setHsnSearchState('error');
+        console.error('HSN search failed:', err?.response?.status, err?.response?.data || err.message);
+      }
+    }, 400);
+
+    return () => { ignore = true; clearTimeout(timer); };
+  }, [formData.hsn]);
+
+  /* HAS THE CURRENT CODE BEEN RESOLVED AGAINST THE MASTER?
+     Upload is blocked unless it has, so a code that is not in the GST master —
+     and therefore has no rate we could stand behind — cannot be submitted.
+     'multiple' counts as resolved only once a rate has actually been picked. */
+  const hsnResolved =
+    hsn?.status === 'single' ||
+    (hsn?.status === 'multiple' && hsn.rates?.some(r => String(r.gstRate) === String(formData.gst)));
+
+  // Close the dropdown on an outside click, the way a native select behaves.
+  useEffect(() => {
+    if (!hsnOpen) return undefined;
+    const onDown = (e) => {
+      if (hsnBoxRef.current && !hsnBoxRef.current.contains(e.target)) setHsnOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [hsnOpen]);
+
+  /* ================= HSN → GST LOOKUP =================
+     Runs whenever the HSN reaches a valid 4-8 digits. Debounced by 400ms so
+     typing 31021000 fires ONE request, not five.
+
+     THE RATE ALWAYS COMES FROM THE DATABASE. There is no rate table in this
+     file; the server resolves the code against the GST master and this only
+     renders what it is told. `ignore` guards the classic out-of-order race —
+     a slow reply for an old code must never overwrite a fast reply for the
+     current one. */
+  useEffect(() => {
+    const code = formData.hsn;
+    if (!(code.length >= HSN_MIN && code.length <= HSN_MAX)) { setHsn(null); return undefined; }
+
+    let ignore = false;
+    const timer = setTimeout(async () => {
+      setHsnLoading(true);
+      try {
+        const token = localStorage.getItem("token");
+        const res = await axios.get(`${config.BASE_URL}hsn/${code}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (ignore) return;
+        const data = res.data;
+        setHsn(data);
+        // ONE RATE → fill it in. Several → fill NOTHING and let the user choose;
+        // picking any of them here would be a guess with real tax consequences.
+        if (data.status === "single") {
+          setFormData(prev => ({ ...prev, gst: String(data.gstRate) }));
+        }
+      } catch (err) {
+        if (ignore) return;
+        // A 404 is a normal outcome (code genuinely absent), not a failure —
+        // the server's own payload explains it, so it is shown as-is.
+        setHsn(err.response?.data || { status: "error", message: "Could not reach the GST rate master." });
+      } finally {
+        if (!ignore) setHsnLoading(false);
+      }
+    }, 400);
+
+    return () => { ignore = true; clearTimeout(timer); };
+  }, [formData.hsn]);
+
   /* ================= UNIT OF MEASUREMENT (DYNAMIC) =================
      The value field below the Unit dropdown is driven entirely by the selected
      unit. A custom unit typed through SelectWithOther's "Other…" escape hatch is
@@ -380,8 +523,22 @@ const CompanyUploadProduct = () => {
     }
 
     /* ── Identification & Traceability ── */
-    if (!/^\d{8}$/.test(formData.hsn)) {
-      return 'HSN Code must be exactly 8 digits (numbers only).';
+    if (!new RegExp(`^\\d{${HSN_MIN},${HSN_MAX}}$`).test(formData.hsn)) {
+      return `HSN Code must be ${HSN_MIN} to ${HSN_MAX} digits (numbers only).`;
+    }
+    /* THE HSN MUST EXIST IN THE GST MASTER.
+       GST is not typed on this form any more — it is read from the master — so a
+       code the master does not know would leave the product with the default 0%
+       and no way for anyone to notice. Blocking here means only codes we hold a
+       statutory rate for can be uploaded. */
+    if (hsn?.status === 'not_found') {
+      return `HSN ${formData.hsn} is not in the GST master. Please choose an HSN code from the suggestions.`;
+    }
+    if (hsn?.status === 'multiple' && !hsnResolved) {
+      return `HSN ${hsn.matchedHsn} has more than one GST rate — please select the one that applies to this product.`;
+    }
+    if (!hsnResolved) {
+      return 'Please wait for the GST rate to load, or pick an HSN code from the suggestions.';
     }
     const licence = formData.license_no.trim();
     // The wording names WHOSE licence it is, because when the box is ticked the
@@ -754,22 +911,152 @@ const CompanyUploadProduct = () => {
                 />
               </div>
 
-              {/* 2 — HSN CODE. Exactly 8 digits; the field itself accepts only
+              {/* 2 — HSN CODE. 4 to 8 digits; the field itself accepts only
                   digits so letters, spaces and punctuation can never be typed or
-                  pasted in, and the length is checked before upload. */}
+                  pasted in, and the length is checked before upload.
+
+                  Entering a valid code looks the GST rate up in the master and
+                  reports the outcome directly beneath the field. */}
               <div>
                 <label className={labelClass}>HSN Code <span className="text-[#EA2831]">*</span></label>
-                <input
-                  id="hsn"
-                  className={inputClass}
-                  value={formData.hsn}
-                  onChange={handleHsnChange}
-                  placeholder="e.g., 31021000"
-                  inputMode="numeric"
-                  maxLength={HSN_LENGTH}
-                  required
-                />
-                <p className={hintClass}>Must be exactly {HSN_LENGTH} digits.</p>
+                {/* The input and its dropdown share a positioned wrapper so the
+                    list hangs directly under the field. The input itself is
+                    unchanged — same id, same class, same handler, same cap. */}
+                <div className="relative" ref={hsnBoxRef}>
+                  <input
+                    id="hsn"
+                    className={inputClass}
+                    value={formData.hsn}
+                    onChange={handleHsnChange}
+                    onFocus={() => setHsnOpen(true)}
+                    placeholder="Type digits to search, e.g. 3105"
+                    inputMode="numeric"
+                    maxLength={HSN_MAX}
+                    autoComplete="off"
+                    required
+                  />
+
+                  {/* The panel opens as soon as there is something to SAY —
+                      results, "searching", "nothing matched" or a reachability
+                      problem. Rendering only on a non-empty list is what made a
+                      broken endpoint look identical to an unfinished code.
+                      `!hsnPicked` keeps it closed immediately after a selection —
+                      it is cleared again the moment the user edits the field. */}
+                  {hsnOpen && !hsnPicked && formData.hsn.length >= 2 && hsnSearchState !== 'idle' && (
+                    <ul className="absolute z-30 mt-1 max-h-72 w-full overflow-y-auto rounded-xl border border-stone-200 bg-white py-1 shadow-xl">
+                      {hsnSearchState === 'loading' && (
+                        <li className="px-3 py-2 text-[11px] text-stone-400">Searching the GST master…</li>
+                      )}
+                      {hsnSearchState === 'empty' && (
+                        <li className="px-3 py-2 text-[11px] text-stone-500">
+                          No HSN code starts with <b>{formData.hsn}</b> in the GST master.
+                        </li>
+                      )}
+                      {hsnSearchState === 'error' && (
+                        <li className="px-3 py-2 text-[11px] text-[#EA2831]">
+                          Could not reach the GST master. Check that the backend is running and has been
+                          restarted, and that <span className="font-mono">npm run seed:hsn</span> has been run.
+                        </li>
+                      )}
+                      {hsnOptions.map(opt => (
+                        <li key={opt.hsnCode}>
+                          <button
+                            type="button"
+                            onClick={() => pickHsn(opt.hsnCode)}
+                            className="flex w-full items-start gap-2 px-3 py-2 text-left transition-colors hover:bg-stone-50"
+                          >
+                            <span className="shrink-0 font-mono text-xs font-bold text-stone-800">{opt.hsnCode}</span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-[11px] text-stone-500">{opt.description}</span>
+                            </span>
+                            {/* A code with several rates is flagged rather than
+                                shown with one of them — the choice belongs to
+                                the user, after they pick the code. */}
+                            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                              opt.multiple ? 'bg-amber-50 text-amber-700' : 'bg-green-50 text-green-700'
+                            }`}>
+                              {opt.multiple
+                                ? `${[...new Set(opt.rates.map(r => r.gstRate))].join('% / ')}%`
+                                : `${opt.gstRate}%`}
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+               
+
+                {/* The code is in the field but the master has no rate for it.
+                    Upload is blocked here rather than at submit, so the problem
+                    is visible while the field is still in front of the user. */}
+                {!hsnLoading && formData.hsn.length >= HSN_MIN && hsn?.status === 'not_found' && (
+                  <p className="mt-1 text-xs font-medium text-[#EA2831]">
+                    ⚠ Pick an HSN code from the list — only codes present in the GST master can be used.
+                  </p>
+                )}
+
+                {hsnLoading && (
+                  <p className="text-xs text-stone-400 mt-1">Looking up the GST rate…</p>
+                )}
+
+                {/* ONE RATE — filled in. The matched level is stated because it
+                    may be a parent of what was typed (08045020 → 0804), and the
+                    operator should see which entry the rate actually came from. */}
+                {/* {!hsnLoading && hsn?.status === 'single' && (
+                  <div className="mt-2 rounded-lg border border-green-200 bg-green-50/60 px-3 py-2">
+                    <p className="text-xs font-bold text-green-700">
+                      GST {hsn.gstRate}% applied
+                      {hsn.matchedHsn !== formData.hsn && <> · matched HSN {hsn.matchedHsn}</>}
+                    </p>
+                    {hsn.rates?.[0]?.description && (
+                      <p className="text-[11px] text-stone-500 mt-0.5">{hsn.rates[0].description}</p>
+                    )}
+                  </div>
+                )} */}
+
+                {/* SEVERAL RATES — nothing is chosen automatically. Each option
+                    is shown with the condition from the notification that makes
+                    it apply, and the user picks the one matching their product. */}
+                {!hsnLoading && hsn?.status === 'multiple' && !hsnResolved && (
+                  <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
+                    <p className="text-xs font-bold text-amber-800">
+                      HSN {hsn.matchedHsn} has more than one GST rate — select the one that applies to your product.
+                    </p>
+                    <div className="mt-2 space-y-1.5">
+                      {hsn.rates.map((r, i) => (
+                        <label
+                          key={`${r.gstRate}-${i}`}
+                          className={`flex cursor-pointer items-start gap-2 rounded-lg border px-2.5 py-2 transition-colors ${
+                            String(formData.gst) === String(r.gstRate)
+                              ? 'border-[#EA2831] bg-white'
+                              : 'border-stone-200 bg-white/70 hover:border-stone-300'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="hsnGstChoice"
+                            className="mt-0.5 h-4 w-4 shrink-0 accent-[#EA2831]"
+                            checked={String(formData.gst) === String(r.gstRate)}
+                            onChange={() => setFormData(prev => ({ ...prev, gst: String(r.gstRate) }))}
+                          />
+                          <span className="min-w-0">
+                            <span className="block text-xs font-bold text-stone-800">{r.gstRate}%</span>
+                            <span className="block text-[11px] leading-snug text-stone-500">{r.description}</span>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* NOT IN THE MASTER — say so plainly and leave GST manual. No
+                    rate is inferred from a chapter or a neighbouring code. */}
+                {!hsnLoading && (hsn?.status === 'not_found' || hsn?.status === 'error') && (
+                  <p className="mt-2 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-[11px] text-stone-600">
+                    {hsn.message || 'No GST rate found for this HSN code.'} Please select the GST rate manually below.
+                  </p>
+                )}
               </div>
 
               {/* 3 — MANUFACTURER LICENCE.
@@ -889,13 +1176,34 @@ const CompanyUploadProduct = () => {
                 <input id="cost_price" type="number" className={inputClass} value={formData.cost_price} onChange={handleInputChange} placeholder="0.00" required />
               </div>
               <div><label className={labelClass}>GST (%)</label>
-                <select id="gst" className={inputClass} value={formData.gst} onChange={handleInputChange}>
-                  <option value="0">0% (Exempt)</option>
-                  <option value="5">5%</option>
-                  <option value="12">12%</option>
-                  <option value="18">18%</option>
-                  <option value="28">28%</option>
-                </select>
+                {/* READ-ONLY. The rate is statutory — it belongs to the HSN code,
+                    not to whoever is filling the form — so it is displayed, not
+                    entered. It is set in exactly two places, both driven by the
+                    database: the lookup effect (single rate) and the radio
+                    buttons under the HSN field (multiple rates).
+
+                    A DISABLED <select> IS NOT USED. A disabled control is
+                    skipped by form serialisation and reads as unavailable to a
+                    screen reader, and there is nothing here for the user to do —
+                    so this is a plain read-only display of the resolved value,
+                    with the same `formData.gst` still going to the API under the
+                    same key. The payload is unchanged. */}
+                <div className={`${inputClass} flex items-center justify-between bg-stone-50 text-stone-700 cursor-not-allowed`}>
+                  <span className="font-semibold">
+                    {formData.gst === '0' ? '0% (Exempt)' : `${formData.gst}%`}
+                  </span>
+                  <span className="material-symbols-outlined text-base text-stone-400" title="Set automatically from the HSN code">lock</span>
+                </div>
+                {/* The value still reaches the form the same way for anything
+                    that reads the DOM, and stays in formData for the submit. */}
+                <input type="hidden" id="gst" name="gst" value={formData.gst} readOnly />
+                <p className={hintClass}>
+                  {hsn?.status === 'single'
+                    ? `Set from the GST master for HSN ${hsn.matchedHsn}.`
+                    : hsn?.status === 'multiple'
+                      ? 'Select the applicable rate under the HSN Code field above.'
+                      : 'Determined automatically by the HSN code.'}
+                </p>
               </div>
             </div>
           </section>

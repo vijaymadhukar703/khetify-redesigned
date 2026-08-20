@@ -212,10 +212,17 @@ const CompanyDashboard = () => {
     <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-[#f8f9fa] font-sora">
       <div className="max-w-[1400px] mx-auto space-y-6 sm:space-y-8">
 
-        {/* 🔥 IMS headline numbers */}
-        <SummaryCards />
+        {/* TIME-RANGE FILTER, now ABOVE the headline cards.
 
-        {/* Time-range filter — only meaningful for sales-visible roles */}
+           It already drove both `reports/dashboard` and `orders/summary`, so
+           every number below it — Stock Value, Expiring, Open Shipments,
+           Today's Sales and the whole Sales overview — was already reacting to
+           it. Sitting underneath those cards made it look like a filter for the
+           chart alone; at the top it reads as what it is: the period for the
+           entire dashboard. Only its POSITION changed, not its behaviour.
+
+           Sales-visible roles only — an operations manager sees shipments
+           rather than revenue and has nothing here to filter. */}
         {canSeeSales && (
         <div className="flex flex-wrap items-center gap-2 justify-between">
           <div className="flex items-center gap-2 flex-wrap">
@@ -233,6 +240,18 @@ const CompanyDashboard = () => {
                 </button>
               ))}
             </div>
+            {/* THE WINDOW ACTUALLY BEING QUERIED.
+                Without this there is no way to tell a filter that is not
+                applying from a period that simply has no orders in it — both
+                look like "nothing changed". These are the exact dates sent to
+                the API as ?from&to. */}
+            {rangeWindow.from && rangeWindow.to && (
+              <span className="text-[11px] text-stone-400">
+                {new Date(rangeWindow.from).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                {' → '}
+                {new Date(rangeWindow.to).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+              </span>
+            )}
             {range === 'custom' && (
               <div className="flex items-center gap-1.5">
                 <input type="date" value={customRange.from ? customRange.from.slice(0, 10) : ''} onChange={(e) => setCustomRange((r) => ({ ...r, from: e.target.value ? new Date(e.target.value).toISOString() : '' }))}
@@ -252,7 +271,10 @@ const CompanyDashboard = () => {
         </div>
         )}
 
-        {isAdmin && canCost && pnl && (
+        {/* 🔥 IMS headline numbers */}
+        <SummaryCards />
+
+        {/* {isAdmin && canCost && pnl && (
           <div className="bg-white border border-stone-200 rounded-2xl p-5 shadow-sm mb-2">
             <div className="flex items-center justify-between mb-4">
               <div>
@@ -261,7 +283,7 @@ const CompanyDashboard = () => {
               </div>
               <button onClick={() => navigate('/analytics')}
                 className="text-xs font-bold text-[#EA2831] hover:text-black transition-colors flex items-center gap-1">
-                Analytics <span className="material-symbols-outlined text-sm">arrow_forward</span>
+                Stock Valuation <span className="material-symbols-outlined text-sm">arrow_forward</span>
               </button>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -285,11 +307,11 @@ const CompanyDashboard = () => {
             {(pnl.totalLoss || 0) > 0 && (
               <p className="mt-3 text-[11px] text-stone-500">
                 <span className="material-symbols-outlined text-xs align-middle text-[#EA2831]">trending_down</span>{' '}
-                Loss-making products account for <b className="text-[#EA2831]">{formatINR(pnl.totalLoss)}</b> — see Analytics for the breakdown.
+                Loss-making products account for <b className="text-[#EA2831]">{formatINR(pnl.totalLoss)}</b> — see Stock Valuation for the breakdown.
               </p>
             )}
           </div>
-        )}
+        )} */}
 
         {/* Top Stats Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
@@ -318,8 +340,13 @@ const CompanyDashboard = () => {
           )}
         </div>
 
-        {/* Main Dashboard Layout */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 sm:gap-8">
+        {/* Main Dashboard Layout.
+           The right-hand widget column (Inventory status + Quick actions) has
+           been removed, so this is a single full-width row now rather than a
+           3-column grid with an empty third of the page. The panel below keeps
+           its `lg:col-span-2`, which is harmless in a 1-column grid and means
+           the shared operations/empty-state panels did not have to change. */}
+        <div className="grid grid-cols-1 gap-6 sm:gap-8">
 
           {/* Left: Sales overview (sales roles) / Operations overview (ops roles) */}
           {canSeeSales ? (
@@ -344,6 +371,18 @@ const CompanyDashboard = () => {
                 <p className="text-[10px] text-stone-400 font-medium">{PERIOD_LABEL[range]}</p>
               </div>
             </div>
+            {/* EMPTY STATE. A period with no orders produces an all-zero series,
+                and the chart draws the same flat baseline for every one of them —
+                which reads as "the filter does nothing". Saying so explicitly
+                distinguishes "no sales in this period" from a broken filter. */}
+            {sales.weekly?.length > 0 && sales.weekly.every((p) => !p.units) && (
+              <div className="mb-4 rounded-xl border border-stone-200 bg-stone-50/60 px-4 py-3">
+                <p className="text-xs font-bold text-stone-600">No sales recorded {PERIOD_LABEL[range]}.</p>
+                <p className="mt-0.5 text-[11px] text-stone-400">
+                  The filter is applied — this period simply has no orders. Try a wider period such as Yearly.
+                </p>
+              </div>
+            )}
             <div className="w-full h-40 sm:h-56 relative px-1">
               <div className="absolute inset-0 flex flex-col justify-between text-xs text-stone-100 pointer-events-none pb-8">
                 {[1, 2, 3, 4].map((i) => (
@@ -364,98 +403,6 @@ const CompanyDashboard = () => {
             <OperationsOverviewPanel data={opsData} subscribed={isSubscribed} />
           )}
 
-          {/* Right: Widgets */}
-          <div className="flex flex-col gap-6">
-
-            {/* Inventory status — GATED behind subscription */}
-            <div className="bg-white border border-stone-200 rounded-xl p-6 shadow-sm">
-              <h3 className="text-lg font-bold text-stone-900 mb-6">Inventory status</h3>
-
-              {subLoading ? (
-                <p className="text-sm text-stone-400">Loading…</p>
-              ) : !isSubscribed ? (
-                // IMS module not activated. Subscription is exclusively the
-                // ADMIN's concern: only the admin sees the activation card.
-                // Managers get role-specific widgets instead — never a plan,
-                // a price, or a subscribe button.
-                isAdmin ? (
-                  <div className="text-center py-2">
-                    <span className="material-symbols-outlined text-[#EA2831] text-3xl mb-2">inventory_2</span>
-                    <p className="font-bold text-stone-900 text-sm mb-1">IMS Module Not Activated</p>
-                    <p className="text-xs text-stone-500 mb-4">Subscribe to track stock levels, alerts and more.</p>
-                    <div className="flex items-center justify-center gap-2">
-                      <button onClick={() => navigate('/billing')}
-                        className="px-4 py-2 text-sm font-bold border border-stone-200 text-stone-700 rounded-xl hover:border-stone-400 transition-all">
-                        View Plan
-                      </button>
-                      <button onClick={() => navigate('/billing')}
-                        className="px-5 py-2 text-sm font-bold bg-[#EA2831] text-white rounded-xl hover:bg-black transition-all">
-                        Subscribe
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <RoleWidgets role={role} />
-                )
-              ) : inv.total === 0 ? (
-                <p className="text-sm text-stone-400 py-2">
-                  No stock yet — receive a lot from Inventory → Lots &amp; Batches.
-                </p>
-              ) : (
-                // Unlocked: real numbers computed live from the company's lot rows
-                <>
-                  <p className="text-xs text-stone-500 mb-4">
-                    <span className="font-bold text-stone-900">{inv.total}</span> lots ·{' '}
-                    <span className="font-bold text-stone-900">{inv.stockValue ? '₹' + inv.stockValue.toLocaleString('en-IN') : '₹0'}</span> stock value
-                  </p>
-                  <div className="flex h-3 w-full rounded-full overflow-hidden bg-stone-50 mb-8">
-                    <div className="bg-stone-800 h-full" style={{ width: `${inv.inStockPct}%` }}></div>
-                    <div className="bg-[#EA2831]/60 h-full border-l border-white" style={{ width: `${inv.lowStockPct}%` }}></div>
-                    <div className="bg-[#EA2831] h-full border-l border-white" style={{ width: `${inv.outOfStockPct}%` }}></div>
-                  </div>
-                  <div className="space-y-4">
-                    {[
-                      { label: 'In stock', color: 'bg-stone-800', value: `${inv.inStockPct}%` },
-                      { label: 'Low stock', color: 'bg-[#EA2831]/60', value: `${inv.lowStockPct}%` },
-                      { label: 'Out of stock', color: 'bg-[#EA2831]', value: `${inv.outOfStockPct}%` },
-                    ].map((item) => (
-                      <div key={item.label} className="flex items-center justify-between text-sm">
-                        <div className="flex items-center gap-3">
-                          <span className={`size-2.5 rounded-full ${item.color}`}></span>
-                          <span className="text-stone-600 font-medium">{item.label}</span>
-                        </div>
-                        <span className="font-bold text-stone-900">{item.value}</span>
-                      </div>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
-
-            {/* Quick actions */}
-            <div className="bg-white border border-stone-200 rounded-xl p-6 shadow-sm">
-              <h3 className="text-lg font-bold text-stone-900 mb-4">Quick actions</h3>
-              <div className="flex flex-col gap-2">
-                {isAdmin && (
-                  <NavLink to="/upload-product" className="text-sm font-bold text-[#EA2831] bg-red-50/50 hover:bg-red-50 p-3 rounded-xl flex items-center gap-3 transition-all">
-                    <span className="material-symbols-outlined text-xl">add_circle</span>
-                    Add product
-                  </NavLink>
-                )}
-                {/* Fixed: this now points to the real Inventory page (was /product-catalog).
-                    Routes to billing if not subscribed. */}
-                {(isSubscribed || isAdmin) && (
-                  <button
-                    onClick={() => navigate(isSubscribed ? '/inventory' : '/billing')}
-                    className="text-sm font-semibold text-stone-600 hover:text-stone-900 hover:bg-stone-50 p-3 rounded-xl flex items-center gap-3 transition-all text-left"
-                  >
-                    <span className="material-symbols-outlined text-xl">inventory</span>
-                    {isSubscribed ? 'View inventory' : 'Activate IMS module'}
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
         </div>
       </div>
     </div>
