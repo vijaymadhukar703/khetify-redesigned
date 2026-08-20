@@ -134,7 +134,9 @@ const CompanyEditProduct = () => {
       
       // Saari Text Fields append karo. Manufacturing & expiry dates are now
       // captured per lot at stock-receive, so we no longer send them here.
-      const SKIP_KEYS = ['productImages', '_id', '__v', 'createdAt', 'updatedAt', 'manufacturingDate', 'expiryDate', 'batchNumber'];
+      // product_code is server-owned and immutable — never send it back (the
+      // backend drops it too, this just keeps the payload honest).
+      const SKIP_KEYS = ['productImages', '_id', '__v', 'createdAt', 'updatedAt', 'manufacturingDate', 'expiryDate', 'batchNumber', 'product_code'];
       Object.keys(formData).forEach(key => {
         if (!SKIP_KEYS.includes(key)) {
              data.append(key, formData[key] || '');
@@ -185,7 +187,9 @@ const CompanyEditProduct = () => {
            </button>
            <div>
               <h2 className="text-2xl font-black text-stone-900 tracking-tight uppercase">Edit Product Details</h2>
-              <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest mt-1">SKU: {formData.skuNumber || 'N/A'}</p>
+              <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest mt-1">
+                Code: <span className="font-mono text-stone-600">{formData.product_code || 'N/A'}</span> · SKU: {formData.skuNumber || 'N/A'}
+              </p>
            </div>
         </div>
 
@@ -247,6 +251,19 @@ const CompanyEditProduct = () => {
 
                 <div className="space-y-6">
                     <div>
+                        <label className={labelClass}>Product Code</label>
+                        {/* Read-only: generated once on the server and fixed for the
+                            life of the product — renaming the product never changes it. */}
+                        <input
+                          name="product_code"
+                          value={formData.product_code || ''}
+                          readOnly
+                          disabled
+                          className={`${inputClass} bg-stone-50 text-stone-500 font-mono tracking-widest cursor-not-allowed`}
+                        />
+                        <p className="text-[10px] text-stone-400 font-medium ml-1 mt-1">Auto-generated · cannot be edited</p>
+                    </div>
+                    <div>
                         <label className={labelClass}>Product Name<span className="text-[#EA2831] ml-0.5">*</span></label>
                         <input name="productName" value={formData.productName} onChange={handleChange} className={inputClass} required />
                     </div>
@@ -301,7 +318,7 @@ const CompanyEditProduct = () => {
                   <option value="0">0%</option><option value="5">5%</option><option value="12">12%</option><option value="18">18%</option>
                 </select>
               </div>
-              <div><label className={labelClass}>SKU Number</label><input name="skuNumber" value={formData.skuNumber} onChange={handleChange} className={inputClass} /></div>
+              {/* <div><label className={labelClass}>SKU Number</label><input name="skuNumber" value={formData.skuNumber} onChange={handleChange} className={inputClass} /></div> */}
               <div><label className={labelClass}>HSN Code</label><input name="hsnCode" value={formData.hsnCode} onChange={handleChange} className={inputClass} /></div>
             </div>
             {costing && (
@@ -339,7 +356,7 @@ const CompanyEditProduct = () => {
                     options={['India', 'USA', 'Germany', 'China']}
                  />
               </div>
-              <div><label className={labelClass}>Shelf Life</label><input name="shelfLife" value={formData.shelfLife} onChange={handleChange} className={inputClass} placeholder="e.g., 24 Months" /></div>
+              <div><label className={labelClass}>Shelf Life<span className="text-[#EA2831] ml-0.5">*</span></label><input name="shelfLife" value={formData.shelfLife} onChange={handleChange} className={inputClass} placeholder="e.g., 24 Months" required /></div>
               <div><label className={labelClass}>Dispatch Location</label><input name="dispatchLocation" value={formData.dispatchLocation} onChange={handleChange} className={inputClass} /></div>
               <div><label className={labelClass}>Packaging</label><input name="packagingType" value={formData.packagingType} onChange={handleChange} className={inputClass} /></div>
               <div><label className={labelClass}>Status</label>

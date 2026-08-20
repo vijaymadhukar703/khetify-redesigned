@@ -1,14 +1,19 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
-import { getSupplyOrders, updateSupplyStatus, getSupplySourceOptions, getLots } from '../../lib/imsApi';
+import { getSupplyOrders, updateSupplyStatus, getSupplySourceOptions } from '../../lib/imsApi';
 import BackButton from '../../Components/BackButton';
 import { usePermission } from '../../context/PermissionContext';
 import { WAREHOUSE_ROLES } from '../../lib/roles';
 
 const toast = (icon, title) => Swal.fire({ icon, title, toast: true, position: 'top-end', timer: 2200, showConfirmButton: false });
 const listOf = (r) => (Array.isArray(r) ? r : r?.data || []);
-const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
+// THE REQUEST'S SERIAL. Built from the request's own id, character for
+// character the same way Seller Requests (ImsOutbound) and Shipment Tracking
+// (tmsController.requestRef) build it — so one request reads as ONE number
+// across every screen. Nothing new is generated here; the id already arrives in
+// the API response, so no backend change was needed.
+const requestSerialOf = (o) => (o?._id ? `SR-${String(o._id).slice(-6).toUpperCase()}` : '—');
 const fmtNum = (n) => Number(n || 0).toLocaleString('en-IN');
 
 const STATUS_STYLE = {
@@ -126,8 +131,8 @@ const CompanySupplyRequests = () => {
             <thead>
               <tr className="border-b border-stone-200 bg-stone-50/50">
                 {(enhanced
-                  ? ['Seller', 'Item', 'Quantity', 'Destination', 'Source (Warehouse)', 'Parent Lot No.', 'Status', 'Requested', 'View', 'Actions']
-                  : ['Seller', 'Items', 'Destination', 'Source', 'Status', 'Requested', 'Actions']
+                  ? ['Request Serial No.', 'Seller', 'Item', 'Quantity', 'Destination', 'Source (Warehouse)', 'Parent Lot No.', 'Status', 'View', 'Actions']
+                  : ['Request Serial No.', 'Seller', 'Items', 'Destination', 'Source', 'Status', 'Actions']
                 ).map((h) => (
                   <th key={h} className="px-5 py-3.5 text-[10px] font-bold text-stone-400 uppercase tracking-widest whitespace-nowrap">{h}</th>
                 ))}
@@ -142,6 +147,7 @@ const CompanySupplyRequests = () => {
                 const lots = parentLotsOf(o);
                 return (
                   <tr key={o._id} className="hover:bg-stone-50/60">
+                    <td data-label="Request Serial No." className="px-5 py-3.5 text-sm font-mono text-stone-600 whitespace-nowrap">{requestSerialOf(o)}</td>
                     <td data-label="Seller" className="px-5 py-3.5 font-bold text-stone-800 text-sm">{o.sellerId?.sellerInfo?.businessName || '—'}</td>
                     <td data-label={enhanced ? 'Item' : 'Items'} className="px-5 py-3.5 text-sm text-stone-600 max-w-[240px] truncate" title={itemNames(o)}>
                       {enhanced ? itemNames(o) : (o.items || []).map((it) => `${it.productId?.productName || 'Item'} ×${it.quantity}`).join(', ')}
@@ -162,7 +168,7 @@ const CompanySupplyRequests = () => {
                       </td>
                     )}
                     <td data-label="Status" className="px-5 py-3.5"><span className={`text-[11px] font-bold rounded-full px-2.5 py-1 capitalize ${STATUS_STYLE[o.status] || 'bg-stone-100 text-stone-500'}`}>{o.status?.replace('_', ' ')}</span></td>
-                    <td data-label="Requested" className="px-5 py-3.5 text-sm text-stone-500">{fmtDate(o.createdAt)}</td>
+                  
                     {enhanced && (
                       <td data-label="View" className="px-5 py-3.5">
                         <button
@@ -227,8 +233,8 @@ const CompanySupplyRequests = () => {
         <SourceWarehouseModal
           order={approving}
           onClose={() => setApproving(null)}
-          onConfirm={async (warehouseId, lotSelections) => {
-            await act(approving, 'approved', { sourceWarehouseId: warehouseId, lotSelections });
+          onConfirm={async (warehouseId) => {
+            await act(approving, 'approved', { sourceWarehouseId: warehouseId });
             setApproving(null);
           }}
         />
@@ -240,13 +246,15 @@ const CompanySupplyRequests = () => {
 // "Assign a source warehouse" — shows each company warehouse's AVAILABLE qty of
 // the requested product(s), sorts fulfilling warehouses first, disables ones
 // that can't cover the request, and only enables Approve for a fulfilling pick.
+//
+// WAREHOUSE ONLY. Approval decides WHERE the supply is fulfilled from, nothing
+// more. WHICH lot / batch / boxes / units are used is the source warehouse
+// manager's call, made at Pick, Pack and Dispatch in Send Stock — so this modal
+// asks for no lot at all.
 const SourceWarehouseModal = ({ order, onClose, onConfirm }) => {
   const [options, setOptions] = useState(null); // null = loading
   const [selected, setSelected] = useState('');
   const [busy, setBusy] = useState(false);
-  // Optional per-item PARENT LOT choice at the chosen warehouse. Empty = FEFO.
-  const [lotsByProduct, setLotsByProduct] = useState({}); // productId -> lot rows
-  const [lotChoice, setLotChoice] = useState({});         // productId -> inventoryId ('' = auto/FEFO)
 
   useEffect(() => {
     getSupplySourceOptions(order._id)
@@ -258,29 +266,10 @@ const SourceWarehouseModal = ({ order, onClose, onConfirm }) => {
   const anyFulfills = (options || []).some((o) => o.canFulfill);
   const chosen = (options || []).find((o) => String(o.warehouseId) === String(selected));
 
-  // When a source warehouse is picked, load its lots per requested product so the
-  // operator can (optionally) reserve a SPECIFIC parent lot instead of FEFO.
-  useEffect(() => {
-    setLotChoice({});
-    setLotsByProduct({});
-    if (!chosen?.canFulfill) return;
-    let alive = true;
-    Promise.all((chosen.items || []).map((it) =>
-      getLots({ productId: it.productId, warehouseId: selected })
-        .then((r) => [String(it.productId), listOf(r).filter((l) => (l.availableStock || 0) > 0)])
-        .catch(() => [String(it.productId), []])
-    )).then((pairs) => { if (alive) setLotsByProduct(Object.fromEntries(pairs)); });
-    return () => { alive = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected]);
-
   const confirm = async () => {
     if (!chosen?.canFulfill) return;
-    const lotSelections = Object.entries(lotChoice)
-      .filter(([, invId]) => invId)
-      .map(([productId, inventoryId]) => ({ productId, inventoryId }));
     setBusy(true);
-    try { await onConfirm(selected, lotSelections); } catch { /* surfaced by caller */ } finally { setBusy(false); }
+    try { await onConfirm(selected); } catch { /* surfaced by caller */ } finally { setBusy(false); }
   };
 
   return (
@@ -288,7 +277,7 @@ const SourceWarehouseModal = ({ order, onClose, onConfirm }) => {
       <div className="bg-white rounded-2xl w-full max-w-lg max-h-[85vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-4 border-b border-stone-200">
           <h3 className="font-bold text-stone-900">Assign a source warehouse</h3>
-          <p className="text-xs text-stone-500 mt-0.5">Choose where this is fulfilled from — FEFO by default, or a specific parent lot below. Approving moves no stock; the warehouse reserves it when it picks in Send Stock.</p>
+          <p className="text-xs text-stone-500 mt-0.5">Choose where this is fulfilled from. Approving moves no stock; the warehouse picks the lots and reserves it in Send Stock.</p>
         </div>
 
         <div className="p-4 overflow-y-auto space-y-2">
@@ -338,34 +327,6 @@ const SourceWarehouseModal = ({ order, onClose, onConfirm }) => {
             <p className="text-xs font-bold text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
               No single warehouse has enough stock for this request.
             </p>
-          )}
-
-          {/* Optional: reserve a SPECIFIC parent lot per item (else FEFO). Choosing
-              a lot makes that lot's child unit serials scannable at Pick. */}
-          {chosen?.canFulfill && (
-            <div className="border-t border-stone-100 pt-3 mt-1 space-y-2">
-              <p className="text-[11px] font-bold uppercase tracking-wider text-stone-400">Source lot (optional — default FEFO)</p>
-              {(chosen.items || []).map((it) => {
-                const lots = lotsByProduct[String(it.productId)] || [];
-                return (
-                  <div key={it.productId} className="flex items-center justify-between gap-2">
-                    <span className="text-xs text-stone-600 flex-1 truncate">{it.productName} · need {fmtNum(it.requiredQty)}</span>
-                    <select
-                      className="text-xs border border-stone-200 rounded-lg px-2 py-1.5 bg-white min-w-[190px]"
-                      value={lotChoice[String(it.productId)] || ''}
-                      onChange={(e) => setLotChoice((c) => ({ ...c, [String(it.productId)]: e.target.value }))}
-                    >
-                      <option value="">Auto (FEFO — oldest first)</option>
-                      {lots.map((l) => (
-                        <option key={l._id} value={l._id} disabled={(l.availableStock || 0) < it.requiredQty}>
-                          {l.lotNumber || l.batchNumber} · {fmtNum(l.availableStock)} avail{(l.availableStock || 0) < it.requiredQty ? ' (too few)' : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                );
-              })}
-            </div>
           )}
         </div>
 

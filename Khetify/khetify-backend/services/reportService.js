@@ -41,6 +41,11 @@ async function stockOnHand(companyId, params = {}) {
     const salePrice = r.productId?.price || r.productId?.mrp || 0;
     const mrp = r.productId?.mrp || r.productId?.price || 0;
     return {
+      // INTERNAL KEY (leading underscore) — the lot row this report line was
+      // derived from, so Company → Analytics → View can open its Lot Details.
+      // Underscore-prefixed keys are stripped from the CSV export and hidden by
+      // the table, so no report column or exported file changes shape.
+      _inventoryId: String(r._id),
       product: r.productId?.productName || "—",
       sku: r.productId?.skuNumber || "",
       warehouse: r.warehouseId?.name || "Unassigned",
@@ -250,7 +255,10 @@ function streamCsv(res, name, rows) {
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.setHeader("Content-Disposition", `attachment; filename="${name}.csv"`);
   if (!rows.length) { res.end(""); return; }
-  const headers = Object.keys(rows[0]);
+  // Underscore-prefixed keys are INTERNAL row metadata for the UI (e.g. the lot
+  // id behind a Stock on Hand line) and are never exported — the CSV keeps
+  // exactly the columns it has always had.
+  const headers = Object.keys(rows[0]).filter((k) => !k.startsWith("_"));
   const esc = (v) => {
     const s = v == null ? "" : String(v);
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;

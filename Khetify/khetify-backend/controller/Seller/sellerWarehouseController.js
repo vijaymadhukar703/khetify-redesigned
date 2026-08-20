@@ -1,8 +1,12 @@
 const mongoose = require("mongoose");
 const Warehouse = require("../../model/Warehouse/Warehouse");
 const Inventory = require("../../model/Inventory/Inventory");
+const Seller = require("../../model/Seller/Seller");
 const { assertSellerWarehouse } = require("../../services/warehouseOwnershipService");
 const { warehouseScope, inScope } = require("../../services/warehouseScope");
+const { withTransaction } = require("../../services/txn");
+const sellerMember = require("../../services/sellerMemberService");
+const { locationFromMapsUrl } = require("../../utils/mapsUrl");
 
 /**
  * Aggregate the seller's owner-scoped inventory grouped by warehouse:
@@ -105,33 +109,187 @@ exports.getSellerWarehouseStockSummary = async (req, res) => {
   }
 };
 
-/** POST /api/seller/warehouses — create one owned by this seller. */
+/**
+ * POST /api/seller/warehouses
+ *
+ * WAREHOUSE + WAREHOUSE MANAGER, created together.
+ *
+ * The seller mirror of controller/Warehouse/warehouseController.createWarehouse
+ * — same architecture, same validation source, same role-assignment idea, same
+ * email. A seller team member is no longer created from Administration →
+ * Team & Roles; the manager who runs a warehouse is created WITH that warehouse
+ * and assigned to it in the same call. Body: the usual warehouse fields plus
+ *   manager: { name, email, phone, password }
+ * (shape enforced by validators/sellerWarehouseValidators.js).
+ *
+ * ALL-OR-NOTHING:
+ *  1. The manager's email/phone are checked for duplicates BEFORE anything is
+ *     written — the likeliest failure, caught with nothing to undo.
+ *  2. Both writes run inside services/txn.withTransaction, so on a replica set
+ *     they commit or abort as one unit.
+ *  3. On a standalone mongod (no transaction support) withTransaction runs the
+ *     callback session-less; the catch below then DELETES the just-created
+ *     warehouse if the manager fails, so a warehouse never survives without
+ *     its manager. The manager can never survive without the warehouse either,
+ *     since it is written second.
+ *
+ * Response shape is unchanged (`data` is still the warehouse) with the new
+ * manager added alongside it, so nothing that reads this endpoint breaks.
+ */
 exports.createSellerWarehouse = async (req, res) => {
   try {
+    const { manager, mapsUrl } = req.body;
     const fields = pickWarehouseFields(req.body);
     if (!fields.name) return res.status(400).json({ success: false, message: "name is required" });
+    if (!manager) {
+      return res.status(400).json({
+        success: false,
+        message: "Manager details are required to create a warehouse",
+      });
+    }
 
-    const wh = await Warehouse.create({ sellerId: req.user.sellerId, ...fields });
-    res.status(201).json({ success: true, message: "Warehouse created", data: wh });
+    // An explicitly supplied `location` always wins; otherwise we try to read
+    // coordinates out of the Maps link, and fall back to the model's own
+    // default when the link carries none (e.g. a short maps.app.goo.gl link).
+    const geo = fields.location || locationFromMapsUrl(mapsUrl) || undefined;
+
+    // Pre-flight duplicate check: fail before any document exists.
+    await sellerMember.assertUniqueIdentity({ email: manager.email, phone: manager.phone });
+
+    const created = await withTransaction(async (session) => {
+      const opts = session ? { session } : {};
+      let warehouseId = null;
+      try {
+        const [wh] = await Warehouse.create(
+          [{
+            ...fields,
+            sellerId: req.user.sellerId,
+            location: geo,
+            mapsUrl: mapsUrl || undefined,
+          }],
+          opts
+        );
+        warehouseId = wh._id;
+
+        // Assigned to THIS warehouse on creation — that array is what
+        // services/warehouseScope.js reads for warehouse-level access, so the
+        // manager is scoped to their warehouse from their very first login.
+        const user = await sellerMember.createSellerMember({
+          sellerId: req.user.sellerId,
+          name: manager.name,
+          email: manager.email,
+          phone: manager.phone,
+          password: manager.password,
+          role: sellerMember.SELLER_WAREHOUSE_MANAGER_ROLE,
+          warehouseIds: [wh._id],
+          session,
+        });
+
+        return { warehouse: wh, manager: user };
+      } catch (err) {
+        // No session (standalone mongod) → compensate by hand.
+        if (!session && warehouseId) {
+          await Warehouse.deleteOne({ _id: warehouseId }).catch(() => {});
+        }
+        throw err;
+      }
+    });
+
+    // ── WELCOME EMAIL ──
+    // Sent ONLY here: past withTransaction, so the warehouse AND the manager
+    // are both committed. Any failure earlier (duplicate email/phone, a bad
+    // warehouse, the compensating delete) throws into the catch below and
+    // never reaches this line, so a half-created pair can't be emailed about.
+    //
+    // Deliberately NON-FATAL: the records already exist, so a bounced or
+    // misconfigured mailbox must not turn a successful creation into a 500.
+    // The outcome is reported as `managerEmailSent` instead, and the raw
+    // password is never written to the log.
+    //
+    // Same helper, same template, same transport as the company flow — the only
+    // difference is `loginPath`, which points the seller's manager at the
+    // SELLER sign-in page they actually use.
+    let managerEmailSent = false;
+    try {
+      const seller = await Seller.findById(req.user.sellerId)
+        .select("sellerInfo.businessName contact.ownerName")
+        .lean();
+      await sellerMember.sendWarehouseManagerWelcomeEmail({
+        managerName: created.manager.name,
+        email: created.manager.email,
+        password: manager.password, // plaintext, request-scoped, email only
+        companyName: seller?.sellerInfo?.businessName || seller?.contact?.ownerName,
+        warehouseName: created.warehouse.name,
+        loginPath: "/seller/login",
+      });
+      managerEmailSent = true;
+    } catch (mailErr) {
+      console.error("createSellerWarehouse: manager welcome email failed:", mailErr.message);
+    }
+
+    res.status(201).json({
+      success: true,
+      message: "Warehouse and manager created",
+      data: created.warehouse,
+      manager: created.manager,
+      managerEmailSent,
+    });
   } catch (err) {
     console.error("createSellerWarehouse error:", err);
-    res.status(500).json({ success: false, message: "Server error" });
+    res
+      .status(err.status || 500)
+      .json({ success: false, message: err.status ? err.message : "Server error" });
   }
 };
 
-/** PUT /api/seller/warehouses/:id — edit, only if owned by this seller. */
+/** PUT /api/seller/warehouses/:id — edit, only if owned by this seller.
+ *
+ * Editing NEVER touches the warehouse's manager: that account already exists
+ * and its lifecycle (enable / disable / remove) lives in Team & Roles. Same
+ * rule as the company edit handler. */
 exports.updateSellerWarehouse = async (req, res) => {
   try {
     const wh = await Warehouse.findOne({ _id: req.params.id, sellerId: req.user.sellerId });
     if (!wh) return res.status(404).json({ success: false, message: "Warehouse not found" });
 
     const fields = pickWarehouseFields(req.body);
-    Object.assign(wh, fields);
+    // Merge the address key-by-key rather than replacing the sub-document, so a
+    // caller that omits `district` doesn't silently wipe a saved one.
+    const { address, ...rest } = fields;
+    Object.assign(wh, rest);
+    if (address) {
+      if (!wh.address) wh.address = {};
+      for (const k of ["line1", "city", "district", "state", "pincode"]) {
+        if (address[k] !== undefined) wh.address[k] = address[k];
+      }
+      wh.markModified("address");
+    }
+
+    // Google Maps link. ADDITIVE: only touched when the caller actually sends
+    // the key, so every existing PUT caller behaves exactly as before. Sending
+    // "" clears it.
+    if (req.body.mapsUrl !== undefined) {
+      const link = String(req.body.mapsUrl || "").trim();
+      if (link && !/^https?:\/\/\S+$/i.test(link)) {
+        return res.status(400).json({
+          success: false,
+          message: "Enter a valid link starting with http:// or https://",
+        });
+      }
+      wh.mapsUrl = link || undefined;
+      // Keep the geo point in step when the new link carries coordinates.
+      const derived = locationFromMapsUrl(link);
+      if (derived) {
+        wh.location = derived;
+        wh.markModified("location");
+      }
+    }
+
     await wh.save();
     res.json({ success: true, message: "Warehouse updated", data: wh });
   } catch (err) {
     console.error("updateSellerWarehouse error:", err);
-    res.status(500).json({ success: false, message: "Server error" });
+    res.status(err.status || 500).json({ success: false, message: err.status ? err.message : "Server error" });
   }
 };
 

@@ -5,6 +5,38 @@ import { toast, ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import config from "../../../config/config";
 
+/* ─── OFFICIAL ID FORMATS ───────────────────────────────────────────────────
+   Taken from the SERVER's own rules (khetify-backend/utils/fieldValidators.js)
+   rather than re-derived, so the form can never reject something the API would
+   have accepted.
+
+   GSTIN  — 15 chars: 2-digit state + 10-char PAN + entity char + 'Z' + checksum.
+            NOTE the entity char is [0-9A-Z] here, matching the backend. This
+            file previously used [1-9A-Z], which rejected a perfectly valid
+            GSTIN whose entity code is 0 (e.g. 27AAPFU0939F0ZV) — the API would
+            have taken it, the form would not.
+   PAN    — 10 chars: 5 letters + 4 digits + 1 letter.
+   UDYAM  — 19 chars: UDYAM-<2-letter state>-<2 digits>-<7 digits>.
+   CIN    — 21 chars: L/U + 5 digits + 2-letter state + 4-digit year
+            + 3-letter ownership + 6-digit registration number.
+   The Udyam/CIN field accepts EITHER, exactly as it did before. */
+const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/;
+const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+const UDYAM_RE = /^UDYAM-[A-Z]{2}-[0-9]{2}-[0-9]{7}$/;
+const CIN_RE = /^[LU][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}$/;
+
+const GSTIN_LEN = 15;
+const PAN_LEN = 10;
+// The field takes either form, so the cap is the longer of the two (CIN).
+const UDYAM_CIN_MAX = 21;
+
+/* Character masks. Applied as the value is set, so they govern TYPING AND
+   PASTING alike — `maxLength` alone does not stop every paste path, and it
+   cannot strip an illegal character out of the middle of a pasted string. */
+const onlyAlnum = (v) => v.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+// Udyam and CIN are the only ones that legitimately contain a separator.
+const onlyAlnumDash = (v) => v.replace(/[^A-Za-z0-9-]/g, '').toUpperCase();
+
 const CompanySetupStep4 = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
@@ -22,29 +54,27 @@ const [formData, setFormData] = useState({
   // Verification ids AND their uploads are all required, ids must match format.
   const getErrors = () => {
     const e = {};
-    // Indian govt ID formats (validated case-insensitively, normalized to uppercase)
-    const panRe = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
-    const gstinRe = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
-    const udyamRe = /^UDYAM-[A-Z]{2}-[0-9]{2}-[0-9]{7}$/;
-    const cinRe = /^[LU][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}$/;
-
+    // Ids are validated case-insensitively and normalized to uppercase, using
+    // the module-level formats above (which mirror the server's).
     const gstin = formData.gstinNumber.trim().toUpperCase();
     const udyam = formData.udyamIncorporationNumber.trim().toUpperCase();
     const pan = formData.panNumber.trim().toUpperCase();
 
     if (!gstin) e.gstinNumber = "GSTIN is required";
-    else if (!gstinRe.test(gstin)) e.gstinNumber = "Enter a valid 15-character GSTIN";
+    else if (gstin.length !== GSTIN_LEN) e.gstinNumber = `GSTIN must be exactly ${GSTIN_LEN} characters`;
+    else if (!GSTIN_RE.test(gstin)) e.gstinNumber = "Enter a valid GSTIN (e.g. 27AAPFU0939F1ZV)";
 
     if (!gstFile) e.gstCertificate = "Upload the GST certificate";
 
     if (!udyam) e.udyamIncorporationNumber = "Udyam/Incorporation number is required";
-    else if (!udyamRe.test(udyam) && !cinRe.test(udyam))
-      e.udyamIncorporationNumber = "Enter a valid Udyam (UDYAM-XX-00-0000000) or CIN number";
+    else if (!UDYAM_RE.test(udyam) && !CIN_RE.test(udyam))
+      e.udyamIncorporationNumber = "Enter a valid Udyam (UDYAM-MP-03-0012345) or CIN (U72200MP2020PTC012345)";
 
     if (!regFile) e.registrationCertificate = "Upload the registration certificate";
 
     if (!pan) e.panNumber = "PAN number is required";
-    else if (!panRe.test(pan)) e.panNumber = "Enter a valid PAN (e.g. ABCDE1234F)";
+    else if (pan.length !== PAN_LEN) e.panNumber = `PAN must be exactly ${PAN_LEN} characters`;
+    else if (!PAN_RE.test(pan)) e.panNumber = "Enter a valid PAN (e.g. ABCDE1234F)";
 
     if (!panFile) e.panCard = "Upload the PAN card";
     return e;
@@ -63,19 +93,58 @@ const [formData, setFormData] = useState({
     });
   }, []);
 
-  const handleChange = (e) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value });
+  /**
+   * Every id field is MASKED AS IT IS SET, so typing and pasting behave the
+   * same: illegal characters are dropped (wherever they appear in a pasted
+   * string), the value is upper-cased, and it is cut to that id's exact maximum
+   * length. `maxLength` is on the inputs as well, but it only limits typing —
+   * this is what makes a paste obey the limit too.
+   *
+   * The stored value stays a plain string under the SAME field name, so the
+   * payload sent to the API is unchanged.
+   */
+  const MASKS = {
+    gstinNumber: (v) => onlyAlnum(v).slice(0, GSTIN_LEN),
+    panNumber: (v) => onlyAlnum(v).slice(0, PAN_LEN),
+    udyamIncorporationNumber: (v) => onlyAlnumDash(v).slice(0, UDYAM_CIN_MAX),
   };
 
-const ALLOWED_DOC_TYPES = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    const mask = MASKS[name];
+    setFormData((prev) => ({ ...prev, [name]: mask ? mask(value) : value }));
+    // Clear that field's error as soon as the user edits it.
+    setErrors((prev) => (prev[name] ? { ...prev, [name]: undefined } : prev));
+  };
+
+/* PNG AND PDF ONLY. JPG/JPEG and WEBP were accepted before and are now
+   refused, along with everything else. */
+const ALLOWED_DOC_TYPES = ["application/pdf", "image/png"];
+const ALLOWED_DOC_EXTS = [".pdf", ".png"];
+// What the file picker itself offers, and what the hint under each field says.
+const DOC_ACCEPT = ".png,.pdf,image/png,application/pdf";
+const DOC_HINT = "Accepted formats: PNG, PDF";
 
 const handleFileChange = (e) => {
   const { name } = e.target;
   const file = e.target.files[0];
   if (!file) return;
 
-  if (!ALLOWED_DOC_TYPES.includes(file.type)) {
-    toast.error("Only PDF or image files (JPG, PNG, WEBP) are allowed.");
+  /* CHECKED TWO WAYS ON PURPOSE. The browser-reported MIME type is the primary
+     test, but some systems hand over an empty or generic type
+     (application/octet-stream) for a perfectly good file, which would refuse a
+     valid PNG. The extension is the fallback, so a renamed .doc still cannot
+     get through while a correctly named PNG/PDF always can. */
+  const nameLower = String(file.name || "").toLowerCase();
+  const extOk = ALLOWED_DOC_EXTS.some((ext) => nameLower.endsWith(ext));
+  // A type the browser could not work out. Windows in particular hands back
+  // "application/octet-stream" for a perfectly good PDF, so treating that as a
+  // real answer would refuse the file; the extension decides in that case.
+  const typeUnknown = !file.type || file.type === "application/octet-stream";
+  const typeOk = ALLOWED_DOC_TYPES.includes(file.type);
+
+  if (!extOk || (!typeUnknown && !typeOk)) {
+    toast.error("Only PNG or PDF files are allowed.");
     e.target.value = "";
     return;
   }
@@ -167,10 +236,17 @@ const handleFileChange = (e) => {
                   <input
                     name="gstinNumber"
                     type="text"
-                    placeholder="Enter GSTIN Number"
-                    className="w-full h-11 px-3 border border-stone-300 rounded-lg outline-none focus:ring-2 focus:ring-[#f20d0d]"
+                    placeholder="27AAPFU0939F1ZV"
+                    maxLength={GSTIN_LEN}
+                    inputMode="text"
+                    autoComplete="off"
+                    value={formData.gstinNumber}
+                    className="w-full h-11 px-3 border border-stone-300 rounded-lg outline-none focus:ring-2 focus:ring-[#f20d0d] uppercase tracking-wide"
                     onChange={handleChange}
                   />
+                  <p className="text-stone-400 text-[11px] leading-snug">
+                    15 characters 
+                  </p>
                   {errors.gstinNumber && <p className="text-red-500 text-xs font-medium">⚠ {errors.gstinNumber}</p>}
                 </div>
                 <div className="flex flex-col space-y-2">
@@ -180,10 +256,13 @@ const handleFileChange = (e) => {
                   <input
                     type="file"
                     name="gstCertificate"
-                    accept=".pdf,image/*"
+                    accept={DOC_ACCEPT}
                     onChange={handleFileChange}
                     className="block w-full text-sm text-stone-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-red-50 file:text-red-700 hover:file:bg-red-100 cursor-pointer"
                   />
+                  {/* Stated BEFORE a file is chosen, so the rule is known up
+                      front rather than only after a rejected pick. */}
+                  <p className="text-stone-400 text-[11px] leading-snug">{DOC_HINT}</p>
                   {errors.gstCertificate && <p className="text-red-500 text-xs font-medium">⚠ {errors.gstCertificate}</p>}
                 </div>
               </div>
@@ -200,10 +279,16 @@ const handleFileChange = (e) => {
                   <input
                     name="udyamIncorporationNumber"
                     type="text"
-                    placeholder="Enter Udyam/Incorporation Number"
-                    className="w-full h-11 px-3 border border-stone-300 rounded-lg outline-none focus:ring-2 focus:ring-[#f20d0d]"
+                    placeholder="UDYAM-MP-03-0012345 or CIN number"
+                    maxLength={UDYAM_CIN_MAX}
+                    autoComplete="off"
+                    value={formData.udyamIncorporationNumber}
+                    className="w-full h-11 px-3 border border-stone-300 rounded-lg outline-none focus:ring-2 focus:ring-[#f20d0d] uppercase tracking-wide"
                     onChange={handleChange}
                   />
+                  <p className="text-stone-400 text-[11px] leading-snug">
+                    Udyam: UDYAM-XX-00-0000000 (19 characters) &nbsp;·&nbsp; or CIN: U72200MP2020PTC012345 (21 characters).
+                  </p>
                   {errors.udyamIncorporationNumber && <p className="text-red-500 text-xs font-medium">⚠ {errors.udyamIncorporationNumber}</p>}
                 </div>
                 <div className="flex flex-col space-y-2">
@@ -213,10 +298,13 @@ const handleFileChange = (e) => {
                   <input
                     type="file"
                     name="registrationCertificate"
-                    accept=".pdf,image/*"
+                    accept={DOC_ACCEPT}
                     onChange={handleFileChange}
                     className="block w-full text-sm text-stone-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-red-50 file:text-red-700 hover:file:bg-red-100 cursor-pointer"
                   />
+                  {/* Stated BEFORE a file is chosen, so the rule is known up
+                      front rather than only after a rejected pick. */}
+                  <p className="text-stone-400 text-[11px] leading-snug">{DOC_HINT}</p>
                   {errors.registrationCertificate && <p className="text-red-500 text-xs font-medium">⚠ {errors.registrationCertificate}</p>}
                 </div>
               </div>
@@ -233,10 +321,16 @@ const handleFileChange = (e) => {
                   <input
                     name="panNumber"
                     type="text"
-                    placeholder="Enter PAN Number"
-                    className="w-full h-11 px-3 border border-stone-300 rounded-lg outline-none focus:ring-2 focus:ring-[#f20d0d] uppercase"
+                    placeholder="ABCDE1234F"
+                    maxLength={PAN_LEN}
+                    autoComplete="off"
+                    value={formData.panNumber}
+                    className="w-full h-11 px-3 border border-stone-300 rounded-lg outline-none focus:ring-2 focus:ring-[#f20d0d] uppercase tracking-wide"
                     onChange={handleChange}
                   />
+                  <p className="text-stone-400 text-[11px] leading-snug">
+                    10 characters
+                  </p>
                   {errors.panNumber && <p className="text-red-500 text-xs font-medium">⚠ {errors.panNumber}</p>}
                 </div>
                 {/* --- NEW: PAN Upload Input --- */}
@@ -247,10 +341,13 @@ const handleFileChange = (e) => {
                   <input
                     type="file"
                     name="panCard"
-                    accept=".pdf,image/*"
+                    accept={DOC_ACCEPT}
                     onChange={handleFileChange}
                     className="block w-full text-sm text-stone-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-red-50 file:text-red-700 hover:file:bg-red-100 cursor-pointer"
                   />
+                  {/* Stated BEFORE a file is chosen, so the rule is known up
+                      front rather than only after a rejected pick. */}
+                  <p className="text-stone-400 text-[11px] leading-snug">{DOC_HINT}</p>
                   {errors.panCard && <p className="text-red-500 text-xs font-medium">⚠ {errors.panCard}</p>}
                 </div>
               </div>

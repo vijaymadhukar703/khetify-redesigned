@@ -59,7 +59,12 @@ router.patch(
 // i.e. sellers this company has ISSUED a Principal Certificate to. Authorization
 // is the PC itself; there is no separate link-approval step (sellers apply for a
 // PC via the PC Applications queue). Declared BEFORE "/:id".
-router.get("/sellers", authMiddleware, authorize("inventory:read"), listSellers);
+// Sellers is an ADMINISTRATION module — gated on the paid ADMINISTRATION
+// feature, the same loadSubscription + requireFeature pattern used elsewhere.
+const loadSubscriptionMw = require("../../middlewares/loadSubscription");
+const requireFeatureMw = require("../../middlewares/requireFeature");
+const { FEATURES: PLAN_FEATURES } = require("../../config/plans");
+router.get("/sellers", authMiddleware, authorize("inventory:read"), loadSubscriptionMw, requireFeatureMw(PLAN_FEATURES.ADMINISTRATION), listSellers);
 
 // Protected
 router.get("/", authMiddleware, getAllCompanies);

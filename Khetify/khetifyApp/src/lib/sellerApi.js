@@ -60,6 +60,16 @@ export const updateSellerMember = (id, body) => data(api.patch(`team/${id}`, bod
 export const deleteSellerMember = (id) => data(api.delete(`team/${id}`));
 
 /* ---- authorization status (read-only; now PC-derived) ---- */
+/* ---- ACCOUNT SECURITY -------------------------------------------------- */
+// CHANGE PASSWORD is seller-namespaced. The shared /api/users/change-password
+// would have suited it, but middlewares/principalRouteGuard refuses a seller
+// token on any route outside /api/seller ("Company access only"), so the seller
+// portal has its own endpoint with the identical rules.
+export const changeMySellerPassword = (body) => data(api.post("change-password", body));
+// FORGOT PASSWORD is seller-specific: /api/users/forgot-password only matches
+// company members, so the seller portal has its own public endpoint.
+export const requestSellerPasswordReset = (body) => data(api.post("forgot-password", body));
+
 export const getSellerLink = () => data(api.get("link"));
 export const ackSellerApproval = () => data(api.post("ack-approval"));
 
@@ -111,15 +121,42 @@ export const unpublishListing = (listingId) =>
 /* ---- inbound supply requests (Phase 3) ---- */
 export const createSellerSupplyOrder = (body) => data(api.post("supply-orders", body));
 export const getSellerSupplyOrders = () => data(api.get("supply-orders"));
+// Resolve ONE label scanned while receiving (shipment manifest / Shipment Box /
+// Bulk Packaging) and report live coverage of the shipment's units. Read-only.
+export const scanSellerReceiveBox = (id, body) => data(api.post(`supply-orders/${id}/scan-box`, body));
 export const receiveSellerSupply = (id, body) => data(api.post(`supply-orders/${id}/receive`, body));
 
 /* ---- read-only inventory / lots (Phase 4a) ---- */
 export const getSellerLots = (params = {}) => data(api.get("lots", { params }));
 
+/* ---- Seller Lot Traceability (read-only) ---- */
+// The whole details page: lot + product summary, seller stock counts, packaging
+// summary and the seller-visible Bulk Packaging IDs.
+export const getSellerLotDetails = (lotId) => data(api.get(`lots/${lotId}/details`));
+// WHICH Unit IDs make up a seller lot's available quantity right now
+// (Seller → Analytics → View → View Available Units).
+export const getSellerLotAvailableUnits = (lotId) => data(api.get(`lots/${lotId}/available-units`));
+// Seller-visible traceability history for the lot.
+export const getSellerLotHistory = (lotId) => data(api.get(`lots/${lotId}/history`));
+// A non-bulk lot's units — paginated + searchable.
+export const getSellerLotUnits = (lotId, params = {}) => data(api.get(`lots/${lotId}/units`, { params }));
+// The seller's own units inside one received Bulk Packaging box — paginated.
+export const getSellerPackageUnits = (lotId, packageId, params = {}) =>
+  data(api.get(`lots/${lotId}/bulk-packages/${packageId}/units`, { params }));
+
 /* ---- inter-warehouse transfers (request → accept → shipment lifecycle) ---- */
 export const getSellerTransfers = (params = {}) => data(api.get("transfers", { params }));
 // Request a transfer A→B: { fromWarehouseId, toWarehouseId, productId, qty, note }
 export const createSellerTransfer = (body) => data(api.post("transfers", body));
+// DIRECT transfer — no prior request. Same downstream pipeline as an accepted
+// request (planned shipment → Send Stock → scan → box → dispatch → receive);
+// only the entry point differs. Backend: POST /api/seller/transfers/direct.
+//
+// Accepts a FormData so the DELIVERY CHALLAN (image or PDF) travels with the
+// fields — axios sets the multipart boundary itself, so no Content-Type is set
+// here. A plain object still works: the route's multer middleware ignores a
+// JSON body, so any caller posting JSON is unaffected.
+export const directSellerTransfer = (body) => data(api.post("transfers/direct", body));
 export const acceptSellerTransfer = (id, body = {}) => data(api.post(`transfers/${id}/accept`, body));
 // Products the seller HOLDS in a warehouse (in-stock lots, grouped) — fills the
 // transfer Product picker. Pass { forRequest: 1 } to read ANOTHER of your
@@ -134,12 +171,54 @@ export const getSellerShipments = (params = {}) => data(api.get("shipments", { p
 export const getSellerShipment = (id) => data(api.get(`shipments/${id}`));
 // Send Stock pipeline: scan-to-pick → pack → (label) → dispatch, like the company.
 export const pickSellerShipment = (id, body) => data(api.post(`shipments/${id}/pick`, body));
-export const packSellerShipment = (id, body = {}) => data(api.post(`shipments/${id}/pack`, body));
-// Build/print the shipping label (QR) BEFORE dispatch.
-export const getSellerShipmentManifest = (id) => data(api.get(`shipments/${id}/manifest`));
-// Dispatch needs { labelPrinted: true } (+ optional transport) — gated like the company.
-export const dispatchSellerShipment = (id, body = {}) => data(api.post(`shipments/${id}/dispatch`, body));
+// Seller scan validation (Phase 3). `scan` resolves ONE label against the
+// database; `scanPick` confirms a pick from validated tokens. Neither takes a
+// quantity, warehouse or product from the client — all are derived server-side.
+export const scanSellerShipment = (id, body) => data(api.post(`shipments/${id}/scan`, body));
+export const getSellerScanState = (id) => data(api.get(`shipments/${id}/scan-state`));
+export const scanPickSellerShipment = (id, body) => data(api.post(`shipments/${id}/scan-pick`, body));
+// SELLER ORDER PROCESSING. Scanning and box building save NOTHING;
+// `previewSellerBoxLabel` only renders a label from validated contents.
+// `dispatchSellerOrder` is the single call that commits the whole operation.
+export const getSellerShipmentBox = (id) => data(api.get(`shipments/${id}/box`));
+export const previewSellerBoxLabel = (id, body) => data(api.post(`shipments/${id}/box-label`, body));
+export const getSellerDeliveryLabel = (id, packageId) =>
+  data(api.get(`shipments/${id}/delivery-label`, packageId ? { params: { packageId } } : undefined));
+export const dispatchSellerOrder = (id, body) => data(api.post(`shipments/${id}/dispatch-order`, body));
 export const receiveSellerShipment = (id, body) => data(api.post(`shipments/${id}/receive`, body));
+
+/* ---- SELLER WAREHOUSE → WAREHOUSE TRANSFER ----------------------------- */
+// The seller mirror of the COMPANY warehouse-transfer endpoints. Entirely
+// separate from the SELLER → CUSTOMER order calls above (scanSellerShipment /
+// previewSellerBoxLabel / dispatchSellerOrder / getSellerDeliveryLabel), which
+// are untouched: a warehouse transfer carries no customer, address or delivery
+// label, so it uses the simple transfer box + box label flow instead.
+//
+// What must be scanned, per product.
+export const getSellerTransferChecklist = (id) => data(api.get(`shipments/${id}/transfer-checklist`));
+// Resolve ONE label (lot / bulk package / main box / inner box / unit). Saves
+// nothing — the server derives the product, warehouse and quantity itself.
+export const sellerTransferScan = (id, body) => data(api.post(`shipments/${id}/transfer-scan`, body));
+// Pack the ticked scanned units into a NEW transfer box, and undo one.
+export const packSellerTransferBox = (id, body) => data(api.post(`shipments/${id}/transfer-box`, body));
+export const discardSellerTransferBox = (id, sellerBoxId) =>
+  data(api.post(`shipments/${id}/transfer-box/discard`, { sellerBoxId }));
+// Closing the transfer without dispatching — every DRAFT box is discarded and
+// its units become loose stock again. Idempotent, and harmless once dispatched.
+export const abandonSellerTransferBoxes = (id) => data(api.post(`shipments/${id}/transfer-abandon`, {}));
+// Every box packed for this transfer, with the contents each label prints.
+export const getSellerTransferBoxes = (id) => data(api.get(`shipments/${id}/transfer-boxes`));
+// THE ONLY CALL THAT MOVES STOCK — it re-validates every scanned code first,
+// and refuses unless the transfer carries BOTH a challan number and a challan
+// document. Accepts a FormData so that document (image or PDF) can travel with
+// the dispatch; axios sets the multipart boundary itself.
+export const dispatchSellerTransfer = (id, body) => data(api.post(`shipments/${id}/transfer-dispatch`, body));
+// The shipping label, re-printable by the source warehouse after dispatch.
+export const getSellerTransferManifest = (id) => data(api.get(`shipments/${id}/transfer-manifest`));
+// Receiving at the destination, box label by box label. Partial is fine.
+export const getSellerTransferReceiveChecklist = (id) => data(api.get(`shipments/${id}/transfer-receive-checklist`));
+export const sellerTransferReceiveScan = (id, body) => data(api.post(`shipments/${id}/transfer-receive-scan`, body));
+export const receiveSellerTransfer = (id, body) => data(api.post(`shipments/${id}/transfer-receive`, body));
 
 /* ---- traceability (owner-aware) ---- */
 export const sellerTraceUnit = (serial) => data(api.get(`trace/unit/${encodeURIComponent(serial)}`));
@@ -174,7 +253,11 @@ export const getSellerOrders = (params = {}) => data(api.get("orders", { params 
 export const getSellerOrder = (id) => data(api.get(`orders/${id}`));
 export const getSellerOrderPicklist = (id) => data(api.get(`orders/${id}/picklist`));
 export const createSellerOrder = (body) => data(api.post("orders", body));
-export const updateSellerOrderStatus = (id, status) => data(api.patch(`orders/${id}/status`, { status }));
+export const getSellerOrderSourceOptions = (id) => data(api.get(`orders/${id}/source-options`));
+// `body` carries the status plus, on "confirmed", the sourceWarehouseId the
+// seller picked. Callers that pass a bare status string keep working.
+export const updateSellerOrderStatus = (id, statusOrBody) =>
+  data(api.patch(`orders/${id}/status`, typeof statusOrBody === "string" ? { status: statusOrBody } : statusOrBody));
 
 /* ---- subscription / billing ---- */
 export const getSellerSubscription = () => data(api.get("subscription/me"));

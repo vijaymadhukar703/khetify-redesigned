@@ -21,10 +21,42 @@ exports.generate = async (req, res) => {
   } catch (err) { fail(res, err); }
 };
 
+/**
+ * THE MAIN COMPANY READS A LOT AS ONE THING, wherever its units now sit.
+ *
+ * A warehouse holds what it holds, so it keeps the row-scoped answer. The
+ * company owns every warehouse, so a warehouse→warehouse move is an internal
+ * relocation, not a loss — the same rule lotController already applies to
+ * Company → Inventory → View, and it is gated on the very same role.
+ */
+const companyIdentityScope = (req) => req.user.role === "company_admin";
+
 exports.list = async (req, res) => {
   try {
-    const rows = await svc.listUnits(companyOwner(req), req.query);
+    const identityScope = companyIdentityScope(req);
+    const rows = await svc.listUnits(companyOwner(req), {
+      ...req.query,
+      identityScope,
+      // A WAREHOUSE prints what is on its own shelf, so stock already dispatched
+      // drops out of its Labels page the moment it leaves. The company keeps
+      // every label of the lot — the goods are still its own, just elsewhere.
+      excludeDispatched: !identityScope,
+    });
     res.json({ success: true, count: rows.length, data: rows });
+  } catch (err) { fail(res, err); }
+};
+
+/**
+ * GET /api/units/counts
+ * Unit-label count per lot, keyed by inventoryId — one aggregate instead of a
+ * per-lot round trip. Drives the Labels page's per-lot remaining capacity.
+ */
+exports.counts = async (req, res) => {
+  try {
+    const data = await svc.unitCountsByLot(companyOwner(req), {
+      identityScope: companyIdentityScope(req),
+    });
+    res.json({ success: true, data });
   } catch (err) { fail(res, err); }
 };
 

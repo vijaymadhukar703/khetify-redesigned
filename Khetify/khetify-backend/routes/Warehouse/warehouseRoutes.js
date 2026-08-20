@@ -6,6 +6,8 @@ const authorize = require("../../middlewares/authorize");
 const loadSubscription = require("../../middlewares/loadSubscription");
 const requireFeature = require("../../middlewares/requireFeature");
 const enforceLimit = require("../../middlewares/enforceLimit");
+const validate = require("../../middlewares/validate");
+const { createWarehouseBody } = require("../../validators/warehouseValidators");
 const { FEATURES } = require("../../config/plans");
 
 const {
@@ -33,6 +35,9 @@ router.post(
   loadSubscription,
   requireFeature(FEATURES.MULTI_WAREHOUSE),
   enforceLimit("warehouses"),
+  // Warehouse + Warehouse Manager arrive together; the manager block is
+  // mandatory and its field rules are shared with Add Team Member.
+  validate({ body: createWarehouseBody }),
   createWarehouse
 );
 

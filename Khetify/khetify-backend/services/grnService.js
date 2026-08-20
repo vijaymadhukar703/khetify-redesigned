@@ -31,11 +31,19 @@ async function nextGrnNumber(companyId, session) {
 
 /**
  * Auto lot code when a line has no lot/batch. Uses the Khetify generator
- * (KH-<WH>-<YYYYMM>-<seq>) via lotService; falls back to the legacy
- * LOT-<sku>-<yymmdd>-<seq> only if that ever returns nothing.
+ * (KH-<COMPANY>-<PRODUCT_CODE>-<YYYY>-<MM>-<SERIAL>) via lotService; falls back
+ * to the legacy LOT-<sku>-<yymmdd>-<seq> if that returns nothing OR cannot run
+ * — the generator needs the company name and the product's product_code, and a
+ * GRN posting must never fail just because one of those is missing.
  */
 async function generateLotCode(companyId, product, session, warehouseId = null) {
-  const auto = await lotService.autoLotNumber(companyId, warehouseId, session);
+  void warehouseId; // no longer part of the lot number; kept for call-site compatibility
+  let auto = null;
+  try {
+    ({ lotNumber: auto } = await lotService.autoLotNumber(companyId, { productId: product?._id, session }));
+  } catch {
+    auto = null; // fall through to the legacy code below
+  }
   if (auto) return auto;
   // last-resort fallback: legacy LOT-<sku>-<yymmdd>-<seq>.
   const sku = (product?.skuNumber || "GEN").toUpperCase().replace(/\s+/g, "");

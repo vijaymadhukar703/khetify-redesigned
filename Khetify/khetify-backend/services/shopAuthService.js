@@ -8,6 +8,11 @@ const { sendMail, smtpConfigured } = require("./mailerService");
  * Storefront (customer-shop) auth: register / login with email OR phone +
  * password, plus optional email-OTP verification via the shared mailerService.
  * No SMS — phone is contact info only.
+ *
+ * 👤 PROFILE (additive): updateProfile() and changePassword() back the
+ * self-service account hub at /customer-shop/profile. Both are scoped by the
+ * consumerId taken from the JWT, so a shopper can only ever touch their OWN
+ * document.
  */
 
 const OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
@@ -110,6 +115,82 @@ async function login({ identifier, password }) {
   return { token: signConsumerToken(consumer), consumer: publicConsumer(consumer) };
 }
 
+/* ─────────────────────────── 👤 PROFILE ───────────────────────────
+ * Self-service account changes from /customer-shop/profile.
+ * ───────────────────────────────────────────────────────────────── */
+
+/**
+ * Update the shopper's own name / phone.
+ *
+ * EMAIL IS DELIBERATELY NOT EDITABLE HERE. It is the login identifier, so
+ * changing it needs its own re-verification flow (new address → OTP → only then
+ * swap). Allowing it in a plain PATCH would let someone claim an address they
+ * don't own.
+ *
+ * @param {string} consumerId
+ * @param {object} patch { name?, phone? }
+ */
+async function updateProfile(consumerId, { name, phone } = {}) {
+  const consumer = await Consumer.findById(consumerId);
+  if (!consumer) throw httpErr("Account not found", 404);
+
+  if (name !== undefined) {
+    const next = String(name).trim();
+    if (!next) throw httpErr("Name cannot be empty");
+    if (next.length > 80) throw httpErr("Name is too long (max 80 characters)");
+    consumer.name = next;
+  }
+
+  if (phone !== undefined) {
+    const next = String(phone).replace(/\D/g, "");
+
+    if (next) {
+      if (next.length !== 10) throw httpErr("Please enter a valid 10-digit phone number");
+      // phone carries a unique index — surface the clash as a clean 409 rather
+      // than letting Mongo throw a raw E11000.
+      const clash = await Consumer.findOne({ phone: next, _id: { $ne: consumer._id } }).select("_id");
+      if (clash) throw httpErr("This phone number is already linked to another account", 409);
+      consumer.phone = next;
+    } else {
+      // Clearing the phone is only allowed if an email remains — otherwise the
+      // account would have NO way to log in.
+      if (!consumer.email) throw httpErr("You must keep either an email or a phone number on your account");
+      consumer.phone = undefined;
+    }
+  }
+
+  await consumer.save();
+  return publicConsumer(consumer);
+}
+
+/**
+ * Change the account password. The current one is required.
+ *
+ * @param {string} consumerId
+ * @param {object} body { currentPassword, newPassword }
+ */
+async function changePassword(consumerId, { currentPassword, newPassword } = {}) {
+  const consumer = await Consumer.findById(consumerId);
+  if (!consumer) throw httpErr("Account not found", 404);
+
+  if (!currentPassword) throw httpErr("Your current password is required");
+  if (!newPassword || String(newPassword).length < 6) {
+    throw httpErr("Password must be at least 6 characters");
+  }
+
+  const ok = await bcrypt.compare(String(currentPassword), consumer.passwordHash);
+  if (!ok) throw httpErr("Your current password is incorrect", 401);
+
+  if (String(currentPassword) === String(newPassword)) {
+    throw httpErr("Your new password must be different from the current one");
+  }
+
+  consumer.passwordHash = await bcrypt.hash(String(newPassword), 10);
+  await consumer.save();
+
+  return { consumer: publicConsumer(consumer) };
+}
+
 /** Verify the email OTP for the logged-in consumer. */
 async function verifyEmailOtp(consumerId, code) {
   const consumer = await Consumer.findById(consumerId);
@@ -151,6 +232,8 @@ async function getMe(consumerId) {
 module.exports = {
   register,
   login,
+  updateProfile,
+  changePassword,
   verifyEmailOtp,
   resendEmailOtp,
   getMe,

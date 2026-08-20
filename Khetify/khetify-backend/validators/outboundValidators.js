@@ -35,4 +35,15 @@ const dispatchBody = z.object({
   fromWarehouseId: objectId.optional(),
 });
 
-module.exports = { generateWaveBody, pickLineBody, createPackageBody, dispatchBody };
+// Pick modal scan. `code` may be a Bulk Packaging ID, a unit code or a lot
+// number — which one it IS comes from the database lookup, not from this shape.
+// `selectedCodes` is the client's current selection, echoed back so the server
+// can skip duplicates and measure what is still required.
+const pickScanBody = z.object({
+  code: z.string().trim().min(1),
+  orderType: z.enum(["order", "supply"]),
+  orderId: objectId,
+  selectedCodes: z.array(z.string().trim()).max(20000).optional(),
+});
+
+module.exports = { generateWaveBody, pickLineBody, createPackageBody, dispatchBody, pickScanBody };

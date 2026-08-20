@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { getOrderHistory, getWarehouses, formatINR } from '../../lib/imsApi';
 import { StatCard, inputCls } from './ims/ImsUi';
 import { movementKind } from '../../lib/movementLabel';
@@ -165,19 +166,19 @@ const WarehouseTransferHistory = () => {
 
       {/* List */}
       <div className="bg-white border border-stone-200 rounded-xl overflow-x-auto">
-        <table className="w-full text-left border-collapse min-w-[1160px] resp-table">
+        <table className="w-full text-left border-collapse min-w-[1280px] resp-table">
           <thead>
             <tr className="border-b border-stone-200 bg-stone-50/50">
-              {['Reference', 'Type', 'Direction', 'From', 'To', 'Item', 'Lot No.', 'Quantity', 'Status', 'MRP', 'Date'].map((h) => (
+              {['Reference', 'Type', 'Direction', 'From', 'To', 'Item', 'Lot No.', 'Quantity', 'Status', 'MRP', 'Date', 'View'].map((h) => (
                 <th key={h} className="px-5 py-3.5 text-[10px] font-bold text-stone-400 uppercase tracking-widest whitespace-nowrap">{h}</th>
               ))}
             </tr>
           </thead>
           <tbody className="divide-y divide-stone-100">
             {loading ? (
-              <tr><td colSpan={11} className="px-5 py-10 text-center text-stone-400">Loading…</td></tr>
+              <tr><td colSpan={12} className="px-5 py-10 text-center text-stone-400">Loading…</td></tr>
             ) : paged.length === 0 ? (
-              <tr><td colSpan={11} className="px-5 py-10 text-center text-stone-400">No transfers involve your warehouse yet.</td></tr>
+              <tr><td colSpan={12} className="px-5 py-10 text-center text-stone-400">No transfers involve your warehouse yet.</td></tr>
             ) : paged.map((r) => {
               const dir = directionOf(r);
               return (
@@ -214,6 +215,21 @@ const WarehouseTransferHistory = () => {
                 {/* Heading reads "MRP"; same value/calculation as before (r.total). */}
                 <td data-label="MRP" className="px-5 py-3.5 text-sm font-semibold text-stone-800">{r.total ? formatINR(r.total) : '—'}</td>
                 <td data-label="Date" className="px-5 py-3.5 text-sm text-stone-500 whitespace-nowrap">{fmtDate(r.date)}</td>
+                {/* VIEW — the ONLY action on this page, and it is read-only.
+                    `kind` tells the detail page which record this row came from
+                    so it can ask the right existing endpoint: a shipment row
+                    (SH-*) resolves through /shipments/:id/details, a company
+                    assignment (CW-*) through /lots/:id/details. No new backend.
+                    Nothing here edits, deletes, transfers or receives. */}
+                <td data-label="View" className="px-5 py-3.5">
+                  <Link
+                    to={`/warehouse/transfer-history/${r.id}?kind=${r.kind}`}
+                    title="View transfer details"
+                    className="inline-flex items-center gap-1 text-xs font-bold px-3 py-1.5 rounded-lg border border-stone-200 text-stone-600 hover:bg-stone-50 hover:text-[#EA2831] transition-colors"
+                  >
+                    <span className="material-symbols-outlined text-base">visibility</span> View
+                  </Link>
+                </td>
               </tr>
               );
             })}

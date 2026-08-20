@@ -89,7 +89,10 @@ const resolveSellerCrumb = (pathname) => {
 const SellerLayout = () => {
   const navigate = useNavigate();
   const { sellerCan } = useSellerSubscription();
-  const { sellerCan: hasCap } = useSellerPermission();
+  // `role` comes from the same context — it decides whether the Settings entry
+  // is offered (warehouse side only). Destructured alongside the existing
+  // capability helper rather than as a second hook call.
+  const { sellerCan: hasCap, role } = useSellerPermission();
   const canBill = hasCap("billing:manage"); // only seller_admin can switch plans
 
   const [seller, setSeller] = useState(null);
@@ -114,10 +117,32 @@ const SellerLayout = () => {
   };
 
   // Display name = the member's own name when a team member is logged in, else
-  // the seller business name; the business name shows as a secondary label.
+  // the seller business name.
   const businessName = seller?.businessName || seller?.sellerInfo?.businessName || "Seller";
   const displayName = seller?.name || businessName;
+
+  /**
+   * THE LINE UNDER THE NAME IS THE WAREHOUSE, not the seller.
+   *
+   * A warehouse manager is standing in ONE warehouse and needs to see which —
+   * it is the thing that changes what they are looking at, and every screen
+   * they open is scoped to it. The seller/business name is the same on every
+   * login and told them nothing.
+   *
+   * Names come from the seller /me payload, resolved server-side from the
+   * member's assigned warehouse ids. Falls back to the business name for anyone
+   * with NO warehouse assignment — a seller_admin is not in a warehouse, so the
+   * account name is the honest label there and their header is unchanged.
+   */
+  const warehouses = seller?.warehouses || [];
+  const warehouseLabel = warehouses.length === 1
+    ? warehouses[0].name
+    : warehouses.length > 1
+      // Several assignments: name them, and let TopNav truncate if it must.
+      ? warehouses.map((w) => w.name).filter(Boolean).join(" · ")
+      : null;
   const showAccount = seller?.isMember && businessName && businessName !== displayName;
+  const secondaryLabel = warehouseLabel || (showAccount ? businessName : undefined);
   const approved = seller?.linkStatus === "approved";
 
   // Gate a MODULE (approval + plan + cap), returning a sidebar entry or null.
@@ -158,15 +183,33 @@ const SellerLayout = () => {
     if (e.lockReason === "plan" && canBill) navigate("/seller/billing");
   };
 
+  /**
+   * SETTINGS IS FOR THE WAREHOUSE SIDE ONLY.
+   *
+   * A seller WAREHOUSE MANAGER is a `User` with their own password, so changing
+   * or resetting it is a real need. A seller_admin signs in as the seller
+   * ACCOUNT itself — its token's `id` is the Seller record, not a User — so
+   * /api/users/change-password would not find an account for them and the page
+   * would be a dead end. The entry is therefore gated to the warehouse role
+   * rather than shown to everyone, which is also exactly the brief: add it to
+   * the Seller Warehouse, not to the ordinary seller side.
+   *
+   * The same rule that already decides a warehouse-scoped view elsewhere in the
+   * portal — anyone who is not seller_admin and is a member.
+   */
+  const isWarehouseSide = role !== "seller_admin" && !!seller?.isMember;
+
   // Mirror the company dropdown: Profile + Administration (when the role can see
   // ≥1 admin section) + Logout. Administration deep-links to the existing seller
-  // admin hub.
+  // admin hub. Settings is appended for the warehouse side; the three existing
+  // entries are untouched and keep their order.
   const profile = {
     name: displayName,
-    secondary: showAccount ? businessName : undefined,
+    secondary: secondaryLabel,
     menuItems: [
       { icon: "person", label: "Profile", onClick: () => navigate("/seller/profile") },
       ...(adminVisible ? [{ icon: "apps", label: "Administration", onClick: () => navigate(SELLER_ADMIN_NAV.path) }] : []),
+      ...(isWarehouseSide ? [{ icon: "settings", label: "Settings", onClick: () => navigate("/seller/settings") }] : []),
       { divider: true },
       { icon: "logout", label: "Logout", danger: true, onClick: logout },
     ],

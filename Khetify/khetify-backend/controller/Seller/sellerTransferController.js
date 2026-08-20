@@ -3,6 +3,8 @@ const lotService = require("../../services/lotService");
 const Warehouse = require("../../model/Warehouse/Warehouse");
 const { warehouseScope, inScope } = require("../../services/warehouseScope");
 const { notify } = require("../../services/notificationService");
+const fileService = require("../../services/fileService");
+const shipmentService = require("../../services/shipmentService");
 
 const fail = (res, err) => res.status(err.status || 500).json({ success: false, message: err.message || "Server error", ...(err.data ? { data: err.data } : {}) });
 
@@ -65,7 +67,17 @@ exports.listTransfers = async (req, res) => {
   try {
     const scope = await warehouseScope(req.user);
     const rows = await sellerTransferService.listRequests(req.user.sellerId, scope, req.query.status);
-    res.json({ success: true, count: rows.length, data: rows });
+    // ADDITIVE: `transferRef` — the SH-… of the linked shipment, the SAME value
+    // the Transfers table shows. `shipmentService.shipmentRef` is the one
+    // definition of that string, so the two lists can never drift apart. Null
+    // until a shipment exists, which the UI reads as "Not created". Every
+    // existing field is passed through untouched, including the populated
+    // `shipmentId` the UI already uses as a truthy "shipment created" flag.
+    const data = rows.map((r) => {
+      const row = typeof r.toObject === "function" ? r.toObject() : r;
+      return { ...row, transferRef: shipmentService.shipmentRef(row.shipmentId) };
+    });
+    res.json({ success: true, count: data.length, data });
   } catch (err) { fail(res, err); }
 };
 
@@ -100,6 +112,85 @@ exports.createTransfer = async (req, res) => {
       success: true,
       message: mode === "pull" ? "Request sent — the holding warehouse can accept it" : "Transfer requested — accept it to create the shipment",
       data: doc,
+    });
+  } catch (err) { fail(res, err); }
+};
+
+/**
+ * STORE THE UPLOADED DELIVERY CHALLAN and return the descriptor the shipment
+ * persists — `{ key, name, mime, size }`.
+ *
+ * THE FILENAME IS NOT THE DOCUMENT. Only the storage KEY is persisted, never a
+ * guessed public URL and never the bare name: the reachable link is resolved
+ * from that key on every read (shipmentService.challanUrl → fileService.signedUrl),
+ * which is what keeps a private S3 bucket working and what makes the document
+ * still openable months later. This is the SAME mechanism the company warehouse
+ * transfer uses (controller/Transport/tmsController.createShipment) and the same
+ * storage service every other upload in the project goes through, so an image
+ * and a PDF are both stored and served identically.
+ *
+ * The key is namespaced by seller so one seller's paperwork can never collide
+ * with another's, and the original filename is sanitised because it becomes part
+ * of that key.
+ */
+async function storeChallan(req) {
+  const f = req.file;
+  if (!f) return undefined;
+  const safe = String(f.originalname || "challan").replace(/[^\w.-]+/g, "_").slice(-80);
+  const key = `seller-transfers/${req.user.sellerId}/${Date.now()}-${safe}`;
+  await fileService.uploadBuffer(f.buffer, key, f.mimetype);
+  return { key, name: f.originalname, mime: f.mimetype, size: f.size };
+}
+
+/**
+ * POST /api/seller/transfers/direct — DIRECT transfer, no prior request.
+ *
+ * Body: { fromWarehouseId, toWarehouseId, items: [{ productId, qty }], note }.
+ * Raises a planned Shipment immediately. From there it is the SAME pipeline a
+ * requested transfer uses: Send Stock → scan → dispatch → scan-receive at the
+ * destination, which is what actually moves the stock.
+ */
+exports.directTransfer = async (req, res) => {
+  try {
+    const scope = await warehouseScope(req.user);
+
+    // MULTIPART OR JSON, both accepted. A multipart body carries every field as
+    // a STRING, so `items` arrives as JSON text rather than an array; a plain
+    // JSON caller still sends a real array. Parsing here rather than in the
+    // service keeps the service's contract (an array of { productId, qty })
+    // unchanged for every other caller.
+    let items = req.body.items;
+    if (typeof items === "string") {
+      try { items = JSON.parse(items); }
+      catch { return res.status(400).json({ success: false, message: "items must be a valid list of products" }); }
+    }
+
+    const challanDocument = await storeChallan(req);
+
+    const { shipment, fromName, toName, lineCount } = await sellerTransferService.createDirectTransfer({
+      sellerId: req.user.sellerId,
+      fromWarehouseId: req.body.fromWarehouseId,
+      toWarehouseId: req.body.toWarehouseId,
+      items,
+      note: req.body.note,
+      // The challan number as printed on the document, and the stored document
+      // itself. Both optional and both additive — a transfer raised without
+      // them behaves exactly as it did.
+      challanNumber: req.body.challanNumber,
+      challanDocument,
+      performedBy: req.user.id,
+      scope,
+    });
+    await notify({
+      recipientType: "seller", recipientId: req.user.sellerId, type: "shipment",
+      title: "Stock transfer created",
+      body: `Transfer from ${fromName} → ${toName} is ready to pick and dispatch.`,
+      payload: { shipmentId: shipment._id, kind: "transfer_direct" },
+    }).catch(() => {});
+    res.status(201).json({
+      success: true,
+      message: `Transfer created with ${lineCount} lot(s). Process it from Send Stock.`,
+      data: shipment,
     });
   } catch (err) { fail(res, err); }
 };

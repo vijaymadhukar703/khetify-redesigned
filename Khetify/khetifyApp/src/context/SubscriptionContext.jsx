@@ -70,4 +70,5 @@ export const FEATURES = {
   API_ACCESS: "api_access",
   UNIT_LABELS: "unit_labels",
   INVENTORY_VIEW: "inventory_view",
+  ADMINISTRATION: "administration",
 };

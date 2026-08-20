@@ -23,6 +23,14 @@ const ScanBox = ({ onScan, onValueChange, placeholder = 'Scan or type a code, th
     if (autoFocus && ref.current) ref.current.focus();
   }, [autoFocus]);
 
+  // Disabling an input BLURS it, so a caller that disables the box while it
+  // resolves a scan (`disabled={busy}`) would leave the operator having to click
+  // back in for every single item. Re-arm as soon as it is enabled again, so a
+  // continuous scan run never needs the mouse.
+  useEffect(() => {
+    if (!disabled && autoFocus && !showCamera) ref.current?.focus();
+  }, [disabled, autoFocus, showCamera]);
+
   const submit = (code) => {
     const c = String(code || '').trim();
     if (!c) return;

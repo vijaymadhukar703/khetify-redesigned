@@ -19,6 +19,7 @@ const mongoose = require("mongoose");
 
 const Company = require("../model/Company/Company");
 const Product = require("../model/Company/productModel");
+const { generateUniqueProductCode } = require("../services/productCodeService");
 
 // 5 realistic agri-input products for Khetify.
 const PRODUCTS = [
@@ -173,6 +174,10 @@ async function main() {
             productStatus: "active",
             productUpload: "uploaded",
           },
+          // An upsert bypasses document middleware, so the schema hook can't
+          // assign the code — do it here. $setOnInsert leaves an already-seeded
+          // product's existing code alone.
+          $setOnInsert: { product_code: await generateUniqueProductCode(p.productName) },
         },
         { upsert: true }
       );

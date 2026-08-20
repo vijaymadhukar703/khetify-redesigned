@@ -14,6 +14,13 @@ const POPULATE = [
   { path: "productId", select: "productName skuNumber" },
   { path: "fromWarehouseId", select: "name code" },
   { path: "toWarehouseId", select: "name code" },
+  // WHO asked and WHO decided — the Requests table names them ("Accepted by
+  // …"), and without these the row could only say that a decision happened.
+  // Read-only projection: no filter, no rule and no write depends on them.
+  { path: "requestedBy", select: "name" },
+  { path: "decidedBy", select: "name" },
+  // Only for its reference — `lrNumber` is what shipmentRef() falls back from.
+  { path: "shipmentId", select: "lrNumber" },
 ];
 const ownerFilter = (sellerId) => ({ ownerType: "seller", ownerId: sellerId });
 
@@ -98,11 +105,18 @@ async function loadPending(sellerId, id, scope) {
  * enough, FEFO-pick the lots and create a PLANNED Shipment A→B (owner-aware),
  * link it on the request.
  */
-async function acceptRequest({ sellerId, id, performedBy, note, scope }) {
-  const doc = await loadPending(sellerId, id, scope);
-
+/**
+ * FEFO pick plan for one product out of one warehouse.
+ *
+ * Lifted OUT of acceptRequest so the request-driven transfer and the DIRECT
+ * transfer draw their lots by exactly the same rule — earliest expiry first,
+ * skipping lots with no batch, refusing outright when the warehouse is short.
+ * acceptRequest's behaviour is unchanged; it now calls this instead of holding
+ * its own copy.
+ */
+async function planTransferLines({ sellerId, warehouseId, productId, qty }) {
   const lots = await Inventory.find({
-    ...ownerFilter(sellerId), warehouseId: doc.fromWarehouseId, productId: doc.productId,
+    ...ownerFilter(sellerId), warehouseId, productId,
     batchNumber: { $ne: null }, availableStock: { $gt: 0 },
   }).select("availableStock expiryDate lotNumber");
   lots.sort((a, b) => {
@@ -112,20 +126,28 @@ async function acceptRequest({ sellerId, id, performedBy, note, scope }) {
     return a.expiryDate - b.expiryDate;
   });
   const available = lots.reduce((s, l) => s + l.availableStock, 0);
-  if (available < doc.qty) {
-    const err = httpErr(409, `Stock not available — only ${available} of ${doc.qty} unit(s) in the source warehouse. Restock and accept later, or reject.`);
-    err.data = { available, requested: doc.qty };
+  if (available < qty) {
+    const err = httpErr(409, `Stock not available — only ${available} of ${qty} unit(s) in the source warehouse.`);
+    err.data = { available, requested: qty };
     throw err;
   }
-
   const lines = [];
-  let remaining = doc.qty;
+  let remaining = qty;
   for (const lot of lots) {
     if (remaining <= 0) break;
     const take = Math.min(lot.availableStock, remaining);
     lines.push({ inventoryId: lot._id, qty: take });
     remaining -= take;
   }
+  return lines;
+}
+
+async function acceptRequest({ sellerId, id, performedBy, note, scope }) {
+  const doc = await loadPending(sellerId, id, scope);
+
+  const lines = await planTransferLines({
+    sellerId, warehouseId: doc.fromWarehouseId, productId: doc.productId, qty: doc.qty,
+  });
 
   const toWh = await Warehouse.findOne({ _id: doc.toWarehouseId, sellerId }).select("name");
   const shipment = await shipmentService.createShipment(
@@ -156,4 +178,86 @@ async function rejectRequest({ sellerId, id, note, performedBy, scope }) {
   return TransferRequest.findById(doc._id).populate(POPULATE);
 }
 
-module.exports = { listRequests, createRequest, acceptRequest, rejectRequest };
+/**
+ * DIRECT TRANSFER — no prior request.
+ *
+ * The seller mirror of the company's direct warehouse→warehouse transfer
+ * (POST /api/tms/shipments with refType "Transfer" + toType "warehouse"): the
+ * holding warehouse simply decides to send stock, and a planned Shipment is
+ * raised straight away with no TransferRequest in between.
+ *
+ * Everything downstream is IDENTICAL to the requested path — the same
+ * shipmentService.createShipment, the same Send Stock pick/scan/dispatch, the
+ * same scan-receive at the destination. The ONLY difference is `refType`:
+ * "Transfer" here versus "TransferRequest" there, which is exactly how the
+ * company side distinguishes them too. So this adds an entry point, not a
+ * second transfer mechanism.
+ *
+ * `items` is [{ productId, qty }] so one direct transfer can carry several
+ * products, each FEFO-picked out of the source warehouse.
+ */
+async function createDirectTransfer({ sellerId, fromWarehouseId, toWarehouseId, items, note, performedBy, scope, challanNumber, challanDocument }) {
+  if (!fromWarehouseId || !toWarehouseId) throw httpErr(400, "Source and destination warehouses are required");
+  if (String(fromWarehouseId) === String(toWarehouseId)) {
+    throw httpErr(400, "Source and destination must be different warehouses");
+  }
+  const rows = (Array.isArray(items) ? items : [])
+    .map((i) => ({ productId: i?.productId, qty: Number(i?.qty) }))
+    .filter((i) => i.productId && Number.isFinite(i.qty) && i.qty > 0);
+  if (!rows.length) throw httpErr(400, "Add at least one product and quantity");
+
+  // Both warehouses must belong to THIS seller.
+  const [from, to] = await Promise.all([
+    Warehouse.findOne({ _id: fromWarehouseId, sellerId }).select("name"),
+    Warehouse.findOne({ _id: toWarehouseId, sellerId }).select("name"),
+  ]);
+  if (!from) throw httpErr(404, "Source warehouse not found");
+  if (!to) throw httpErr(404, "Destination warehouse not found");
+
+  // A warehouse-scoped manager may only send FROM a warehouse they run. The
+  // destination is deliberately unrestricted — you may send to any of the
+  // seller's warehouses, the same rule the request flow already uses.
+  if (scope && !scope.some((w) => String(w) === String(fromWarehouseId))) {
+    throw httpErr(403, "That warehouse isn't assigned to you");
+  }
+
+  // FEFO per product, so a shortfall is refused BEFORE any shipment exists.
+  const lines = [];
+  for (const r of rows) {
+    const picked = await planTransferLines({
+      sellerId, warehouseId: fromWarehouseId, productId: r.productId, qty: r.qty,
+    });
+    lines.push(...picked);
+  }
+
+  const shipment = await shipmentService.createShipment(
+    { ownerType: "seller", ownerId: sellerId },
+    {
+      // "Transfer" (not "TransferRequest") — there is no request behind it.
+      refType: "Transfer", refId: null,
+      fromWarehouseId, toType: "warehouse", toWarehouseId,
+      toOwnerType: "seller", toOwnerId: sellerId,
+      toLabel: `${to.name || "Warehouse"} (transfer)`,
+      lines, note, performedBy,
+      // THE DELIVERY CHALLAN, handed straight to the EXISTING shipment fields.
+      //
+      // Shipment already carries `deliveryChallanNumber` and a `challanDocument`
+      // { key, name, mime, size } sub-document, and createShipment already
+      // persists both — they were added for the company warehouse transfer and
+      // are owner-agnostic. So this needs no new model field, no new collection
+      // and no change to shipmentService: a seller transfer simply starts
+      // populating the same two fields, and every read path that already
+      // resolves them (listShipments → challanDocumentUrl) works for the seller
+      // rows the moment they are set.
+      //
+      // `challanDocument` is passed through only when a file was actually
+      // uploaded — createShipment spreads it conditionally on `.key`, so an
+      // undefined value leaves the field unset exactly as before.
+      deliveryChallanNumber: String(challanNumber || "").trim() || undefined,
+      challanDocument,
+    }
+  );
+  return { shipment, fromName: from.name, toName: to.name, lineCount: lines.length };
+}
+
+module.exports = { listRequests, createRequest, acceptRequest, rejectRequest, createDirectTransfer, planTransferLines };

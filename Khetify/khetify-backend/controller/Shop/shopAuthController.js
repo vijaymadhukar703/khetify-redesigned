@@ -18,6 +18,33 @@ exports.login = async (req, res) => {
   }
 };
 
+/**
+ * 👤 PROFILE — PATCH /api/shop/auth/me  { name?, phone? }
+ * Returns the updated consumer in the SAME shape as GET /auth/me, so the
+ * frontend can drop it straight into ShopAuthContext.
+ */
+exports.updateMe = async (req, res) => {
+  try {
+    const consumer = await authService.updateProfile(req.consumer.id, req.body);
+    res.json({ success: true, message: "Profile updated", data: consumer });
+  } catch (err) {
+    res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
+  }
+};
+
+/**
+ * 👤 PROFILE — POST /api/shop/auth/change-password
+ *   { currentPassword, newPassword }
+ */
+exports.changePassword = async (req, res) => {
+  try {
+    const result = await authService.changePassword(req.consumer.id, req.body);
+    res.json({ success: true, message: "Password updated", data: result.consumer });
+  } catch (err) {
+    res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
+  }
+};
+
 exports.verifyOtp = async (req, res) => {
   try {
     const result = await authService.verifyEmailOtp(req.consumer.id, req.body.code);

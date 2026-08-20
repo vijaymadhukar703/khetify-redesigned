@@ -11,15 +11,21 @@ const grnService = require("../services/grnService");
 const putawayService = require("../services/putawayService");
 const locationService = require("../services/locationService");
 
-let companyId, warehouseId, productId;
+let companyId, warehouseId, productId, productCode;
 
 beforeEach(async () => {
-  const company = await Company.create({ fullName: "Test Co", email: `t-${new mongoose.Types.ObjectId()}@x.com`, password: "x" });
+  const company = await Company.create({
+    fullName: "Test Co",
+    email: `t-${new mongoose.Types.ObjectId()}@x.com`,
+    password: "x",
+    companyInfo: { companyName: "Test Agri" },
+  });
   companyId = company._id;
   const wh = await Warehouse.create({ companyId, name: "Main", code: "WH1" });
   warehouseId = wh._id;
   const p = await Product.create({ companyId, productName: "Urea", skuNumber: "FERT-UREA-01", category: "Fertilizers" });
   productId = p._id;
+  productCode = p.product_code;
 });
 
 async function makeReceivedGRN(lines) {
@@ -73,14 +79,30 @@ describe("postGRN() stock math", () => {
 
   test("auto-generates a Khetify lot code when the line has no batch number", async () => {
     const now = new Date();
-    const period = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, "0");
+    const day = String(now.getDate()).padStart(2, "0");
     const grn = await grnService.createGRN(companyId, { warehouseId, lines: [{ productId, expectedQty: 10 }] });
     await grnService.receiveGRN(companyId, grn._id, { lines: [{ productId, receivedQty: 10 }] });
     await grnService.postGRN(companyId, grn._id, {});
 
     const inv = await Inventory.findOne({ ownerId: companyId, productId });
-    expect(inv.batchNumber).toBe(`KH-WH1-${period}-0001`);
+    // The generated date now carries the day. A GRN asks for a code without
+    // stating a box count or a quantity, so neither range appears.
+    expect(inv.batchNumber).toBe(`KH-TES-${productCode}-${year}-${month}-${day}-0001`);
     expect(inv.lotNumber).toBe(inv.batchNumber);
+  });
+
+  test("falls back to the legacy lot code when the Khetify number can't be built", async () => {
+    // A GRN posting must never fail just because the company name (or the
+    // product's product_code) is missing — it degrades to LOT-<sku>-<yymmdd>-<seq>.
+    await Company.updateOne({ _id: companyId }, { $unset: { "companyInfo.companyName": "" } });
+    const grn = await grnService.createGRN(companyId, { warehouseId, lines: [{ productId, expectedQty: 10 }] });
+    await grnService.receiveGRN(companyId, grn._id, { lines: [{ productId, receivedQty: 10 }] });
+    await grnService.postGRN(companyId, grn._id, {});
+
+    const inv = await Inventory.findOne({ ownerId: companyId, productId });
+    expect(inv.batchNumber).toMatch(/^LOT-FERT-UREA-01-\d{6}-\d{3}$/);
   });
 
   test("a received line's manufacturing date survives onto the posted lot", async () => {

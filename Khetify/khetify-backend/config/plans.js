@@ -18,6 +18,10 @@ const FEATURES = {
   API_ACCESS: "api_access",
   UNIT_LABELS: "unit_labels",
   INVENTORY_VIEW: "inventory_view",
+  // The Administration hub (Sellers, Team & Roles, Returns, …). Paid-only:
+  // absent from `free` below, so requireFeature() locks it exactly the way
+  // ADVANCED_ANALYTICS locks Analytics.
+  ADMINISTRATION: "administration",
 };
 
 const ALL_FEATURES = Object.values(FEATURES);
@@ -44,6 +48,7 @@ const PLANS = {
       FEATURES.BATCH_EXPIRY,
       FEATURES.ADVANCED_ANALYTICS,
       FEATURES.REALTIME_SYNC,
+      FEATURES.ADMINISTRATION,
     ],
     limits: { warehouses: 5, products: 5000, sellers: 100 },
   },

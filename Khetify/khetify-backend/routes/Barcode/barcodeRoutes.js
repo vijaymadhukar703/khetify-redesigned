@@ -9,6 +9,9 @@ const ctrl = require("../../controller/Barcode/barcodeController");
 /* /api/units */
 const units = express.Router();
 units.get("/", auth, authorize("lot:read"), ctrl.list);
+// Unit-label count per lot (read-only roll-up) — registered before /:param-style
+// routes so it can never be swallowed by one.
+units.get("/counts", auth, authorize("lot:read"), ctrl.counts);
 units.get("/history/:serial", auth, authorize("lot:read"), ctrl.history);
 units.post("/generate", auth, authorize("lot:receive"), validate({ body: generateBody }), ctrl.generate);
 units.post("/print", auth, authorize("lot:read"), validate({ body: printBody }), ctrl.print);

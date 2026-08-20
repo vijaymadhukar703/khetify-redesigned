@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import { getSellerLink, getSellerProducts, getMyListings, publishListing, unpublishListing } from '../../lib/sellerApi';
@@ -10,6 +10,26 @@ import { getProductImage } from '../../lib/productImage';
 const getFullUnitName = (unit) => {
   const units = { Kilograms: 'Kilograms (kg)', Liters: 'Liters (L)', Pieces: 'Pieces (Pcs)', Grams: 'Grams (g)', Packets: 'Packets (Pkt)', Milliliters: 'Milliliters (ml)' };
   return units[unit] || unit || '—';
+};
+
+// Newest-first ordering key. The seller catalog endpoint returns an explicit
+// allow-list of fields that does NOT include createdAt, so we fall back to the
+// Mongo ObjectId: its leading 4 bytes are the creation timestamp and the trailing
+// counter breaks ties within the same second, making a plain descending compare
+// of the hex string equal to insertion order. createdAt is still preferred if the
+// payload ever starts carrying it.
+const recencyKey = (p) => {
+  const ts = p?.createdAt ? Date.parse(p.createdAt) : NaN;
+  if (!Number.isNaN(ts)) return { time: ts, id: String(p?._id || '') };
+  return { time: null, id: String(p?._id || '') };
+};
+
+const byNewestFirst = (a, b) => {
+  const ka = recencyKey(a);
+  const kb = recencyKey(b);
+  if (ka.time !== null && kb.time !== null && ka.time !== kb.time) return kb.time - ka.time;
+  if (ka.id === kb.id) return 0;
+  return ka.id < kb.id ? 1 : -1;
 };
 
 const SellerProductCatalog = () => {
@@ -83,6 +103,10 @@ const SellerProductCatalog = () => {
   useEffect(() => { loadLink(); }, [loadLink]);
   useEffect(() => { if (approved) fetchProducts(); }, [approved, fetchProducts]);
   useEffect(() => { if (approved) fetchListings(); }, [approved, fetchListings]);
+
+  // Display order only — the fetched `products` state is left untouched so search,
+  // category filtering and every existing handler keep working exactly as before.
+  const orderedProducts = useMemo(() => [...products].sort(byNewestFirst), [products]);
 
   const openPublish = (p) => {
     setPublishTarget(p);
@@ -194,7 +218,7 @@ const SellerProductCatalog = () => {
                 <tr className="bg-stone-50/50 border-b border-stone-200">
                   <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Product Details</th>
                   <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Category</th>
-                  <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">SKU Number</th>
+                  {/* <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">SKU Number</th> */}
                   <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">MRP (₹)</th>
                   <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Stock</th>
                   <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Marketplace</th>
@@ -202,7 +226,7 @@ const SellerProductCatalog = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-stone-100">
-                {!loading && products.map((p) => (
+                {!loading && orderedProducts.map((p) => (
                   <tr key={p._id} className="hover:bg-stone-50/30 transition-colors">
                     <td data-label="Product Details" className="px-6 py-4">
                       <div className="flex items-center gap-4">
@@ -220,7 +244,7 @@ const SellerProductCatalog = () => {
                       </div>
                     </td>
                     <td data-label="Category" className="px-6 py-4 text-xs text-stone-500 font-bold uppercase">{p.category}</td>
-                    <td data-label="SKU Number" className="px-6 py-4 text-[11px] font-bold font-mono text-stone-400 uppercase">{p.skuNumber || '---'}</td>
+                    {/* <td data-label="SKU Number" className="px-6 py-4 text-[11px] font-bold font-mono text-stone-400 uppercase">{p.skuNumber || '---'}</td> */}
                     <td data-label="MRP (₹)" className="px-6 py-4 text-sm text-stone-900 font-black">₹{p.mrp ?? '—'}</td>
                     <td data-label="Stock" className="px-6 py-4">
                       {(() => {
@@ -301,7 +325,7 @@ const SellerProductCatalog = () => {
                     </td>
                   </tr>
                 ))}
-                {!loading && products.length === 0 && (
+                {!loading && orderedProducts.length === 0 && (
                   <tr><td colSpan={7} className="px-6 py-12 text-center text-sm text-stone-400">No products available yet.</td></tr>
                 )}
                 {loading && (
@@ -354,7 +378,7 @@ const SellerProductCatalog = () => {
               </div>
               <Detail label="Price (MRP)" value={`₹${selected.mrp ?? '—'}`} accent />
               <Detail label="Category" value={(selected.category || '—').toUpperCase()} />
-              <Detail label="SKU Number" value={selected.skuNumber || '---'} mono />
+              {/* <Detail label="SKU Number" value={selected.skuNumber || '---'} mono /> */}
               <Detail label="HSN Code" value={selected.hsnCode || 'N/A'} />
               <Detail label="Brand" value={selected.brandName || 'N/A'} />
               <Detail label="Packaging" value={selected.packagingType || 'N/A'} />

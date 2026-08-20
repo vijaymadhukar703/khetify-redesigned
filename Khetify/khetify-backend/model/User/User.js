@@ -21,6 +21,12 @@ const userSchema = new mongoose.Schema(
     phone: { type: String },
     passwordHash: { type: String },
     pin: { type: String }, // bcrypt hash, driver mobile login
+    // PASSWORD RESET (email link flow). Mirrors model/Company/Company.js:
+    // stores a SHA-256 hash of the token that was emailed, never the raw
+    // token, plus its expiry. Additive — every existing document simply has
+    // these unset, which reads as 'no reset in progress'.
+    resetPasswordToken: { type: String, default: null },
+    resetPasswordExpires: { type: Date, default: null },
     role: {
       type: String,
       enum: ROLES,

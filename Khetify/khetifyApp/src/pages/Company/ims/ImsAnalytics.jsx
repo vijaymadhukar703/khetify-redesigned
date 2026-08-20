@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import { runReport, downloadReportCsv, getWarehouses } from '../../../lib/imsApi';
 import { PrimaryBtn, GhostBtn } from './ImsUi';
@@ -59,10 +60,26 @@ const ImsAnalytics = () => {
 
   // Table is `w-full`, so dropping SKU lets the remaining columns reflow across
   // the freed width — no placeholder cell is left behind.
+  // Underscore-prefixed keys are INTERNAL row metadata (the lot id behind a
+  // Stock on Hand line, used by the View action) and are never a column.
   const columns = useMemo(
-    () => (rows[0] ? Object.keys(rows[0]).filter((c) => !HIDDEN_COLS.includes(c)) : []),
+    () => (rows[0] ? Object.keys(rows[0]).filter((c) => !c.startsWith('_') && !HIDDEN_COLS.includes(c)) : []),
     [rows]
   );
+  // Actions column — every role that reaches this page. A row is openable only
+  // when it carries the lot it was derived from.
+  //
+  // The two audiences go to DIFFERENT View pages on purpose. The Main Company
+  // reads its stock as the original lot register; a warehouse reads the current
+  // state of its own row. Same three sections either way — see
+  // Components/ims/AnalyticsDetailsView — but the Company page is finalized and
+  // stays exactly as it is, so the warehouse gets its own route rather than a
+  // branch inside it.
+  const showActions = true;
+  const viewPathFor = (r) => (isMainCompany
+    ? `/analytics/product/${r._inventoryId}`
+    : `/warehouse/analytics/product/${r._inventoryId}`);
+  const colCount = columns.length + (showActions ? 1 : 0);
 
   // PAGINATION (Main Company only) — the report API returns a plain array with
   // no page/limit support, and the rows here are already the fully FILTERED set
@@ -82,7 +99,7 @@ const ImsAnalytics = () => {
 
   return (
     <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-white font-sora">
-      <div className="max-w-6xl mx-auto space-y-5">
+      <div className="max-w-6x3 mx-auto space-y-5">
         <div className="flex flex-wrap items-end gap-3">
           {/* Report picker removed — the page is fixed to Stock on Hand
               (REPORT_NAME) and auto-loads it on mount. */}
@@ -111,15 +128,31 @@ const ImsAnalytics = () => {
             <table className="w-full text-left border-collapse text-sm">
               <thead><tr className="bg-stone-50 border-b border-stone-200">
                 {columns.map((c) => <th key={c} className="px-4 py-3 text-[10px] font-bold uppercase tracking-wider text-stone-400 whitespace-nowrap">{COL_LABELS[c] || c}</th>)}
+                {showActions && <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-wider text-stone-400 whitespace-nowrap text-right">Actions</th>}
               </tr></thead>
               <tbody className="divide-y divide-stone-100">
                 {paged.map((r, i) => (
                   <tr key={i} className="hover:bg-stone-50/40">
                     {columns.map((c) => <td key={c} className="px-4 py-2.5 text-stone-700 whitespace-nowrap">{typeof r[c] === 'boolean' ? (r[c] ? 'Yes' : 'No') : String(r[c] ?? '')}</td>)}
+                    {showActions && (
+                      <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                        {r._inventoryId ? (
+                          <Link
+                            to={viewPathFor(r)}
+                            title="View product analytics details"
+                            className="inline-flex items-center gap-1 text-[11px] font-bold border border-stone-200 hover:border-[#EA2831] hover:text-[#EA2831] text-stone-600 rounded-lg px-2.5 py-1.5 transition-colors"
+                          >
+                            <span className="material-symbols-outlined text-[15px]">visibility</span> View
+                          </Link>
+                        ) : (
+                          <span className="text-[11px] text-stone-300">—</span>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))}
-                {!loading && rows.length === 0 && <tr><td colSpan={columns.length || 1} className="px-4 py-12 text-center text-stone-400">No data for this report / filter.</td></tr>}
-                {loading && <tr><td colSpan={columns.length || 1} className="px-4 py-12 text-center text-stone-400">Loading…</td></tr>}
+                {!loading && rows.length === 0 && <tr><td colSpan={colCount || 1} className="px-4 py-12 text-center text-stone-400">No data for this report / filter.</td></tr>}
+                {loading && <tr><td colSpan={colCount || 1} className="px-4 py-12 text-center text-stone-400">Loading…</td></tr>}
               </tbody>
             </table>
           </div>

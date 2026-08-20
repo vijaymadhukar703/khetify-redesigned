@@ -3,9 +3,9 @@ import { useSearchParams } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import {
   getSellerLink, getSellerProducts, getSellerWarehouses, getSellerCompanies,
-  createSellerSupplyOrder, getSellerSupplyOrders, receiveSellerSupply,
+  createSellerSupplyOrder, getSellerSupplyOrders, receiveSellerSupply, scanSellerReceiveBox,
 } from '../../lib/sellerApi';
-import { Modal, PrimaryBtn, GhostBtn } from '../Company/ims/ImsUi';
+import { Modal, PrimaryBtn, GhostBtn, NoWarehouseNotice } from '../Company/ims/ImsUi';
 import ScanBox from '../../Components/ims/ScanBox';
 
 const toast = (icon, title) => Swal.fire({ icon, title, toast: true, position: 'top-end', timer: 2200, showConfirmButton: false });
@@ -21,14 +21,53 @@ const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-di
 const SellerReceiveModal = ({ order, onClose, onDone }) => {
   const [qr, setQr] = useState(''); // EMPTY — operator scans/pastes the label code
   const [busy, setBusy] = useState(false);
+  // CARTON SCANS: each entry is one resolved label — a Shipment Box packed for
+  // this transfer, or an existing Bulk Packaging label. One scan stands for
+  // every unit inside it, so units are never scanned one by one.
+  const [cartons, setCartons] = useState([]);
+  const [coverage, setCoverage] = useState(null);
+  const [scanMsg, setScanMsg] = useState('');
+  const [scanErr, setScanErr] = useState('');
   const expectedPrefix = order.shipmentId?._id ? `${order.shipmentId._id}.` : '';
-  const scanned = !!qr.trim();
-  const looksRight = scanned && (!expectedPrefix || qr.trim().startsWith(expectedPrefix));
+  const manifestScanned = !!qr.trim() && (!expectedPrefix || qr.trim().startsWith(expectedPrefix));
+  const cartonsComplete = !!coverage?.complete;
+  const canReceive = manifestScanned || cartonsComplete;
+
+  // Every scan goes to the server: it decides WHAT the label is (manifest /
+  // shipment box / bulk package) by lookup and reports what it accounts for.
+  const handleScan = async (raw) => {
+    const code = String(raw || '').trim();
+    if (!code) return;
+    setScanErr(''); setScanMsg('');
+    setBusy(true);
+    try {
+      const r = await scanSellerReceiveBox(order._id, { code, scanned: cartons.map((c) => c.code) });
+      const hit = r.data;
+      if (hit.kind === 'manifest') {
+        setQr(hit.code);
+        setScanMsg('Shipment manifest verified — the whole consignment is covered.');
+        setCoverage(hit.coverage || null);
+        return;
+      }
+      if (cartons.some((c) => c.code === hit.code)) {
+        setScanErr(`${hit.code} has already been scanned.`);
+        return;
+      }
+      setCartons((prev) => [...prev, hit]);
+      setCoverage(hit.coverage || null);
+      setScanMsg(`${hit.label} — ${hit.totalUnits} unit(s) loaded`);
+    } catch (err) {
+      setScanErr(err?.response?.data?.message || 'That label could not be read.');
+    } finally { setBusy(false); }
+  };
 
   const run = async () => {
     setBusy(true);
     try {
-      const r = await receiveSellerSupply(order._id, { qr: qr.trim() });
+      const body = manifestScanned
+        ? { qr: qr.trim() }
+        : { boxCodes: cartons.map((c) => c.code) };
+      const r = await receiveSellerSupply(order._id, body);
       toast('success', r?.message || 'Received & verified');
       onDone();
     } catch (err) { apiError(err); } finally { setBusy(false); }
@@ -37,24 +76,60 @@ const SellerReceiveModal = ({ order, onClose, onDone }) => {
   return (
     <Modal title="Scan to receive" onClose={onClose}>
       <p className="text-xs text-stone-500 mb-3">
-        Scan the barcode/QR on the shipment label with your camera (tap the camera icon) or a
-        wedge scanner — or paste the code. The system verifies it before receiving.
+        Scan the shipment label with your camera (tap the camera icon) or a wedge scanner. You can scan the
+        single manifest label for the whole consignment, or scan each carton — a <b>Shipment Box</b> label or an
+        existing <b>Bulk Packaging</b> label — and everything inside it loads automatically.
       </p>
-      <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400 mb-1">Scan the shipping label</p>
-      <ScanBox
-        onScan={(code) => setQr(code)}          // wedge scanner / camera / Enter
-        onValueChange={(code) => setQr(code)}   // live typing or paste (no Enter needed)
-        placeholder="Scan or paste the manifest code"
-        autoFocus
-      />
-      {scanned && (
-        <p className={`mt-2 text-[11px] font-mono break-all ${looksRight ? 'text-green-600' : 'text-red-600'}`}>
-          {looksRight ? '✓' : '✕'} {qr.trim()}
+      <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400 mb-1">Scan a label</p>
+      <ScanBox onScan={handleScan} disabled={busy} placeholder="Scan the manifest or a box label" autoFocus />
+
+      {scanErr && (
+        <p className="mt-2 text-[11px] font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+          {scanErr}
         </p>
       )}
+      {!scanErr && scanMsg && (
+        <p className="mt-2 text-[11px] font-medium text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+          {scanMsg}
+        </p>
+      )}
+
+      {/* What each scanned carton brought with it. */}
+      {cartons.length > 0 && (
+        <div className="mt-3 border border-stone-200 rounded-xl divide-y divide-stone-100 max-h-64 overflow-y-auto">
+          {cartons.map((c) => (
+            <div key={c.code} className="px-3 py-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-bold text-stone-900">{c.label}</p>
+                <span className="text-[10px] font-bold text-stone-500 bg-stone-100 border border-stone-200 rounded-full px-2 py-0.5 shrink-0">
+                  {c.totalUnits} unit(s)
+                </span>
+              </div>
+              <p className="text-[10px] font-mono text-stone-400 break-all">{c.code}</p>
+              {(c.products || []).map((p, i) => (
+                <p key={i} className="text-[11px] text-stone-600">
+                  {p.productName || 'Item'} × {p.quantity}
+                  {p.lots?.length ? <span className="font-mono text-stone-400"> · {p.lots.join(', ')}</span> : null}
+                </p>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {coverage && !manifestScanned && (
+        <p className={`mt-3 text-[11px] font-bold ${cartonsComplete ? 'text-green-600' : 'text-stone-500'}`}>
+          {coverage.covered} of {coverage.total} unit(s) accounted for
+          {cartonsComplete ? ' — everything is here.' : ` · ${coverage.missing} still to scan`}
+        </p>
+      )}
+      {manifestScanned && (
+        <p className="mt-2 text-[11px] font-mono text-green-600 break-all">✓ {qr.trim()}</p>
+      )}
+
       <div className="mt-4 flex justify-end gap-2">
         <GhostBtn onClick={onClose}>Cancel</GhostBtn>
-        <PrimaryBtn disabled={!scanned || busy} onClick={run}>{busy ? 'Receiving…' : 'Verify & receive'}</PrimaryBtn>
+        <PrimaryBtn disabled={!canReceive || busy} onClick={run}>{busy ? 'Receiving…' : 'Verify & receive'}</PrimaryBtn>
       </div>
     </Modal>
   );
@@ -79,6 +154,10 @@ const SellerSupply = () => {
   const [companyId, setCompanyId] = useState(''); // chosen supplying company
   const [products, setProducts] = useState([]);
   const [warehouses, setWarehouses] = useState([]);
+  // Mirrors the `checked` guard in the company hook (hooks/useHasWarehouse.js):
+  // the gate below must only fire once the lookup has ACTUALLY run, never
+  // while `warehouses` is still its initial empty array.
+  const [warehousesChecked, setWarehousesChecked] = useState(false);
   const [orders, setOrders] = useState([]);
 
   const [warehouseId, setWarehouseId] = useState('');
@@ -106,7 +185,12 @@ const SellerSupply = () => {
           setCompanies(list);
           if (list.length) setCompanyId((cur) => cur || String(list[0]._id)); // default to the first approved
         }).catch(() => {});
-        getSellerWarehouses().then((w) => { if (w?.success) setWarehouses(w.data || []); }).catch(() => {});
+        // Reuses the page's EXISTING warehouse fetch — no second request just
+        // for the gate. Fails OPEN (checked stays false) so a network blip can
+        // never lock a seller out; the backend rejects the create regardless.
+        getSellerWarehouses()
+          .then((w) => { if (w?.success) { setWarehouses(w.data || []); setWarehousesChecked(true); } })
+          .catch(() => {});
         refreshOrders();
       })
       .catch(() => setApproved(false));
@@ -135,6 +219,11 @@ const SellerSupply = () => {
   const setLine = (i, k, v) => setLines((ls) => ls.map((l, idx) => (idx === i ? { ...l, [k]: v } : l)));
   const addLine = () => setLines((ls) => [...ls, { productId: '', quantity: '' }]);
   const removeLine = (i) => setLines((ls) => ls.filter((_, idx) => idx !== i));
+
+  // A supply request must land in a warehouse, so creation stays locked until
+  // the seller owns one. Backend enforces the same rule authoritatively
+  // (middlewares/requireWarehouseExists.js) — this is UX, never the guarantee.
+  const supplyBlocked = warehousesChecked && warehouses.length === 0;
 
   const valid = useMemo(() => {
     if (!companyId || !warehouseId) return false;
@@ -176,7 +265,15 @@ const SellerSupply = () => {
           <p className="text-sm text-stone-500">Order stock from <b className="text-stone-700">{companyName || 'one of your approved companies'}</b> into one of your warehouses.</p>
         </div>
 
-        {/* Request form */}
+        {/* Request form — replaced by the shared warehouse gate when the seller
+            has none. Past requests below stay visible either way. */}
+        {supplyBlocked ? (
+          <NoWarehouseNotice
+            to="/seller/warehouses?new=1"
+            title="No warehouse set up yet"
+            body="Please create a Warehouse first before creating an Inbound Supply Request. Every request needs a destination warehouse, so supply opens up as soon as your first warehouse is added."
+          />
+        ) : (
         <div className="bg-white border border-stone-200 rounded-2xl p-6 shadow-sm space-y-4">
           <div>
             <label className="block text-xs font-bold text-stone-600 mb-1">Supplying company</label>
@@ -223,6 +320,7 @@ const SellerSupply = () => {
             {busy ? 'Sending…' : 'Send supply request'}
           </button>
         </div>
+        )}
 
         {/* My supply orders */}
         <div>

@@ -5,6 +5,8 @@ import { WAREHOUSE_ROLES } from '../../../lib/roles';
 import CompanyInventory from '../CompanyInventory';
 import ImsLots from './ImsLots';
 import ImsLotDashboard from './ImsLotDashboard';
+import { NoWarehouseNotice } from './ImsUi';
+import useHasWarehouse from '../../../hooks/useHasWarehouse';
 
 // INVENTORY TRACKING — one module merging Stock Overview, Lot Management, and
 // Batch Management. It renders a role-appropriate view of the SAME shared
@@ -38,6 +40,9 @@ const TABS = [
 const InventoryTracking = () => {
   const { role } = usePermission();
   const [params, setParams] = useSearchParams();
+  // Inventory gate: the main Company cannot work with lots until it owns at
+  // least one warehouse. Hook order is fixed (called before any early return).
+  const { checked: whChecked, hasWarehouse } = useHasWarehouse();
 
   const isMainCompany = role === 'company_admin';
   const isWarehouse = WAREHOUSE_ROLES.has(role);
@@ -59,13 +64,24 @@ const InventoryTracking = () => {
         {/* Main Company reads its Inventory as the ORIGINAL LOT REGISTER: the
             lots it minted, at their created quantity. The Company Warehouse keeps
             the live-stock view — same component, flag off. */}
-        <ImsLots
-          showSummary showStockStatus paginate showBatchNo fluid requireWarehouse
-          hideReceive={isMainCompany}
-          hideCreate={isWarehouse}
-          receiveTransfer={isWarehouse}
-          originalRegister={isMainCompany}
-        />
+        {/* No warehouse yet → Lot creation is unavailable. Only the main Company
+            is gated: a Company Warehouse user is, by definition, attached to one,
+            and the check runs on the company-wide directory. If the lookup could
+            not complete (whChecked false) the page renders normally and the
+            backend rejects any lot creation. */}
+        {isMainCompany && whChecked && !hasWarehouse ? (
+          <div className="py-6">
+            <NoWarehouseNotice />
+          </div>
+        ) : (
+          <ImsLots
+            showSummary showStockStatus paginate showBatchNo fluid requireWarehouse
+            hideReceive={isMainCompany}
+            hideCreate={isWarehouse}
+            receiveTransfer={isWarehouse}
+            originalRegister={isMainCompany}
+          />
+        )}
       </div>
     );
   }

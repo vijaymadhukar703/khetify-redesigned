@@ -6,6 +6,8 @@ const requireApprovedSeller = require("../../middlewares/requireApprovedSeller")
 const authorize = require("../../middlewares/authorize");
 const loadSubscription = require("../../middlewares/loadSubscription");
 const enforceLimit = require("../../middlewares/enforceLimit");
+const validate = require("../../middlewares/validate");
+const { createSellerWarehouseBody } = require("../../validators/sellerWarehouseValidators");
 const {
   getSellerWarehouses,
   getSellerWarehouseStockSummary,
@@ -26,7 +28,17 @@ router.get("/:id/stock-summary", getSellerWarehouseStockSummary); // aggregate f
 // Creating a warehouse is seller_admin-only (warehouse:create resolves only via
 // the admin "*"); editing/deactivating an existing one stays open to the
 // warehouse manager (warehouse:manage).
-router.post("/", authorize("warehouse:create"), loadSubscription, enforceLimit("warehouses"), createSellerWarehouse);
+router.post(
+  "/",
+  authorize("warehouse:create"),
+  loadSubscription,
+  enforceLimit("warehouses"),
+  // Warehouse + Warehouse Manager arrive together; the manager block is
+  // mandatory and its field rules are shared with the company flow via
+  // validators/userValidators.js. Mirrors routes/Warehouse/warehouseRoutes.js.
+  validate({ body: createSellerWarehouseBody }),
+  createSellerWarehouse
+);
 router.put("/:id", authorize("warehouse:manage"), updateSellerWarehouse);
 router.patch("/:id/deactivate", authorize("warehouse:manage"), deactivateSellerWarehouse);
 

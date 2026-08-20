@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { getOrderHistory, getWarehouses, formatINR } from '../../lib/imsApi';
 import { StatCard, inputCls } from './ims/ImsUi';
 import { movementKind } from '../../lib/movementLabel';
@@ -37,10 +38,20 @@ const KIND_STYLE = {
 // shipments (Sales) are excluded. Reuses the shared movementKind rule.
 const isTransfer = (r) => kindLabel(r) === 'Transfer';
 
+// A row that has its own read-only Transfer Details page: a WAREHOUSE→WAREHOUSE
+// SHIPMENT, whose `id` is the Shipment the detail endpoint is keyed by. The TR-*
+// request rows (kind "transfer") authorise a move but are not one, carry no
+// shipment id, and are excluded from this view server-side anyway.
+const isViewableTransfer = (r) => r.kind === 'shipment' && r.toType === 'warehouse';
+
 // Real transfer status values (TransferRequest: requested/accepted/rejected/
 // fulfilled/cancelled · Shipment transfer pipeline: …dispatched/in_transit/
 // arrived/received/delivered/cancelled). Mapped to summary buckets.
-const RECEIVED_STATUSES = new Set(['received', 'delivered', 'fulfilled', 'completed']);
+// `partially_received` belongs here: the goods HAVE been received, just short.
+// Leaving it out put a partially received transfer in the In Transit card and
+// hid it from the Received filter — the same grouping the API's statusBucket
+// uses, so the two must agree.
+const RECEIVED_STATUSES = new Set(['received', 'partially_received', 'delivered', 'fulfilled', 'completed']);
 const CLOSED_STATUSES = new Set(['cancelled', 'rejected', 'exception', 'returned']);
 // MAIN COMPANY status filter — two BUCKETS, not raw pipeline values.
 //
@@ -81,6 +92,12 @@ const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-di
 
 const PAGE_SIZE = 10; // Company Transfer History pagination
 
+// Company Transfer History applies its filters as they change — no Apply step.
+// Typing is the only one that needs holding back, so a search term costs one
+// request instead of one per keystroke; the selects and date pickers fire at
+// once. Order History (every other role) keeps its Apply Filters button.
+const SEARCH_DEBOUNCE_MS = 400;
+
 const OrderHistory = () => {
   const { role, loading: permLoading } = usePermission();
   const isMainCompany = role === 'company_admin';
@@ -96,10 +113,27 @@ const OrderHistory = () => {
   // narrows by status client-side against this (the backend doesn't status-filter
   // TransferRequests), so cards/table/pagination stay consistent.
   const [applied, setApplied] = useState({ status: '' });
+  // Set when From is later than To — the one filter combination that cannot be
+  // satisfied, so it is reported rather than silently returning nothing.
+  const [dateError, setDateError] = useState('');
+  // The search term the last request actually used — `filters.q` held back by
+  // SEARCH_DEBOUNCE_MS (Company view only).
+  const [debouncedQ, setDebouncedQ] = useState('');
+  // Bumped by Clear so it always reloads, even when every filter was already
+  // empty and none of the value-based dependencies below would have changed.
+  const [reloadKey, setReloadKey] = useState(0);
+
+  // Auto-applied filters fire a request per change, so two can be in flight at
+  // once. Only the LATEST is allowed to land — otherwise a slow early response
+  // (say the empty search) can overwrite the newer, narrower one and the table
+  // ends up showing results for a filter the user has already moved past.
+  const reqSeq = useRef(0);
 
   // Shared fetch: pulls the history for a filter set. Kept side-effect-light so
-  // it can run from the mount effect without synchronous setState.
+  // it can run from an effect without synchronous setState.
   const fetchHistory = (f) => {
+    const seq = ++reqSeq.current;
+    const isCurrent = () => seq === reqSeq.current;
     const params = Object.fromEntries(Object.entries(f).filter(([, v]) => v));
     // Transfer History lists actual stock movements (SH-*) only. The TR-*
     // request rows are the authorisation for a move, not a second move, and are
@@ -108,22 +142,38 @@ const OrderHistory = () => {
     // response still carries all three sources.
     if (isMainCompany) {
       params.excludeRequests = 1;
-      // The Company's two options are BUCKETS, resolved client-side against the
-      // full transfer set (see matchesStatusBucket). The API's ?status= is an
-      // exact match, so forwarding "in_transit" would drop every dispatched /
-      // arrived row that belongs in that bucket. Order History (other roles)
-      // still sends status and keeps its exact-match behaviour.
+      // Ask for warehouse→warehouse movements ONLY. Without this the API builds
+      // its union from seller orders + every shipment and then caps it, so a
+      // company with recent sales spent that cap on rows this page discards and
+      // the transfers the filters should have narrowed never arrived.
+      params.transfersOnly = 1;
+      // The Company's two options are BUCKETS ("In Transit" groups dispatched /
+      // arrived / …), not single statuses, so they go as ?statusBucket= — which
+      // the API resolves IN THE QUERY. ?status= stays an exact match for Order
+      // History (every other role), which is unaffected.
       delete params.status;
+      // Read the status off the SET BEING FETCHED, not off `filters` — during a
+      // Clear the state update has not flushed yet, so the closure still holds
+      // the outgoing value and the "reset" request would carry the old bucket.
+      if (f.status) params.statusBucket = f.status;
     }
     return getOrderHistory(params)
-      .then((r) => setRows(r?.data || []))
-      .catch(() => setRows([]))
-      .finally(() => setLoading(false));
+      .then((r) => { if (isCurrent()) setRows(r?.data || []); })
+      .catch(() => { if (isCurrent()) setRows([]); })
+      .finally(() => { if (isCurrent()) setLoading(false); });
   };
 
-  // Apply filters (button / Clear) — an event handler, so setting state here is
-  // fine. Captures the applied status, resets to page 1, then refetches.
+  // Apply filters — ORDER HISTORY ONLY (every non-company role keeps its button).
+  // An event handler, so setting state here is fine. Captures the applied
+  // status, resets to page 1, then refetches.
   const load = () => {
+    // A backwards range can only ever return nothing; say so instead of showing
+    // an empty table. Checked as plain YYYY-MM-DD strings, which sort correctly.
+    if (filters.from && filters.to && filters.from > filters.to) {
+      setDateError('From date cannot be later than To date.');
+      return;
+    }
+    setDateError('');
     setLoading(true);
     setApplied({ status: filters.status });
     setPage(1);
@@ -133,9 +183,40 @@ const OrderHistory = () => {
   // Wait for the role before the first load — `isMainCompany` decides whether
   // the request carries excludeRequests, and fetching while it is still false
   // would populate Transfer History with the TR-* rows this view excludes.
+  // The Company view loads through its own auto-apply effect below, so this
+  // covers Order History only and the two can never both fire.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (!permLoading) fetchHistory({}); }, [permLoading]);
+  useEffect(() => { if (!permLoading && !isMainCompany) fetchHistory({}); }, [permLoading, isMainCompany]);
   useEffect(() => { getWarehouses().then((r) => setWarehouses(r?.data || r || [])).catch(() => {}); }, []);
+
+  // ── COMPANY TRANSFER HISTORY — filters apply themselves ──────────────────
+  // Search is held for SEARCH_DEBOUNCE_MS so a typed term is one request, not
+  // one per keystroke. Everything else is a discrete pick and goes immediately.
+  useEffect(() => {
+    if (!isMainCompany) return undefined;
+    const t = setTimeout(() => setDebouncedQ(filters.q), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [filters.q, isMainCompany]);
+
+  // The single loader for this view: mount, every filter change, and Clear.
+  // Depending on the individual values (not the `filters` object) means it fires
+  // when a value really changed, not on every re-render that rebuilds the object.
+  const { status: fStatus, warehouseId: fWarehouse, from: fFrom, to: fTo } = filters;
+  useEffect(() => {
+    if (permLoading || !isMainCompany) return;
+    if (fFrom && fTo && fFrom > fTo) {
+      // Unsatisfiable: report it and leave the current results on screen rather
+      // than fetching a guaranteed-empty list.
+      setDateError('From date cannot be later than To date.');
+      return;
+    }
+    setDateError('');
+    setLoading(true);
+    setApplied({ status: fStatus });
+    setPage(1);
+    fetchHistory({ status: fStatus, warehouseId: fWarehouse, from: fFrom, to: fTo, q: debouncedQ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [permLoading, isMainCompany, fStatus, fWarehouse, fFrom, fTo, debouncedQ, reloadKey]);
 
   // Original totals (non-company roles) — every kind of record.
   const totals = useMemo(() => {
@@ -169,11 +250,25 @@ const OrderHistory = () => {
   const displayRows = isMainCompany ? pagedTransfers : rows;
 
   // Changing any filter/search resets pagination to page 1.
-  const set = (k) => (e) => { setFilters((f) => ({ ...f, [k]: e.target.value })); setPage(1); };
+  const set = (k) => (e) => {
+    setFilters((f) => ({ ...f, [k]: e.target.value }));
+    if (k === 'from' || k === 'to') setDateError('');
+    setPage(1);
+  };
   const clear = () => {
     setFilters({ type: '', status: '', warehouseId: '', from: '', to: '', q: '' });
     setApplied({ status: '' });
+    setDateError('');
     setPage(1);
+    if (isMainCompany) {
+      // Reset the debounced term straight away so the reload is immediate rather
+      // than trailing the search debounce, and bump reloadKey so the full list
+      // comes back even if no filter was set. The auto-apply effect does the
+      // fetch — these all batch into ONE run of it.
+      setDebouncedQ('');
+      setReloadKey((n) => n + 1);
+      return;
+    }
     setLoading(true);
     fetchHistory({});
   };
@@ -237,14 +332,24 @@ const OrderHistory = () => {
         <input type="date" className={inputCls} value={filters.to} onChange={set('to')} title="To" />
         <input className={inputCls} placeholder={isMainCompany ? 'Search ref / item / lot / warehouse…' : 'Search ref / party…'} value={filters.q} onChange={set('q')} />
       </div>
-      <div className="flex gap-2 mb-5">
-        <button onClick={load} className="inline-flex items-center gap-2 bg-[#EA2831] hover:bg-[#c91e26] text-white text-sm font-bold rounded-lg px-5 py-2.5 transition-colors">
-          <span className="material-symbols-outlined text-base">search</span> Apply filters
-        </button>
+      {dateError && (
+        <p className="text-xs font-semibold text-[#EA2831] mb-2" role="alert">{dateError}</p>
+      )}
+      <div className="flex items-center gap-2 mb-5">
+        {/* Apply filters — ORDER HISTORY ONLY. Transfer History applies each
+            change as it is made, so the button has nothing left to do there. */}
+        {!isMainCompany && (
+          <button onClick={load} className="inline-flex items-center gap-2 bg-[#EA2831] hover:bg-[#c91e26] text-white text-sm font-bold rounded-lg px-5 py-2.5 transition-colors">
+            <span className="material-symbols-outlined text-base">search</span> Apply filters
+          </button>
+        )}
         <button onClick={clear}
           className="inline-flex items-center gap-1.5 border border-stone-200 hover:bg-stone-50 text-stone-700 text-sm font-bold rounded-lg px-4 py-2.5 transition-colors">
           Clear
         </button>
+        {isMainCompany && loading && (
+          <span className="text-[11px] font-bold uppercase tracking-wider text-stone-400">Filtering…</span>
+        )}
       </div>
 
       {/* Record count (Company) — the list is never silently truncated */}
@@ -259,7 +364,7 @@ const OrderHistory = () => {
         <table className="w-full text-left border-collapse min-w-[980px] resp-table">
           <thead>
             <tr className="border-b border-stone-200">
-              {['Ref', 'Type', 'From', 'To', 'Item', 'Lot No.', 'Qty', 'Status', 'MRP', 'Date', ''].map((h, i) => (
+              {['Ref', 'Type', 'From', 'To', 'Item', 'Lot No.', 'Qty', 'Status', 'MRP', 'Date', isMainCompany ? 'Actions' : ''].map((h, i) => (
                 <th key={i} className="px-5 py-3.5 text-[10px] font-bold text-stone-400 uppercase tracking-widest">{h}</th>
               ))}
             </tr>
@@ -282,17 +387,33 @@ const OrderHistory = () => {
                   <td data-label="Status" className="px-5 py-3.5"><span className={`text-[11px] font-bold rounded-full px-2.5 py-1 capitalize ${STATUS_STYLE(r.status)}`}>{r.status}</span></td>
                   <td data-label="Value" className="px-5 py-3.5 text-sm font-semibold text-stone-800">{r.total ? formatINR(r.total) : '—'}</td>
                   <td data-label="Date" className="px-5 py-3.5 text-sm text-stone-500">{fmtDate(r.date)}</td>
-                  <td className="px-5 py-3.5 text-right cell-actions">
-                    <span className={`material-symbols-outlined text-stone-300 transition-transform ${expanded === r.id ? 'rotate-180' : ''}`}>expand_more</span>
+                  <td data-label="Actions" className="px-5 py-3.5 text-right cell-actions">
+                    <div className="inline-flex items-center gap-2">
+                      {/* VIEW — read-only Transfer Details. Only a warehouse→
+                          warehouse transfer has one; every other row keeps the
+                          expand-only behaviour it already had. stopPropagation
+                          so the click navigates instead of toggling the row. */}
+                      {isMainCompany && isViewableTransfer(r) && (
+                        <Link
+                          to={`/order-history/transfer/${r.id}`}
+                          onClick={(e) => e.stopPropagation()}
+                          title="View transfer details"
+                          className="inline-flex items-center gap-1 text-[11px] font-bold border border-stone-200 hover:border-[#EA2831] hover:text-[#EA2831] text-stone-600 rounded-lg px-2.5 py-1.5 transition-colors"
+                        >
+                          <span className="material-symbols-outlined text-[15px]">visibility</span> View
+                        </Link>
+                      )}
+                      {/* <span className={`material-symbols-outlined text-stone-300 transition-transform ${expanded === r.id ? 'rotate-180' : ''}`}>expand_more</span> */}
+                    </div>
                   </td>
                 </tr>
-                {expanded === r.id && (
+                {/* {expanded === r.id && (
                   <tr className="bg-stone-50/60">
                     <td colSpan={11} className="px-5 py-4">
                       <Timeline row={r} />
                     </td>
                   </tr>
-                )}
+                )} */}
               </React.Fragment>
             ))}
           </tbody>

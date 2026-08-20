@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
 import {
   getShopToken, setShopToken, clearShopToken,
-  shopLogin, shopRegister, shopMe,
+  shopLogin, shopRegister, shopMe, updateShopProfile,
 } from "../lib/shopApi";
 
 // Storefront consumer auth. Kept fully separate from the company/seller auth so
@@ -44,6 +44,16 @@ export function ShopAuthProvider({ children }) {
     return res;
   }, []);
 
+  // 👤 PROFILE: patch the shopper's own name / phone. The server returns the
+  //    full updated consumer, so we drop it straight into state — the header
+  //    greeting and account menu re-render with the new name instantly, with no
+  //    extra /auth/me round-trip.
+  const updateProfile = useCallback(async (patch) => {
+    const res = await updateShopProfile(patch);
+    setConsumer(res.data);
+    return res.data;
+  }, []);
+
   const logout = useCallback(() => {
     clearShopToken();
     setConsumer(null);
@@ -58,7 +68,7 @@ export function ShopAuthProvider({ children }) {
   }, []);
 
   return (
-    <ShopAuthContext.Provider value={{ consumer, loading, isAuthed: !!consumer, login, register, logout, refresh }}>
+    <ShopAuthContext.Provider value={{ consumer, loading, isAuthed: !!consumer, login, register, updateProfile, logout, refresh }}>
       {children}
     </ShopAuthContext.Provider>
   );

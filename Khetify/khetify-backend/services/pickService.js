@@ -6,6 +6,7 @@ const Location = require("../model/Warehouse/Location");
 const { nextSeq } = require("./counterService");
 const locationService = require("./locationService");
 const barcodeService = require("./barcodeService");
+const { validateConfirmPick } = require("./pickScanService");
 
 function httpErr(message, status = 400) {
   const err = new Error(message);
@@ -123,7 +124,7 @@ async function pickLine(companyId, pickListId, lineIndex, { binCode, serials, qt
  * in_stock → picked and are recorded on their allocation; pickedQty tracks
  * progress per line. Owned stock stays reserved until dispatch commits it.
  */
-async function pickOrderDirect(companyId, orderId, { picks, performedBy } = {}) {
+async function pickOrderDirect(companyId, orderId, { picks, performedBy, allowedWarehouseIds = null } = {}) {
   if (!Array.isArray(picks) || !picks.length) throw httpErr("picks are required");
   const order = await Order.findOne({ _id: orderId, companyId });
   if (!order) throw httpErr("Order not found", 404);
@@ -136,21 +137,34 @@ async function pickOrderDirect(companyId, orderId, { picks, performedBy } = {}) 
 
     let pickQty;
     if (Array.isArray(pick.serials) && pick.serials.length) {
-      const units = await UnitSerial.find({ companyId, serial: { $in: pick.serials } });
+      // SERVER-SIDE re-validation of the whole payload: duplicates, ownership,
+      // reserved-lot membership, warehouse and status, plus the quantity cap.
+      // The modal's counts are never trusted.
+      // Orders keep the STRICT reserved-lot rule: their FEFO allocations were
+      // reserved when the order was confirmed, so picking an unreserved lot
+      // would deduct stock nothing ever held. (Dynamic, pick-time allocation is
+      // a SUPPLY-request feature — see supplyController.pickSupplyOrder.)
+      const { serials } = await validateConfirmPick(companyId, {
+        serials: pick.serials,
+        allocByInv,
+        remainingRequired: Math.max(0, Number(item.qty || 0) - Number(item.pickedQty || 0)),
+        allowedWarehouseIds,
+      });
+      const units = await UnitSerial.find({ companyId, serial: { $in: serials } });
       const bySerial = new Map(units.map((u) => [u.serial, u]));
-      for (const s of pick.serials) {
-        const u = bySerial.get(s);
-        if (!u) throw httpErr(`Unknown serial ${s}`, 409);
-        if (!allocByInv.has(String(u.inventoryId))) throw httpErr(`Serial ${s} is not from this order's reserved lots`, 409);
-        if (u.status !== "in_stock") throw httpErr(`Serial ${s} is ${u.status}, cannot pick`, 409);
+
+      // transitionUnits is a compare-and-swap per unit, so a unit another picker
+      // took between the check above and here is REPORTED, never double-picked.
+      const { moved } = await barcodeService.transitionUnits(companyId, serials, { toStatus: "picked", event: "picked", refType: "Order", refId: order._id, actorId: performedBy });
+      if (moved.length !== serials.length) {
+        throw httpErr("Some units were picked by another user just now — rescan and try again", 409);
       }
-      await barcodeService.transitionUnits(companyId, pick.serials, { toStatus: "picked", event: "picked", refType: "Order", refId: order._id, actorId: performedBy });
-      for (const s of pick.serials) {
+      for (const s of serials) {
         const a = allocByInv.get(String(bySerial.get(s).inventoryId));
         a.serials = a.serials || [];
         if (!a.serials.includes(s)) a.serials.push(s);
       }
-      pickQty = pick.serials.length;
+      pickQty = serials.length;
     } else {
       pickQty = Number(pick.qty);
       if (!pickQty || pickQty <= 0) throw httpErr("Each pick needs serials or a positive qty");

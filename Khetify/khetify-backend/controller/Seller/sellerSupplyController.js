@@ -3,6 +3,8 @@ const Product = require("../../model/Company/productModel");
 const Warehouse = require("../../model/Warehouse/Warehouse");
 const pcService = require("../../services/pcService");
 const shipmentService = require("../../services/shipmentService");
+const shipmentBoxService = require("../../services/shipmentBoxService");
+const Shipment = require("../../model/Transport/Shipment");
 const { assertSellerWarehouse } = require("../../services/warehouseOwnershipService");
 const { notify } = require("../../services/notificationService");
 
@@ -104,20 +106,79 @@ exports.getSellerSupplyOrders = async (req, res) => {
  * dispatched supply into seller stock (reuses the company verifyReceipt rails,
  * owner-aware landing). Validates the seller owns the destination warehouse.
  */
+/**
+ * POST /api/seller/supply-orders/:id/scan-box
+ * { code }
+ *
+ * Resolve ONE label scanned while receiving, and report what it accounts for.
+ * READ-ONLY — nothing is received here.
+ *
+ * Three labels are understood, decided by lookup and not by the shape of the
+ * code: the shipment MANIFEST (the whole consignment, as before), a SHIPMENT
+ * BOX (the road carton packed for this transfer — one scan stands for every
+ * unit inside it), and an existing BULK PACKAGING label (unchanged; units that
+ * were already boxed by the manufacturer are received by their own label).
+ *
+ * `scanned` is whatever the screen has accumulated so far, so the response can
+ * report live coverage: how many of the shipment's units are now accounted for.
+ */
+exports.scanReceiveBox = async (req, res) => {
+  try {
+    const order = await SupplyOrder.findOne({ _id: req.params.id, sellerId: req.user.sellerId });
+    if (!order) return res.status(404).json({ success: false, message: "Supply order not found" });
+    if (!order.shipmentId) return res.status(409).json({ success: false, message: "This supply has no shipment to receive yet" });
+
+    const shipment = await Shipment.findOne({ _id: order.shipmentId, companyId: order.companyId });
+    if (!shipment) return res.status(404).json({ success: false, message: "Shipment not found" });
+
+    const hit = await shipmentBoxService.resolveReceiveScan(shipment, req.body?.code);
+    const scanned = Array.isArray(req.body?.scanned) ? req.body.scanned : [];
+    const coverage = await shipmentBoxService.coverageFor(shipment, [...scanned, hit.code]);
+
+    res.json({ success: true, data: { ...hit, coverage } });
+  } catch (err) {
+    res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
+  }
+};
+
 exports.receiveSupply = async (req, res) => {
   try {
     const order = await SupplyOrder.findOne({ _id: req.params.id, sellerId: req.user.sellerId });
     if (!order) return res.status(404).json({ success: false, message: "Supply order not found" });
     if (!order.shipmentId) return res.status(409).json({ success: false, message: "This supply has no shipment to receive yet" });
-    // Receive is SCAN-ONLY: the manifest QR is mandatory.
-    if (!req.body.qr) return res.status(400).json({ success: false, message: "Scan the manifest QR to receive this supply" });
+    // Receive is SCAN-ONLY. Two ways to prove the goods are physically here,
+    // and BOTH are a scan of a printed label:
+    //   1. the manifest QR — the original path, untouched
+    //   2. every carton on board — Shipment Box and/or Bulk Packaging labels,
+    //      which together must account for all of the shipment's units
+    // The coverage in (2) is recomputed here from the database; the screen's
+    // running total is a convenience, never the decision.
+    let qr = req.body.qr;
+    if (!qr) {
+      const boxCodes = Array.isArray(req.body.boxCodes) ? req.body.boxCodes : [];
+      if (!boxCodes.length) {
+        return res.status(400).json({ success: false, message: "Scan the manifest QR or the shipment box labels to receive this supply" });
+      }
+      const shipment = await Shipment.findOne({ _id: order.shipmentId, companyId: order.companyId });
+      if (!shipment) return res.status(404).json({ success: false, message: "Shipment not found" });
+
+      const coverage = await shipmentBoxService.coverageFor(shipment, boxCodes);
+      if (!coverage.complete) {
+        return res.status(409).json({
+          success: false,
+          message: `${coverage.missing} unit(s) on this shipment are not accounted for yet — scan the remaining box labels.`,
+        });
+      }
+      // Coverage proved; hand the existing verifier the manifest it expects.
+      qr = `${shipment._id}.${shipment.qrToken}`;
+    }
 
     // The seller can only receive into warehouses they own.
     const sellerWarehouseIds = (await Warehouse.find({ sellerId: req.user.sellerId }).select("_id")).map((w) => String(w._id));
 
     const { shipment, shortages } = await shipmentService.verifyReceipt(order.companyId, order.shipmentId, {
       verifierId: req.user.sellerId,
-      qr: req.body.qr,
+      qr,
       warehouseId: order.warehouseId,
       allowedWarehouseIds: sellerWarehouseIds,
       lines: req.body.lines || [],
@@ -126,6 +187,19 @@ exports.receiveSupply = async (req, res) => {
 
     order.status = shortages ? "partially_received" : "received";
     await order.save();
+
+    // The cartons have done their job.
+    await shipmentBoxService.setBoxStatus(shipment._id, "received").catch(() => {});
+
+    // A "Dispatch to Seller" transfer leaves TWO rows pointing at one shipment:
+    // the seller's original request and the company-initiated transfer that
+    // fulfilled it. Receiving either one settles the consignment, so move the
+    // sibling to the same status rather than leaving it stuck on "dispatched".
+    // (verifyReceipt already refuses a second receipt, so this cannot double-land.)
+    await SupplyOrder.updateMany(
+      { shipmentId: order.shipmentId, _id: { $ne: order._id }, sellerId: req.user.sellerId },
+      { $set: { status: order.status } },
+    ).catch(() => {});
 
     await notify({
       recipientType: "company", recipientId: order.companyId, type: "supply_status",

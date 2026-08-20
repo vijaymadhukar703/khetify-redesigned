@@ -16,6 +16,7 @@ import { useSubscription } from '../../context/SubscriptionContext';
  * real enforcement point and returns 403 for any direct API access.
  *
  *   <Route path="/ims/lots" element={<RequireCap capability="lot:read" ims><ImsLots /></RequireCap>} />
+ *   <Route path="/admin" element={<RequireCap ims><Administration /></RequireCap>} />
  */
 const RequireCap = ({ capability, ims = false, children }) => {
   const { can, loading } = usePermission();

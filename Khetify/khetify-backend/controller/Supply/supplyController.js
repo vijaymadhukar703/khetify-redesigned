@@ -13,6 +13,7 @@ const locationService = require("../../services/locationService");
 const { assertCompanyWarehouse } = require("../../services/warehouseOwnershipService");
 const { notify, notifyWarehouseTeam } = require("../../services/notificationService");
 const { warehouseScope } = require("../../services/warehouseScope");
+const { validateConfirmPick } = require("../../services/pickScanService");
 
 // Stage → the supply-order statuses that belong in each Send Stock tab.
 const STAGE_STATUSES = {
@@ -73,7 +74,9 @@ exports.getSupplyOrders = async (req, res) => {
 
     const rows = await SupplyOrder.find(filter)
       .sort({ createdAt: -1 })
-      .populate({ path: "sellerId", model: "Seller", select: "sellerInfo.businessName" })
+      // ADDITIVE: contact.ownerName so the Send Stock table can show the seller's
+      // contact person alongside their company name. Nothing else changes.
+      .populate({ path: "sellerId", model: "Seller", select: "sellerInfo.businessName contact.ownerName" })
       // trackSerial lets the Pick UI drive serial-tracked rows by scanning only
       // (read-only qty) while non-serialized rows keep their manual qty input.
       .populate({ path: "items.productId", select: "productName skuNumber unit trackSerial" })
@@ -186,17 +189,21 @@ exports.updateSupplyStatus = async (req, res) => {
       await assertCompanyWarehouse(order.companyId, src);
 
       // APPROVAL IS AUTHORIZATION ONLY — it records WHICH lot(s) will fulfil
-      // each item (FEFO order, or the operator's chosen parent lot) but MOVES NO
-      // STOCK. The warehouse's available quantity must stay untouched until it
-      // actually PICKS (pickSupplyOrder reserves; dispatch commits). Throws 409
-      // INSUFFICIENT_STOCK as an advisory pre-check only.
-      const lotSelections = Array.isArray(req.body.lotSelections) ? req.body.lotSelections : [];
+      // each item (FEFO order) but MOVES NO STOCK. The warehouse's available
+      // quantity must stay untouched until it actually PICKS (pickSupplyOrder
+      // reserves; dispatch commits). Throws 409 INSUFFICIENT_STOCK as an
+      // advisory pre-check only.
+      //
+      // NO LOT IS CHOSEN HERE. Approval assigns the SOURCE WAREHOUSE and
+      // nothing else; which lot / batch / boxes / units actually go out is the
+      // source warehouse manager's decision at Pick, Pack and Dispatch. These
+      // allocations are the FEFO plan the warehouse starts from, exactly as
+      // before — this is the same code path that ran whenever the operator left
+      // the old (now removed) lot dropdown on "Auto".
       for (const item of order.items) {
-        const sel = lotSelections.find((s) => s && s.inventoryId && String(s.productId) === String(item.productId));
         item.allocations = await lotService.planAllocation({
           ownerType: "company", ownerId: order.companyId, warehouseId: src,
           productId: item.productId, qty: item.quantity,
-          ...(sel ? { inventoryId: sel.inventoryId } : {}),
         });
       }
       order.markModified("items");
@@ -424,6 +431,8 @@ exports.pickSupplyOrder = async (req, res) => {
     const order = await SupplyOrder.findOne({ _id: req.params.id, companyId });
     if (!order) return res.status(404).json({ success: false, message: "Supply order not found" });
     if (!["approved", "picking"].includes(order.status)) return res.status(409).json({ success: false, message: `Cannot pick a ${order.status} supply order` });
+    // A warehouse-scoped picker may only pick stock from their own warehouse.
+    const allowedWarehouseIds = await warehouseScope(req.user);
 
     for (const pick of picks) {
       const item = (order.items || []).find((it) => String(it.productId) === String(pick.productId));
@@ -432,19 +441,53 @@ exports.pickSupplyOrder = async (req, res) => {
 
       let pickQty;
       if (Array.isArray(pick.serials) && pick.serials.length) {
-        const units = await UnitSerial.find({ companyId, serial: { $in: pick.serials } });
-        const bySerial = new Map(units.map((u) => [u.serial, u]));
-        for (const s of pick.serials) {
-          const u = bySerial.get(s);
-          if (!u) return res.status(409).json({ success: false, message: `Unknown serial ${s}` });
-          if (!allocByInv.has(String(u.inventoryId))) return res.status(409).json({ success: false, message: `Serial ${s} is not from this order's reserved lots` });
-          if (u.status !== "in_stock") return res.status(409).json({ success: false, message: `Serial ${s} is ${u.status}, cannot pick` });
+        // SERVER-SIDE re-validation of the whole payload: duplicates, ownership,
+        // reserved-lot membership, warehouse and status, plus the quantity cap.
+        // The Pick modal's counts are never trusted.
+        // A SUPPLY request may be fulfilled from a lot that did not exist when
+        // it was approved: the company produces it, ships it to the warehouse,
+        // the warehouse receives it, and picks it here. `newLots` are exactly
+        // those — validated to be the requested product, in this warehouse, and
+        // on the books.
+        const { serials, newLots } = await validateConfirmPick(companyId, {
+          serials: pick.serials,
+          allocByInv,
+          remainingRequired: Math.max(0, Number(item.quantity || 0) - Number(item.pickedQty || 0)),
+          allowedWarehouseIds,
+          allowDynamicAllocation: true,
+          productId: item.productId,
+        });
+
+        // Create the missing allocations BEFORE any stock moves, so the reserve
+        // below has a lot row to record itself against. `qty` is the allocated
+        // quantity; `reservedQty` fills in as units are reserved just below.
+        for (const nl of newLots) {
+          const alloc = {
+            inventoryId: nl.inventoryId,
+            lotNumber: nl.lotNumber,
+            batchNumber: nl.batchNumber,
+            warehouseId: nl.warehouseId,
+            qty: nl.count,
+            reservedQty: 0,
+            committed: false,
+            serials: [],
+            allocatedAt: new Date(),
+            allocatedBy: performedBy || null,
+          };
+          item.allocations = item.allocations || [];
+          item.allocations.push(alloc);
+          // Point at the pushed subdocument so the reserve/serial writes below
+          // land on the stored copy, not on this detached literal.
+          allocByInv.set(String(nl.inventoryId), item.allocations[item.allocations.length - 1]);
         }
+
+        const units = await UnitSerial.find({ companyId, serial: { $in: serials } });
+        const bySerial = new Map(units.map((u) => [u.serial, u]));
         // RESERVE the picked units on their own lot FIRST — this is where the
         // warehouse's available stock drops (approval no longer touches it).
         // Atomic + conditional, so the same units can't be picked twice.
         const byLot = new Map();
-        for (const s of pick.serials) {
+        for (const s of serials) {
           const invId = String(bySerial.get(s).inventoryId);
           byLot.set(invId, (byLot.get(invId) || 0) + 1);
         }
@@ -456,14 +499,19 @@ exports.pickSupplyOrder = async (req, res) => {
           const a = allocByInv.get(invId);
           a.reservedQty = (a.reservedQty || 0) + n;
         }
-        await barcodeService.transitionUnits(companyId, pick.serials, { toStatus: "picked", event: "picked", refType: "SupplyOrder", refId: order._id, actorId: performedBy });
+        // Compare-and-swap per unit, so a unit another picker took between the
+        // check above and here is REPORTED rather than double-picked.
+        const { moved } = await barcodeService.transitionUnits(companyId, serials, { toStatus: "picked", event: "picked", refType: "SupplyOrder", refId: order._id, actorId: performedBy });
+        if (moved.length !== serials.length) {
+          return res.status(409).json({ success: false, message: "Some units were picked by another user just now — rescan and try again" });
+        }
         // Record each serial on its lot's allocation so dispatch can ship it.
-        for (const s of pick.serials) {
+        for (const s of serials) {
           const a = allocByInv.get(String(bySerial.get(s).inventoryId));
           a.serials = a.serials || [];
           if (!a.serials.includes(s)) a.serials.push(s);
         }
-        pickQty = pick.serials.length;
+        pickQty = serials.length;
       } else {
         pickQty = Number(pick.qty);
         if (!pickQty || pickQty <= 0) return res.status(400).json({ success: false, message: "Each pick needs serials or a positive qty" });
@@ -536,6 +584,13 @@ exports.packSupplyOrder = async (req, res) => {
  * stock that was never picked, and can't be deducted twice. A planned lot the
  * picker didn't use (reservedQty 0) contributes no line.
  *
+ * The line also carries the EXACT unit serials the picker scanned and packed
+ * (`a.serials`), so dispatch ships those units and no others. Without them
+ * dispatch fell back to "any `line.qty` units of this lot", which could send a
+ * Bulk Packaging ID whose scan was REJECTED — never picked, never packed, but
+ * still sitting `in_stock` on the same lot — all the way into seller inventory.
+ * Empty for non-serialized stock, which keeps the quantity-only path.
+ *
  * NOTE: supply orders approved BEFORE reserve-at-pick shipped reserved at
  * approval with reservedQty 0 — run scripts/backfillSupplyReservedQty.js once so
  * those in-flight orders can still dispatch.
@@ -546,7 +601,11 @@ function manifestLines(order) {
     for (const a of it.allocations || []) {
       const qty = Number(a.reservedQty || 0);
       if (qty <= 0) continue;
-      lines.push({ inventoryId: a.inventoryId, productId: it.productId?._id || it.productId, lotNumber: a.lotNumber, batchNumber: a.batchNumber, qty });
+      lines.push({
+        inventoryId: a.inventoryId, productId: it.productId?._id || it.productId,
+        lotNumber: a.lotNumber, batchNumber: a.batchNumber, qty,
+        serials: [...new Set((a.serials || []).filter(Boolean))],
+      });
     }
   }
   return lines;

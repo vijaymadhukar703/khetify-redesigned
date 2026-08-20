@@ -62,4 +62,9 @@ const loginUserBody = z
   })
   .refine((b) => b.email || b.phone, { message: "email or phone is required" });
 
-module.exports = { createUserBody, createSellerMemberBody, updateUserBody, loginUserBody };
+// The individual field rules are exported too so validators/warehouseValidators.js
+// can reuse them for the Warehouse Manager block instead of restating them.
+module.exports = {
+  createUserBody, createSellerMemberBody, updateUserBody, loginUserBody,
+  memberName, memberEmail, memberPhone, memberPassword, memberRole,
+};

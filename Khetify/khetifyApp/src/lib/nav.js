@@ -63,7 +63,10 @@ export const MODULES = [
   },
   {
     key: 'operations',
-    title: 'Operations',
+    // DISPLAY LABEL ONLY — the sidebar entry and the breadcrumb both read this.
+    // `key` and `path` are deliberately untouched: they are what the router and
+    // every existing /operations link resolve against.
+    title: 'Stock Transfers',
     path: '/operations',
     icon: 'sync_alt',
     description: 'Receive, send, transfer and track stock',
@@ -95,7 +98,7 @@ export const MODULES = [
   },
   {
     key: 'order-history',
-    title: 'Order History',
+    title: 'Transfer History',
     path: '/order-history',
     icon: 'history',
     description: 'All orders, transfers and shipments',
@@ -118,7 +121,7 @@ export const MODULES = [
   },
   {
     key: 'analytics',
-    title: 'Analytics',
+    title: 'Stock Valuation',
     path: '/analytics',
     icon: 'monitoring',
     description: 'Reports and business insights',
@@ -141,7 +144,11 @@ export const MODULES = [
     icon: 'settings',
     description: 'Products, sellers, team and settings',
     capability: null,
-    feature: null,
+    // Paid module: the SAME 'ims' flag Inventory, Warehouses, Operations,
+    // Barcodes and Analytics carry. Hub + Sidebar already read it, so
+    // Administration now locks, greys, shows the PRO badge and routes to
+    // /billing identically — no separate gate UI anywhere.
+    feature: 'ims',
   },
 ];
 
@@ -173,6 +180,3 @@ export const ADMIN_ITEMS = [
   { title: 'Billing & Plans', path: '/billing', icon: 'credit_card', description: 'Subscription and invoices', capability: 'billing:manage' },
   { title: 'Support', path: '/support', icon: 'support_agent', description: 'Help and contact', capability: null },
 ];
-
-
-

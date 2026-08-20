@@ -1,40 +1,100 @@
-import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from "react";
+import React, { createContext, useContext, useEffect, useState, useCallback, useMemo, useRef } from "react";
+import { useShopAuth } from "./ShopAuthContext";
 
-// Guest cart — lives in localStorage so a shopper can browse and add to cart
-// WITHOUT logging in. Login is only required at checkout. Each cart line stores
-// a snapshot (name/price/image/seller) for display + the listingId/qty that the
-// server re-prices at checkout (client prices are never trusted).
-const CART_KEY = "shopCart";
+// Guest cart lives in localStorage so a shopper can browse and add to cart
+// WITHOUT logging in. Login is only required at checkout.
+//
+// IMPORTANT (user-data isolation): storage is scoped PER USER. Each logged-in
+// consumer has their own slot "shopCart:<id>"; guests use "shopCart:guest".
+// When the logged-in identity changes we load that identity's own cart, so one
+// account can never see another account's items. On login the guest cart is
+// folded into the user's cart once, then the guest slot is cleared.
+const KEY_PREFIX = "shopCart:";
+const LEGACY_KEY = "shopCart"; // pre-scoping (shared) key — migrated once.
 const CartContext = createContext(null);
 
-function readCart() {
+const keyFor = (id) => `${KEY_PREFIX}${id || "guest"}`;
+
+function read(key) {
   try {
-    const raw = localStorage.getItem(CART_KEY);
+    const raw = localStorage.getItem(key);
     const arr = raw ? JSON.parse(raw) : [];
     return Array.isArray(arr) ? arr : [];
   } catch { return []; }
 }
+function write(key, items) {
+  try { localStorage.setItem(key, JSON.stringify(items)); } catch { /* ignore */ }
+}
+
+// One-time: fold any legacy unscoped cart into the guest slot so an in-progress
+// guest shopper doesn't lose their cart on upgrade. Idempotent.
+function migrateLegacy() {
+  try {
+    const legacy = localStorage.getItem(LEGACY_KEY);
+    if (legacy != null) {
+      if (localStorage.getItem(keyFor(null)) == null) localStorage.setItem(keyFor(null), legacy);
+      localStorage.removeItem(LEGACY_KEY);
+    }
+  } catch { /* ignore */ }
+}
+
+// Merge two carts: sum quantities for the same line, clamp to available stock.
+function mergeCarts(base, extra) {
+  const map = new Map(base.map((i) => [i.listingId, { ...i }]));
+  for (const g of extra) {
+    const ex = map.get(g.listingId);
+    if (ex) {
+      const cap = Number.isFinite(ex.availableStock) && ex.availableStock > 0 ? ex.availableStock : Infinity;
+      ex.qty = Math.min((ex.qty || 0) + (g.qty || 0), cap);
+    } else {
+      map.set(g.listingId, { ...g });
+    }
+  }
+  return [...map.values()];
+}
 
 export function CartProvider({ children }) {
-  const [items, setItems] = useState(readCart);
+  const { consumer } = useShopAuth();
+  const userId = consumer?._id || consumer?.id || consumer?.email || consumer?.phone || null;
 
-  useEffect(() => {
-    localStorage.setItem(CART_KEY, JSON.stringify(items));
-  }, [items]);
+  const [items, setItems] = useState(() => { migrateLegacy(); return read(keyFor(userId)); });
+  const keyRef = useRef(keyFor(userId));
+  const prevIdRef = useRef(userId);
 
-  // Sync across tabs.
+  // React to identity changes: login (guest -> user), logout, or account switch.
   useEffect(() => {
-    const onStorage = (e) => { if (e.key === CART_KEY) setItems(readCart()); };
+    if (prevIdRef.current === userId) return;
+    const prevId = prevIdRef.current;
+    const newKey = keyFor(userId);
+
+    if (!prevId && userId) {
+      // Guest -> logged in: fold the guest cart into this user's own cart once,
+      // then clear the guest slot so it can't leak into a future account.
+      const merged = mergeCarts(read(newKey), read(keyFor(null)));
+      write(newKey, merged);
+      localStorage.removeItem(keyFor(null));
+      keyRef.current = newKey;
+      setItems(merged);
+    } else {
+      // Logout or switch to another identity: load ONLY that identity's cart.
+      keyRef.current = newKey;
+      setItems(read(newKey));
+    }
+    prevIdRef.current = userId;
+  }, [userId]);
+
+  // Persist to the currently active (scoped) key.
+  useEffect(() => { write(keyRef.current, items); }, [items]);
+
+  // Sync across tabs — only for the active key.
+  useEffect(() => {
+    const onStorage = (e) => { if (e.key === keyRef.current) setItems(read(keyRef.current)); };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
   }, []);
 
-  // Add `addQty` units of a product to the cart. Default is 1 — one click adds
-  // exactly one unit. If the line already exists, the quantity is INCREMENTED by
-  // addQty (not replaced). Never exceeds the product's available stock, and
-  // never uses minimumOrderQuantity/stock as the added amount.
+  // ── Public API (unchanged behaviour) ──
   const addItem = useCallback((product, addQty = 1) => {
-    // Sanitise: a positive integer, at least 1.
     const inc = Math.max(1, Math.floor(Number(addQty) || 1));
     const max = Number.isFinite(product.availableStock) && product.availableStock > 0
       ? product.availableStock
@@ -65,8 +125,6 @@ export function CartProvider({ children }) {
     });
   }, []);
 
-  // Set an exact quantity for a line (from the cart's +/- steppers). Clamped to
-  // [1, availableStock]; 0 or less removes the line.
   const setQty = useCallback((listingId, qty) => {
     setItems((prev) =>
       prev.flatMap((i) => {

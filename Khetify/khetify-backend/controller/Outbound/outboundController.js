@@ -1,4 +1,6 @@
 const pickService = require("../../services/pickService");
+const pickScanService = require("../../services/pickScanService");
+const { warehouseScope } = require("../../services/warehouseScope");
 const packService = require("../../services/packService");
 const dispatchService = require("../../services/dispatchService");
 const audit = require("../../services/auditService");
@@ -13,6 +15,27 @@ const fail = (res, err) => {
 };
 
 /* ---- pick ---- */
+
+/**
+ * POST /api/picklists/scan
+ * { code, orderType: "order"|"supply", orderId, selectedCodes: [] }
+ *
+ * Resolve ONE scanned code in the Pick modal into the unit codes it selects —
+ * a whole Bulk Packaging box, a single unit, or a whole non-bulk lot. READ-ONLY:
+ * it reserves nothing and moves nothing; Confirm Pick re-validates every unit
+ * inside its own transaction.
+ */
+exports.pickScan = async (req, res) => {
+  try {
+    const allowedWarehouseIds = await warehouseScope(req.user);
+    const data = await pickScanService.resolvePickScan(req.user.companyId, {
+      ...req.body,
+      allowedWarehouseIds,
+    });
+    res.json({ success: true, data });
+  } catch (err) { fail(res, err); }
+};
+
 exports.generateWave = async (req, res) => {
   try {
     const pl = await pickService.generateWave(req.user.companyId, req.body);
@@ -37,7 +60,8 @@ exports.pickLine = async (req, res) => {
 // Direct scan-pick a confirmed order — no wave/PickList.
 exports.pickOrder = async (req, res) => {
   try {
-    const order = await pickService.pickOrderDirect(req.user.companyId, req.params.id, { picks: req.body.picks, performedBy: req.user.id });
+    const allowedWarehouseIds = await warehouseScope(req.user);
+    const order = await pickService.pickOrderDirect(req.user.companyId, req.params.id, { picks: req.body.picks, performedBy: req.user.id, allowedWarehouseIds });
     res.json({ success: true, message: "Picked", data: order });
   } catch (err) { fail(res, err); }
 };

@@ -177,7 +177,7 @@ const SellerInventory = () => {
                   {/* Brand + Reorder At are intentionally not shown on Seller
                       Inventory. The reorder value still drives Stock Status and
                       the Low/Out-of-Stock card — it's just not a column here. */}
-                  {['Lot No.', 'Batch No.', 'Product', 'Category', 'Packing Size', 'Warehouse', 'Mfg', 'Expiry', 'Qty', 'Stock Status', 'Expiry Status', 'MRP', ''].map((h, i) => (
+                  {['Lot No.', 'Batch No.', 'Product', 'Category', 'Warehouse', 'Mfg', 'Expiry', 'Qty', 'Stock Status', 'Expiry Status', 'MRP', ''].map((h, i) => (
                     <th key={i} className={`px-4 py-4 text-[10px] font-bold text-stone-400 uppercase tracking-widest whitespace-nowrap ${h === '' ? 'text-right' : ''}`}>{h}</th>
                   ))}
                 </tr>
@@ -197,7 +197,7 @@ const SellerInventory = () => {
                         {r.sku && <p className="text-[10px] font-bold text-stone-400 uppercase tracking-tight">SKU: {r.sku}</p>}
                       </td>
                       <td data-label="Category" className="px-4 py-5 text-sm text-stone-500 font-medium">{r.category}</td>
-                      <td data-label="Packing Size" className="px-4 py-5 text-sm text-stone-500 font-medium">{r.packingSize || '—'}</td>
+                      {/* <td data-label="Packing Size" className="px-4 py-5 text-sm text-stone-500 font-medium">{r.packingSize || '—'}</td> */}
                       <td data-label="Warehouse" className="px-4 py-5 text-sm text-stone-900 font-medium">{r.warehouse}</td>
                       <td data-label="Mfg" className="px-4 py-5 text-sm text-stone-500 font-medium whitespace-nowrap">{fmtDate(r.mfgDate)}</td>
                       <td data-label="Expiry" className="px-4 py-5 text-sm text-stone-500 font-medium whitespace-nowrap">{fmtDate(r.expiryDate)}</td>
@@ -206,7 +206,16 @@ const SellerInventory = () => {
                       <td data-label="Expiry Status" className="px-4 py-5"><span className={`text-xs font-bold px-2.5 py-1 rounded-full whitespace-nowrap ${badge.cls}`}>{badge.label}</span></td>
                       <td data-label="MRP" className="px-4 py-5 text-sm text-stone-900 font-bold whitespace-nowrap">{formatINR(r.price)}</td>
                       <td className="px-4 py-5 cell-actions">
-                        <div className="flex items-center justify-end">
+                        {/* flex-wrap only: the extra View button must never push
+                            the row layout or widen the column. */}
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                          {/* Everything about this lot — packaging, box IDs,
+                              package-wise units and traceability — lives on the
+                              read-only details page, so this table is unchanged. */}
+                          <button onClick={() => navigate(`/seller/inventory/lots/${r.lotId}/view`)} title="View lot traceability" disabled={!r.lotId}
+                            className="inline-flex items-center gap-1 text-xs font-bold text-stone-500 hover:text-[#EA2831] transition-colors disabled:opacity-40">
+                            <span className="material-symbols-outlined text-sm">visibility</span> View
+                          </button>
                           <button onClick={() => navigate(`/seller/labels?lot=${r.lotId}`)} title="Print / scan labels" disabled={!r.lotId}
                             className="inline-flex items-center gap-1 text-xs font-bold text-stone-500 hover:text-[#EA2831] transition-colors disabled:opacity-40">
                             <span className="material-symbols-outlined text-sm">qr_code_2</span> Label
