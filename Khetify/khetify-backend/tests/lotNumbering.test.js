@@ -4,23 +4,36 @@ const Product = require("../model/Company/productModel");
 const Warehouse = require("../model/Warehouse/Warehouse");
 const lotService = require("../services/lotService");
 
-let companyId, warehouseId, productId;
+let companyId, warehouseId, productId, productCode;
+
+// Current period, as the generator formats it.
+const period = () => {
+  const now = new Date();
+  return { year: now.getFullYear(), month: String(now.getMonth() + 1).padStart(2, "0") };
+};
 
 beforeEach(async () => {
-  const company = await Company.create({ fullName: "Lot Co", email: `lot-${new mongoose.Types.ObjectId()}@x.com`, password: "x" });
+  const company = await Company.create({
+    fullName: "Lot Co",
+    email: `lot-${new mongoose.Types.ObjectId()}@x.com`,
+    password: "x",
+    companyInfo: { companyName: "Bhoomi AgriTech" },
+  });
   companyId = company._id;
   const wh = await Warehouse.create({ companyId, name: "Khargone", code: "KHA" });
   warehouseId = wh._id;
-  const p = await Product.create({ companyId, productName: "Urea", skuNumber: "UR" });
+  const p = await Product.create({ companyId, productName: "Urea Fertilizer", skuNumber: "UR" });
   productId = p._id;
+  productCode = p.product_code; // server-generated, e.g. URE105
 });
 
 describe("lot numbering modes", () => {
   test("with no lot number supplied, the system auto-generates a Khetify number", async () => {
-    const now = new Date();
-    const period = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const { year, month } = period();
+    const day = String(new Date().getDate()).padStart(2, "0");
     const inv = await lotService.receiveLot({ ownerId: companyId, productId, warehouseId, qty: 10 });
-    expect(inv.batchNumber).toBe(`KH-KHA-${period}-0001`);
+    // The generated shape now carries the day and a SKU range over the quantity.
+    expect(inv.batchNumber).toBe(`KH-BHO-${productCode}-${year}-${month}-${day}-SKU01~SKU10-0001`);
     expect(inv.lotNumber).toBe(inv.batchNumber);
   });
 
@@ -33,18 +46,17 @@ describe("lot numbering modes", () => {
     expect(inv.batchNumber).toBe("UR-2026-JUN-001");
   });
 
-  test("khetify_generated mode generates KH-<WH>-<YYYYMM>-<seq> when no batchNumber is given", async () => {
+  test("khetify_generated mode increments the serial per lot", async () => {
     await Company.updateOne({ _id: companyId }, { $set: { "imsSettings.lotNumberingMethod": "khetify_generated" } });
-
-    const now = new Date();
-    const period = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const { year, month } = period();
+    const day = String(new Date().getDate()).padStart(2, "0");
 
     const inv1 = await lotService.receiveLot({ ownerId: companyId, productId, warehouseId, qty: 10 });
-    expect(inv1.batchNumber).toBe(`KH-KHA-${period}-0001`);
+    expect(inv1.batchNumber).toBe(`KH-BHO-${productCode}-${year}-${month}-${day}-SKU01~SKU10-0001`);
     expect(inv1.lotNumber).toBe(inv1.batchNumber);
 
     const inv2 = await lotService.receiveLot({ ownerId: companyId, productId, warehouseId, qty: 5 });
-    expect(inv2.batchNumber).toBe(`KH-KHA-${period}-0002`);
+    expect(inv2.batchNumber).toBe(`KH-BHO-${productCode}-${year}-${month}-${day}-SKU01~SKU05-0002`);
   });
 
   test("khetify_generated mode still honours an explicitly supplied lot number", async () => {
@@ -55,6 +67,7 @@ describe("lot numbering modes", () => {
     });
     expect(inv.batchNumber).toBe("UR-2026-JUN-009"); // existing records & manual lots untouched
   });
+
   test("batchNumber always shadows the lot number (a divergent client batch is ignored)", async () => {
     // Only a lot number → batch mirrors it.
     const a = await lotService.receiveLot({ ownerId: companyId, productId, warehouseId, lotNumber: "LOT-A", qty: 5 });
@@ -85,5 +98,3 @@ describe("lot numbering modes", () => {
     expect(inv.batchNumber).toBe("UR-2026-JUN-001"); // chosen lot becomes the batch identity
   });
 });
-
-

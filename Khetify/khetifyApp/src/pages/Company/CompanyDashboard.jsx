@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { useSubscription } from '../../context/SubscriptionContext';
 import { usePermission } from '../../context/PermissionContext';
 import { computeInventorySummary } from '../../lib/inventoryData';
-import { getLots, getOrderSummary, getTmsShipments, getCustomers, getOwnerDashboard, getDashboardSummary, getTransferRequests, getProducts, formatINR } from '../../lib/imsApi';
+import { getLots, getOrderSummary, getTmsShipments, getCustomers, getOwnerDashboard, getDashboardSummary, getTransferRequests, getProducts, getWarehouseDirectory, formatINR } from '../../lib/imsApi';
 import SummaryCards from '../../Components/ims/SummaryCards';
 
 /**
@@ -104,6 +104,7 @@ const CompanyDashboard = () => {
   const [stats, setStats] = useState({
     totalProducts: 0,
     activeProducts: 0,
+    warehouses: 0,
   });
   const [loading, setLoading] = useState(true);
 
@@ -118,12 +119,20 @@ const CompanyDashboard = () => {
       try {
         // Token-authenticated + company-scoped on the server, so counts always
         // match the Product Catalog (no client companyId guessing).
-        const res = await getProducts();
-        const products = res?.data || [];
+        // allSettled: the warehouse count is a separate concern, so a failure
+        // there must not wipe out the product counts (and vice versa).
+        const [prodRes, whRes] = await Promise.allSettled([getProducts(), getWarehouseDirectory()]);
+
+        const products = prodRes.status === 'fulfilled' ? (prodRes.value?.data || []) : [];
         const total = products.length;
         // productStatus is stored lowercase ("active"/"inactive") — match case-insensitively.
         const active = products.filter((p) => (p.productStatus || '').toLowerCase() === 'active').length;
-        setStats({ totalProducts: total, activeProducts: active });
+
+        // The endpoint returns either a bare array or { data: [...] }.
+        const whRaw = whRes.status === 'fulfilled' ? whRes.value : null;
+        const whList = Array.isArray(whRaw) ? whRaw : (whRaw?.data || []);
+
+        setStats({ totalProducts: total, activeProducts: active, warehouses: whList.length });
       } catch (error) {
         console.error("Dashboard Data Error:", error);
       } finally {
@@ -293,8 +302,8 @@ const CompanyDashboard = () => {
             <p className="text-2xl sm:text-3xl font-bold text-emerald-600">{loading ? '...' : stats.activeProducts}</p>
           </div>
           <div className="bg-white border border-stone-200 rounded-xl p-5 sm:p-6 hover:shadow-md transition-all">
-            <p className="text-stone-500 text-xs sm:text-sm font-medium mb-2">Low Stock Items</p>
-            <p className="text-2xl sm:text-3xl font-bold text-[#EA2831]">{isSubscribed ? inv.lowStock + inv.outOfStock : '—'}</p>
+            <p className="text-stone-500 text-xs sm:text-sm font-medium mb-2">Warehouses</p>
+            <p className="text-2xl sm:text-3xl font-bold text-stone-900">{loading ? '...' : stats.warehouses}</p>
           </div>
           {canSeeSales ? (
             <div className="bg-white border border-stone-200 rounded-xl p-5 sm:p-6 hover:shadow-md transition-all">

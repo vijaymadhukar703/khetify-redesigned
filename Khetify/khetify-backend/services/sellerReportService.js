@@ -40,6 +40,11 @@ async function stockOnHand(sellerId, params = {}) {
   const filter = applyWhFilter({ ...ownerFilter(sellerId), batchNumber: { $ne: null }, availableStock: { $gt: 0 } }, params);
   const rows = await Inventory.find(filter).populate("productId", PRODUCT_SELECT).populate("warehouseId", "name code");
   return rows.map((r) => ({
+    // INTERNAL KEY (leading underscore) — the seller lot row this report line was
+    // derived from, so Seller → Analytics → View can open its details. Stripped
+    // from the CSV by reportService.streamCsv and hidden by the table, so no
+    // report column or exported file changes shape.
+    _inventoryId: String(r._id),
     product: r.productId?.productName || "—",
     sku: r.productId?.skuNumber || "",
     warehouse: r.warehouseId?.name || "Unassigned",

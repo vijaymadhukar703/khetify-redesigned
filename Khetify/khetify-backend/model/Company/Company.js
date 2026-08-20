@@ -146,7 +146,8 @@ const companySchema = new mongoose.Schema(
     // behaviour: lot/batch numbers are supplied by the company)
     imsSettings: {
       // "company_defined"   → operator types the lot number manually
-      // "khetify_generated" → system generates KH-<WH>-<YYYYMM>-<seq>
+      // "khetify_generated" → system generates
+      //                       KH-<COMPANY>-<PRODUCT CODE>-<YYYY>-<MM>-<SERIAL>
       // (The numbering choice is now made per-lot at Create Lot, not company-wide.)
       lotNumberingMethod: {
         type: String,

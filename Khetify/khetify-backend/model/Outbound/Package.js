@@ -16,7 +16,28 @@ const packageItemSchema = new mongoose.Schema(
 
 const packageSchema = new mongoose.Schema(
   {
-    companyId: { type: mongoose.Schema.Types.ObjectId, ref: "Company", required: true },
+    // OWNERSHIP — additive, and the same pattern UnitSerial and Inventory
+    // already use: `ownerType`/`ownerId` name the true owner while `companyId`
+    // stays as it was.
+    //
+    // `ownerType` DEFAULTS to "company", so every existing package row and
+    // every package the company packs is unchanged — company code neither sets
+    // nor reads these fields, and its queries keep matching exactly what they
+    // matched before.
+    //
+    // `companyId` remains REQUIRED for company packages. It is optional only
+    // for a seller package, because a seller warehouse packs a carton for its
+    // own customer: there is no company in that transaction, and inventing one
+    // would put a company's id on a document it does not own. (This differs
+    // from UnitSerial, where companyId is genuinely meaningful — those units
+    // were minted by a company and merely re-owned to the seller on transfer.)
+    ownerType: { type: String, enum: ["company", "seller"], default: "company", index: true },
+    ownerId: { type: mongoose.Schema.Types.ObjectId },
+    companyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Company",
+      required: function () { return this.ownerType !== "seller"; },
+    },
     // Set for customer-order packages (unchanged). Null for seller-supply
     // packages, which carry refType/refId instead.
     orderId: { type: mongoose.Schema.Types.ObjectId, ref: "Order", default: null },
@@ -34,7 +55,22 @@ const packageSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// UNCHANGED company indexes. A seller package has no companyId, so it does not
+// participate in either of these — which is why the seller needs its own.
 packageSchema.index({ companyId: 1, packageNumber: 1 }, { unique: true });
 packageSchema.index({ companyId: 1, orderId: 1 });
+
+// SELLER indexes. Partial, so they cover ONLY seller rows and cannot alter how
+// the company indexes above behave. The unique one keeps package numbers unique
+// per seller — without it, two sellers could mint the same PKG-… barcode, since
+// their numbering is drawn from separate per-seller counters.
+packageSchema.index(
+  { ownerId: 1, packageNumber: 1 },
+  { unique: true, partialFilterExpression: { ownerType: "seller" } }
+);
+packageSchema.index(
+  { ownerType: 1, ownerId: 1, orderId: 1 },
+  { partialFilterExpression: { ownerType: "seller" } }
+);
 
 module.exports = mongoose.model("Package", packageSchema);

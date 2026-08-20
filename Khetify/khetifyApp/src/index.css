@@ -2,6 +2,27 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ---------------------------------------------------------------------------
+   GLOBAL RESPONSIVE GUARD
+   Stops the whole page from scrolling sideways when one child is slightly wider
+   than the screen (the classic "everything is shifted / cut off on the right"
+   bug on phones). Clipping happens at the page root so vertical scrolling and
+   sticky headers keep working normally.
+--------------------------------------------------------------------------- */
+body {
+  overflow-x: hidden;      /* clip sideways overflow WITHOUT touching <html>, so
+                              position:sticky (header, sidebar) keeps working */
+  max-width: 100vw;
+}
+#root {
+  overflow-x: hidden;      /* the React mount point too */
+  max-width: 100vw;
+}
+/* Media should never be the element that busts the layout. */
+img, svg, video, canvas {
+  max-width: 100%;
+}
+
 body {
   font-family: 'Manrope', sans-serif;
 }
@@ -133,4 +154,16 @@ html {
 }
 .custom-scrollbar::-webkit-scrollbar-corner {
   background: transparent;
+}
+
+/* Firefox aur normal elements ke liye default reset variable wrapper */
+@media (max-width: 640px) {
+  ::-webkit-scrollbar {
+    display: none;
+  }
+
+  html, body {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
 }

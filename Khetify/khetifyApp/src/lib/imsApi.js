@@ -26,6 +26,12 @@ export const sellFefo = (body) => data(api.post("lots/sell-fefo", body));
 export const getInventory = (params = {}) => data(api.get("inventory", { params }));
 export const getMovements = (productId) => data(api.get(`inventory/${productId}/movements`));
 
+/* ---- account self-service (team members incl. Warehouse Managers) ----
+   Same team auth as the rest of the app; no separate login. change-password
+   is scoped server-side to the CALLER's own account, so no id is sent. */
+export const changeMyPassword = (body) => data(api.post("users/change-password", body));
+export const requestMemberPasswordReset = (body) => data(api.post("users/forgot-password", body));
+
 /* ---- downstream sellers — the company's PC-issued (authorized) resellers ---- */
 export const getCompanySellers = () => data(api.get("company/sellers"));
 
@@ -91,8 +97,66 @@ export const createVehicle = (body) => data(api.post("vehicles", body));
 export const getDrivers = () => data(api.get("drivers"));
 export const createDriver = (body) => data(api.post("drivers", body));
 export const getTmsShipments = (params = {}) => data(api.get("shipments", { params }));
+// Shipment Box labels for one consignment — printed from Shipment Tracking.
+export const getShipmentBoxes = (shipmentId) => data(api.get(`shipments/${shipmentId}/boxes`));
 export const getTmsShipment = (id) => data(api.get(`shipments/${id}`));
 export const createTmsShipment = (body) => data(api.post("shipments", body));
+
+/* ---- repack cartons (loose picked units → one new box, at dispatch) ----
+   The box is a LAYER: every unit keeps its original lot and original box, so
+   receiving still lands each unit in its own lot. */
+export const packRepackBox = (body) => data(api.post("repack-boxes", body));
+export const getRepackBox = (id) => data(api.get(`repack-boxes/${encodeURIComponent(id)}`));
+// Every carton packed for one shipment, each with its full contents — what the
+// Shipments table's "Box Packaging" list is drawn from. Packed boxes only; an
+// unpacked one is an audit record, not a box.
+export const listRepackBoxes = (shipmentId) => data(api.get("repack-boxes", { params: { shipmentId } }));
+
+/* ---- receiving a transfer BY SCANNING ITS CARTONS ----
+   Beside the shipping-label path (verifyShipment), not instead of it: one label
+   is minted per shipment, so a transfer arriving as five cartons needs the IDs
+   already printed on those cartons. receiveScan resolves ONE code (shipping
+   label, lot number, bulk packaging / inner box, repack box or unit) and moves
+   nothing; receiveUnits lands what was scanned, and may be run again later for
+   the rest. */
+export const getReceiveChecklist = (id) => data(api.get(`shipments/${id}/receive-checklist`));
+export const receiveScan = (id, body) => data(api.post(`shipments/${id}/receive-scan`, body));
+export const receiveUnits = (id, body) => data(api.post(`shipments/${id}/receive-units`, body));
+export const unpackRepackBox = (id) => data(api.post(`repack-boxes/${encodeURIComponent(id)}/unpack`));
+// REMOVE a carton that was never dispatched — the box row goes, its units come
+// back loose. Distinct from unpack, which keeps the box as a history record.
+export const discardRepackBox = (id) => data(api.delete(`repack-boxes/${encodeURIComponent(id)}`));
+
+/* ---- COMPANY WAREHOUSE → SELLER transfer (warehouse-initiated, scan-verified) ----
+   Same supply rails as a seller's inbound request, opposite direction of
+   initiative: the warehouse scans the stock and pushes it to the seller, who
+   then receives it with the returned manifest code on their own Supply screen. */
+// Pickers: source warehouses this operator may send from + PC-authorized sellers.
+export const getSellerTransferOptions = () => data(api.get("supply-order/transfer/options"));
+// What the source warehouse currently holds, per product: available quantity
+// and how many LABELED units are on the shelf (the real scanning ceiling).
+export const getSellerTransferProducts = (warehouseId) =>
+  data(api.get("supply-order/transfer/products", { params: { warehouseId } }));
+// Resolve ONE scanned Lot Number / Bulk Packaging ID / Unit Code. Read-only.
+export const scanSellerTransferItem = (body) => data(api.post("supply-order/transfer/scan", body));
+// The single write: reserves, packs, ships and dispatches the scanned units.
+// Accepts a plain object OR a FormData (when challan/bill/bilty copies are
+// attached). axios sets the multipart boundary itself when given FormData, so
+// no Content-Type is forced here.
+export const confirmSellerTransfer = (body) => data(api.post("supply-order/transfer", body));
+// An APPROVED seller request turned into the transfer form's starting values —
+// seller, their warehouse, product and approved quantity.
+export const getSellerTransferPrefill = (supplyOrderId) =>
+  data(api.get(`supply-order/transfer/${supplyOrderId}/prefill`));
+// The transfer's paperwork and its uploaded copies, with fresh signed URLs.
+export const getSellerTransferDocuments = (supplyOrderId) =>
+  data(api.get(`supply-order/transfer/${supplyOrderId}/documents`));
+// The Shipment Box labels of one transfer, for re-printing.
+export const getSellerTransferBoxes = (supplyOrderId) =>
+  data(api.get(`supply-order/transfer/${supplyOrderId}/boxes`));
+// Recent transfers pushed from this warehouse, with live status.
+export const getSellerTransferHistory = (params = {}) => data(api.get("supply-order/transfer/history", { params }));
+
 /* ---- inter-warehouse stock requests (B asks A; A accepts/rejects) ---- */
 export const getTransferRequests = (params = {}) => data(api.get("transfer-requests", { params }));
 export const createTransferRequest = (body) => data(api.post("transfer-requests", body));
@@ -100,7 +164,16 @@ export const acceptTransferRequest = (id, body = {}) => data(api.post(`transfer-
 export const rejectTransferRequest = (id, body = {}) => data(api.post(`transfer-requests/${id}/reject`, body));
 
 export const approveShipment = (id) => data(api.post(`shipments/${id}/approve`));
+// DISPATCH. Accepts a FormData so the DELIVERY CHALLAN (image or PDF) can
+// travel with the dispatch — axios sets the multipart boundary itself, so no
+// Content-Type is set here. A plain object still works unchanged: the route's
+// multer middleware passes a JSON body straight through.
 export const dispatchShipment = (id, body = {}) => data(api.post(`shipments/${id}/dispatch`, body));
+// Warehouse→warehouse transfer scan-out. The checklist is what the shipment
+// should contain; dispatchScan checks ONE code against it. Both read-only — the
+// dispatch call re-verifies the whole set server-side.
+export const getDispatchChecklist = (id) => data(api.get(`shipments/${id}/dispatch-checklist`));
+export const dispatchScan = (id, body) => data(api.post(`shipments/${id}/dispatch-scan`, body));
 export const verifyShipment = (id, body) => data(api.post(`shipments/${id}/verify`, body));
 // Inventory → Receive Lot: resolve an EXACT parent lot number to the incoming
 // transfer awaiting this warehouse. Read-only; confirm via verifyShipment.
@@ -108,8 +181,32 @@ export const getIncomingTransferByLot = (lot) => data(api.get("shipments/incomin
 // Company Warehouse Receive Lot: an EXACT parent lot booked to this warehouse
 // but awaiting its receipt (inTransitStock). Read-only.
 export const getIncomingLot = (lot) => data(api.get("lots/incoming", { params: { lot } }));
-// The ONLY call that turns that pending qty into this warehouse's stock.
+// The ONLY call that turns that pending qty into this warehouse's stock — for a
+// SINGLE-PACKAGE lot. A lot packed into boxes is refused here; see below.
 export const confirmLotReceipt = (id) => data(api.post(`lots/${id}/confirm-receipt`));
+
+// Read-only Lot Details page: lot + stock context + packaging + boxes + units
+// + ledger history in one request. Never used by the Inventory list. LIVE view:
+// its units are the ones CURRENTLY in this Inventory row.
+export const getLotDetails = (lotId) => data(api.get(`lots/${lotId}/details`));
+// WHICH unit numbers make up a lot row's available quantity right now, as
+// compressed ranges (Analytics → Product Details → View Available Units).
+export const getLotAvailableUnits = (lotId) => data(api.get(`lots/${lotId}/available-units`));
+
+// Read-only IMMUTABLE transfer snapshot for Warehouse → Transfer History → View.
+// Returns the SAME shape as getLotDetails, but the units/quantity are the
+// ORIGINAL arrival (reconstructed from originalQuantity + every unit ever minted
+// for the lot), so a later warehouse→warehouse transfer never shrinks it.
+export const getLotTransferSnapshot = (lotId) => data(api.get(`lots/${lotId}/transfer-snapshot`));
+
+/* ---- Bulk Packaging (one identity per PHYSICAL OUTER BOX of a lot) ---- */
+// Every box of a lot — drives the box list and the printable box labels.
+export const getBulkPackages = (lotId) => data(api.get(`lots/${lotId}/bulk-packages`));
+// Resolve ONE scanned Bulk Packaging ID. Read-only; moves nothing.
+export const getIncomingBox = (code) => data(api.get("lots/incoming-box", { params: { code } }));
+// Receive ONE box: books exactly that box's units. Atomic and once-only.
+export const receiveBulkPackage = (bulkPackagingId) =>
+  data(api.post("lots/receive-box", { bulkPackagingId }));
 export const deliverShipment = (id, body) => data(api.post(`shipments/${id}/deliver`, body));
 export const shipmentException = (id, body) => data(api.post(`shipments/${id}/exception`, body));
 export const getDiscrepancies = (params = {}) => data(api.get("shipments/discrepancies", { params }));
@@ -141,6 +238,10 @@ export const getPickList = (id) => data(api.get(`picklists/${id}`));
 export const pickLine = (id, body) => data(api.post(`picklists/${id}/pick`, body));
 // Direct order pick (no wave): { picks: [{ productId, serials?, qty?, binCode? }] }
 export const pickOrder = (id, body) => data(api.post(`picklists/order/${id}/pick`, body));
+// Resolve ONE code scanned in the Pick modal. The server decides — by exact
+// database lookup — whether it is a Bulk Packaging ID, a unit code or a lot
+// number, and returns the unit codes that scan selects. Read-only.
+export const pickScan = (body) => data(api.post('picklists/scan', body));
 export const getPackages = (params = {}) => data(api.get("packages", { params }));
 export const createPackage = (body) => data(api.post("packages", body));
 export const dispatchOrder = (body) => data(api.post("dispatch", body));
@@ -220,6 +321,9 @@ export const postReturn = (id) => data(api.post(`returns/${id}/post`));
 
 /* ---- unit barcodes / scan / recall (NEW backend: /api/units,/scan,/recall) ---- */
 export const getUnits = (params = {}) => data(api.get("units", { params }));
+// Unit-label count per lot, keyed by inventoryId — one call for every lot, so
+// the Labels dropdown can show each lot's remaining label capacity.
+export const getUnitCounts = () => data(api.get("units/counts"));
 export const generateUnits = (body) => data(api.post("units/generate", body));
 export const markUnitsPrinted = (serials) => data(api.post("units/print", { serials }));
 export const getUnitHistory = (serial) => data(api.get(`units/history/${serial}`));

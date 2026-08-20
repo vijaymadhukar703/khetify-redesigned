@@ -265,6 +265,8 @@ exports.updateStatus = async (req, res) => {
 const TransferRequest = require("../../model/Transport/TransferRequest");
 const Shipment = require("../../model/Transport/Shipment");
 const { warehouseScope } = require("../../services/warehouseScope");
+// Company → Warehouse rows label their source with the company's own name.
+const Company = require("../../model/Company/Company");
 const { shipmentRef } = require("../../services/shipmentService");
 
 // Condense a list of item names / lot numbers into one cell value:
@@ -318,6 +320,35 @@ exports.getHistory = async (req, res) => {
     // evict real shipments from the list.
     const excludeRequests =
       req.query.excludeRequests === "1" || req.query.excludeRequests === "true";
+    // TRANSFERS ONLY — Company → Transfer History (OPT-IN, default off).
+    //
+    // That page renders warehouse→warehouse movements and nothing else, but the
+    // union below was assembled from seller orders + EVERY shipment and only
+    // then capped at `limit`. A company with recent customer activity therefore
+    // spent the whole budget on rows the page discards, and the transfers its
+    // filters were meant to narrow never reached the response at all — which is
+    // exactly what "the filters don't filter" looked like.
+    //
+    // With this flag the query returns precisely what the page renders, so the
+    // status/warehouse/date/search conditions all apply BEFORE the cap and
+    // pagination pages through real results.
+    const transfersOnly =
+      req.query.transfersOnly === "1" || req.query.transfersOnly === "true";
+
+    // STATUS BUCKETS — the Company filter offers "In Transit" and "Received",
+    // which are GROUPS of pipeline statuses rather than single values (a
+    // `dispatched` or `arrived` transfer is in transit; a `partially_received`
+    // one has been received). Resolved in the QUERY so the bucket narrows rows
+    // before the cap. OPT-IN: ?status= keeps its exact-match meaning for every
+    // existing caller.
+    const STATUS_BUCKETS = {
+      received: ["received", "partially_received", "delivered", "fulfilled", "completed"],
+      in_transit: [
+        "draft", "planned", "picking", "picked", "packed", "approved", "loading",
+        "pending", "dispatched", "in_transit", "arrived", "verifying",
+      ],
+    };
+    const statusBucket = STATUS_BUCKETS[req.query.statusBucket] || null;
     // Honour an explicit ?warehouseId, but never outside the caller's scope.
     const whFilter = scoped
       ? (warehouseId && scope.map(String).includes(String(warehouseId)) ? [warehouseId] : scope)
@@ -326,18 +357,54 @@ exports.getHistory = async (req, res) => {
       ? [{ fromWarehouseId: { $in: whFilter } }, { toWarehouseId: { $in: whFilter } }]
       : null;
 
+    // DATE RANGE — INCLUSIVE of both days.
+    //
+    // The client sends calendar days ("2025-12-31"), which `new Date()` reads as
+    // UTC MIDNIGHT. Comparing a mid-day timestamp against that raw To value cut
+    // the entire final day out of the range: a transfer created at 09:15 on 31
+    // Dec was excluded from a 01 Jan → 31 Dec filter. Widening To to the end of
+    // its day is the fix; From already meant the start of its day.
+    const dayStart = (v) => { const d = new Date(v); return Number.isNaN(+d) ? null : (/^\d{4}-\d{2}-\d{2}$/.test(v) ? new Date(`${v}T00:00:00.000Z`) : d); };
+    const dayEnd = (v) => { const d = new Date(v); return Number.isNaN(+d) ? null : (/^\d{4}-\d{2}-\d{2}$/.test(v) ? new Date(`${v}T23:59:59.999Z`) : d); };
+    const fromAt = from ? dayStart(from) : null;
+    const toAt = to ? dayEnd(to) : null;
+    // A backwards range is a mistake worth reporting, not an empty list to stare
+    // at. Reported only for the Company view, so no existing caller gains a new
+    // failure mode.
+    if (transfersOnly && fromAt && toAt && fromAt > toAt) {
+      return res.status(400).json({ success: false, message: "From date cannot be later than To date" });
+    }
+    // The Transfer History filter bar specifies a RANGE: with only one end
+    // filled in there is no range to apply, so the date filter is ignored.
+    // Every other caller keeps applying whichever bound it sent.
+    const halfOpen = transfersOnly && !(fromAt && toAt);
     const dateBetween = (d) => {
-      if (from && d < new Date(from)) return false;
-      if (to && d > new Date(to)) return false;
+      if (halfOpen) return true;
+      if (fromAt && d < fromAt) return false;
+      if (toAt && d > toAt) return false;
       return true;
     };
 
     const out = [];
+    // FREE-TEXT HAYSTACK, per row — everything Search must match, UNCONDENSED.
+    // The Item and Lot No. columns show a summarised "First +N more", so a
+    // multi-lot transfer could only ever be found by its FIRST product or lot;
+    // and the product CODE was never in the response at all. Rows with no entry
+    // here fall back to the original ref/party/item/lot concatenation, leaving
+    // Order History's search exactly as it was.
+    const haystack = new Map();
+    const indexRow = (row, ...parts) => {
+      haystack.set(row, parts.flat().filter(Boolean).map(String).join(" ").toLowerCase());
+      return row;
+    };
 
     // 1) Seller / customer orders — skipped entirely for a warehouse-scoped
     //    caller: an order has no warehouse dimension, so it can never be "this
     //    warehouse's" movement.
-    if (!scoped && (!type || type === "seller" || type === "order")) {
+    //    Skipped for ?transfersOnly=1 too: a sale is not a transfer, and letting
+    //    orders into the union only for the page to drop them is what starved
+    //    Transfer History of the rows its filters act on.
+    if (!scoped && !transfersOnly && (!type || type === "seller" || type === "order")) {
       const f = { companyId };
       if (status) f.status = status;
       if (sellerId) f.customerId = sellerId;
@@ -403,6 +470,9 @@ exports.getHistory = async (req, res) => {
     if (!type || type === "shipment") {
       const f = { companyId };
       if (status) f.status = status;
+      // Bucket filtering, in the query. Only when no exact ?status= was given,
+      // so an explicit status always wins.
+      else if (statusBucket) f.status = { $in: statusBucket };
       if (whOr) f.$or = whOr;
       // WAREHOUSE-HISTORY mode shows warehouse TRANSFERS only — never "Sales".
       // `toType` is the real stored discriminator (enum customer|warehouse|
@@ -411,11 +481,15 @@ exports.getHistory = async (req, res) => {
       // else (customer / seller supply / vendor) => "Sales". Filtering on the
       // same field keeps the API and the Type column consistent by construction,
       // so a Sales row can never reach the list, the cards or the totals.
-      if (warehouseOnly) f.toType = "warehouse";
+      // Company → Transfer History wants the same thing, for the same reason.
+      if (warehouseOnly || transfersOnly) f.toType = "warehouse";
       const shipments = await Shipment.find(f)
         .sort({ createdAt: -1 }).limit(limit)
         .populate("fromWarehouseId", "name").populate("toWarehouseId", "name")
-        .populate("lines.productId", "productName price mrp").lean();
+        // ADDITIVE projection: the product CODE is a documented Search target and
+        // was not being fetched at all. Both spellings are selected because the
+        // catalogue carries `skuNumber` and the newer `product_code`.
+        .populate("lines.productId", "productName price mrp skuNumber product_code").lean();
       for (const s of shipments) {
         if (!dateBetween(s.createdAt)) continue;
         const lines = s.lines || [];
@@ -425,7 +499,7 @@ exports.getHistory = async (req, res) => {
           (sum, l) => sum + (l.qty || 0) * (l.productId?.price || l.productId?.mrp || 0),
           0,
         );
-        out.push({
+        const row = {
           id: s._id,
           kind: "shipment",
           // Additive (non-breaking) field: lets the UI label a warehouse→warehouse
@@ -451,15 +525,137 @@ exports.getHistory = async (req, res) => {
           units: lines.reduce((n, l) => n + (l.qty || 0), 0),
           date: s.createdAt,
           timeline: (s.statusHistory || []).map((e) => ({ step: e.status, at: e.at })),
+        };
+        out.push(row);
+        // Searchable on: reference, both warehouse names, and EVERY line's
+        // product name, product code and lot/batch number — the raw values, not
+        // the "First +N more" the columns display.
+        indexRow(
+          row, row.ref, row.from, row.to,
+          lines.map((l) => l.productId?.productName),
+          lines.map((l) => l.productId?.skuNumber),
+          lines.map((l) => l.productId?.product_code),
+          lines.map((l) => l.lotNumber),
+          lines.map((l) => l.batchNumber),
+        );
+      }
+    }
+
+    // 4) COMPANY → WAREHOUSE lot assignments (INCOMING for the destination).
+    //
+    //    WHY THIS BLOCK EXISTS. Blocks 2 and 3 read TransferRequest and Shipment.
+    //    A Company → Warehouse move writes NEITHER: lotController.receiveLot
+    //    calls lotService.receiveLot({ pendingReceipt: true }) for a
+    //    company_admin creating a lot against a warehouseId, which only books
+    //    the qty onto the destination Inventory row (inTransitStock +
+    //    receiving_status "pending"), and lotService.confirmLotReceipt then
+    //    flips it to receiving_status "received". No SH-* / TR-* document is
+    //    ever created, which is exactly why these transfers were invisible here.
+    //    The source of truth is therefore the Inventory row itself.
+    //
+    //    ADDITIVE BY CONSTRUCTION — nothing above is touched: this only PUSHES
+    //    extra rows into the same `out` array, in the same shape, and is gated
+    //    on ?scope=warehouse so the main Company Transfer History
+    //    (pages/Company/OrderHistory.jsx, which never sends that flag) sees no
+    //    change at all. No inventory, stock figure or transfer workflow is
+    //    written to — this is a read-only projection.
+    if (warehouseOnly && whFilter && (!type || type === "transfer" || type === "shipment")) {
+      const f = {
+        ownerType: "company",
+        ownerId: companyId,
+        // Same scope array blocks 2/3 use, so this view can never widen it.
+        warehouseId: { $in: whFilter },
+        // The two provable markers of a Company → Warehouse assignment:
+        //  - receiving_status is written ONLY on the pendingReceipt path
+        //    (lotService.receiveLot / confirmLotReceipt / bulkPackageService),
+        //    i.e. by this flow and nothing else;
+        //  - lotOrigin "company" is the provenance stamp for a lot the MAIN
+        //    company minted, and covers legacy rows backfilled by
+        //    scripts/migrations/005-original-lot-quantity.js that predate
+        //    receiving_status.
+        //    A warehouse→warehouse destination copy is stamped "transfer", a GRN
+        //    posting "grn" and a warehouse's own Receive Lot "warehouse", so
+        //    none of them can be picked up here and double-counted against the
+        //    SH-* row block 3 already returns for them.
+        $or: [
+          { receiving_status: { $in: ["pending", "partially_received", "received"] } },
+          { lotOrigin: "company" },
+        ],
+      };
+      if (productId) f.productId = productId;
+
+      const [assignments, company] = await Promise.all([
+        Inventory.find(f)
+          .sort({ createdAt: -1 })
+          .limit(limit)
+          .populate("warehouseId", "name")
+          .populate("productId", "productName price mrp")
+          .lean(),
+        Company.findById(companyId).select("companyInfo.companyName").lean(),
+      ]);
+      const companyLabel = company?.companyInfo?.companyName || "Company";
+
+      for (const inv of assignments) {
+        // Received date when it has one, else when it was booked to the warehouse.
+        const when = inv.receivedAt || inv.createdAt;
+        if (!dateBetween(when)) continue;
+        // Derived, never stored: a row with stock still in transit is pending,
+        // one with none left to receive is received. receiving_status wins when
+        // present (it also carries "partially_received" for box-by-box lots).
+        const rowStatus =
+          inv.receiving_status ||
+          (Number(inv.inTransitStock || 0) > 0 ? "pending" : "received");
+        // ?status= is an exact match here, matching blocks 1 and 3.
+        if (status && rowStatus !== status) continue;
+        // The quantity the COMPANY sent. originalQuantity is the immutable
+        // write-once creation figure, so it stays correct after the warehouse
+        // has received the lot and inTransitStock has dropped to 0.
+        const qty =
+          Number(inv.originalQuantity) ||
+          Number(inv.inTransitStock || 0) ||
+          Number(inv.availableStock || 0);
+        const unitPrice = inv.productId?.price || inv.productId?.mrp || 0;
+        out.push({
+          id: inv._id,
+          // Distinct kind: the UI keys rows on `${kind}-${id}`, so this can
+          // never collide with a shipment or request row.
+          kind: "company_transfer",
+          // Reads "Transfer" through the shared movementKind() helper, same as
+          // a warehouse→warehouse shipment.
+          toType: "warehouse",
+          // Derived from the immutable _id like shipmentRef()/TR-, with its own
+          // prefix so an operator can tell a company assignment apart from an
+          // SH-* shipment at a glance.
+          ref: `CW-${String(inv._id).slice(-6).toUpperCase()}`,
+          party: `${companyLabel} → ${inv.warehouseId?.name || "?"}`,
+          from: companyLabel,
+          to: inv.warehouseId?.name || "—",
+          // fromWarehouseId stays null — the source is the Company, not a
+          // warehouse. toWarehouseId is what makes directionOf() in the UI
+          // resolve this row as "Incoming" for the destination warehouse.
+          fromWarehouseId: null,
+          toWarehouseId: inv.warehouseId?._id || inv.warehouseId || null,
+          itemName: inv.productId?.productName || "—",
+          lotNo: inv.lotNumber || inv.batchNumber || "—",
+          status: rowStatus,
+          total: qty * unitPrice,
+          units: qty,
+          date: when,
+          timeline: null,
         });
       }
     }
 
-    // Free-text filter across ref + party
+    // Free-text filter. Trimmed, so a code pasted with stray whitespace still
+    // matches. Rows indexed above search their full field set; the rest keep the
+    // original ref + party + item + lot behaviour.
     let rows = out;
     if (q) {
-      const needle = String(q).toLowerCase();
-      rows = rows.filter((r) => `${r.ref} ${r.party} ${r.itemName} ${r.lotNo}`.toLowerCase().includes(needle));
+      const needle = String(q).trim().toLowerCase();
+      if (needle) {
+        rows = rows.filter((r) =>
+          (haystack.get(r) || `${r.ref} ${r.party} ${r.itemName} ${r.lotNo}`.toLowerCase()).includes(needle));
+      }
     }
 
     rows.sort((a, b) => new Date(b.date) - new Date(a.date));

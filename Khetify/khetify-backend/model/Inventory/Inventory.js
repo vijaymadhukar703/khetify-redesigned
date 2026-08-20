@@ -59,6 +59,71 @@ const inventorySchema = new mongoose.Schema(
 
     lowStockThreshold: { type: Number, default: 0 },
 
+    // ── BULK PACKAGING ────────────────────────────────────────────────────
+    // Is this lot physically packed into MULTIPLE outer boxes? When true the
+    // lot has `number_of_boxes` BulkPackage rows (model/Inventory/BulkPackage.js)
+    // and the warehouse receives it ONE BOX AT A TIME by scanning each Bulk
+    // Packaging ID — scanning the parent lot number is refused.
+    //
+    // Invariant, enforced in lotService: number_of_boxes * units_per_box === the
+    // lot's created quantity.
+    //
+    // Every pre-existing lot has none of these fields set, which reads as
+    // has_bulk_packaging:false — the single-package flow, exactly as before.
+    has_bulk_packaging: { type: Boolean, default: false },
+    number_of_boxes: { type: Number, default: null },
+    units_per_box: { type: Number, default: null },
+
+    // ── COMPOSED LOT NUMBER ───────────────────────────────────────────────
+    // How the operator built this lot's number in the Create Lot modal: the
+    // ordered segments, kept so the SAME recipe can mint each box's and each
+    // unit's single-value ID later (services/lotNumberSegmentService.js). The
+    // lot number prints the ranges in full; a box or unit prints one member.
+    //
+    // Null for every Khetify-generated number, every GRN posting and every
+    // pre-existing lot — those keep their original ID formats untouched.
+    lot_number_segments: {
+      type: [
+        {
+          _id: false,
+          key: { type: String },
+          type: { type: String, enum: ["value", "range"] },
+          value: { type: String, default: null },
+          prefix: { type: String, default: null },
+          digits: { type: Number, default: null },
+          // Range parts only — "variable" counts one member per box/unit,
+          // "fixed" repeats one constant value for all of them.
+          mode: { type: String, enum: ["variable", "fixed", null], default: null },
+          // Range prefixes are stored uppercase, except where the generator
+          // spells one deliberately in mixed case ("BPinner").
+          keepCase: { type: Boolean, default: undefined },
+        },
+      ],
+      default: undefined,
+    },
+    // The lifetime serial this lot drew, kept as a number so box/unit IDs can be
+    // rebuilt without re-parsing the lot number string.
+    lot_number_serial: { type: Number, default: null },
+
+    // THREE-LEVEL PACKAGING (units inside inner boxes inside main boxes).
+    // number_of_boxes stays the INNER box count, so every existing reader is
+    // untouched; these two record how those inner boxes are grouped, which is
+    // what lets a label name the main box that holds one.
+    // Null on a two-level lot — the historical shape.
+    packaging_main_boxes: { type: Number, default: null },
+    packaging_boxes_per_main: { type: Number, default: null },
+
+    //   pending             — nothing received yet
+    //   partially_received  — some boxes received, some still awaited
+    //   received            — every box (or the whole single package) is on the books
+    // Only meaningful for a lot that was booked to a warehouse for receipt;
+    // left null for lots that were stocked immediately.
+    receiving_status: {
+      type: String,
+      enum: ["pending", "partially_received", "received", null],
+      default: null,
+    },
+
     // Weighted-average cost per unit, maintained on each receipt (GRN unitCost).
     // Drives stock valuation in reports.
     costPrice: { type: Number, default: 0 },

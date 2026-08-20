@@ -7,6 +7,23 @@ const CompanyResetPassword = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const token = searchParams.get("token") || "";
+  // The reset link a TEAM MEMBER (e.g. a Warehouse Manager) receives carries
+  // `type=member`, so the same page consumes the token on the member
+  // endpoint. Without the param this is the company flow, exactly as before.
+  //
+  // A SELLER member's link carries `type=seller` and is consumed on the seller
+  // endpoint — company members reset through /api/users and seller members
+  // through /api/seller, because each only matches its own `ownerType`. The
+  // page itself is identical for all three: same form, same rules, same
+  // messages. Only the URL the token is posted to differs.
+  const resetType = searchParams.get("type");
+  const isMember = resetType === "member";
+  const endpoint =
+    resetType === "seller"
+      ? "seller/reset-password"
+      : isMember
+        ? "users/reset-password"
+        : "company/reset-password";
 
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -25,7 +42,7 @@ const CompanyResetPassword = () => {
 
     try {
       setLoading(true);
-      await axios.post(`${config.BASE_URL}company/reset-password`, {
+      await axios.post(`${config.BASE_URL}${endpoint}`, {
         token,
         password: password.trim(),
       });

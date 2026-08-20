@@ -6,7 +6,8 @@ import config from "../../../config/config";
 const CompanyRegister = () => {
   const navigate = useNavigate();
   const [fullName, setFullName] = useState("");
-  const [emailOrPhone, setEmailOrPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [agreeTerms, setAgreeTerms] = useState(false);
@@ -27,26 +28,18 @@ const CompanyRegister = () => {
      newErrors.fullName = "Full name is required";
    }
 
-   if (!emailOrPhone) {
-     newErrors.emailOrPhone = "Email or Phone is required";
-   } else {
-     const isPhone = phoneRegex.test(emailOrPhone);
-     const isEmailFormat = emailRegex.test(emailOrPhone);
-     const looksLikeEmail = /[a-zA-Z]/.test(emailOrPhone) || emailOrPhone.includes(".") || emailOrPhone.includes("@");
+   // Email and Phone are two separate, independently required fields — both
+   // must be present and valid before the form can be submitted.
+   if (!email.trim()) {
+     newErrors.email = "Email is required";
+   } else if (!emailRegex.test(email.trim())) {
+     newErrors.email = "Please enter a valid email";
+   }
 
-     if (isPhone) {
-       // valid phone
-     } else if (isEmailFormat) {
-       // valid email
-     } else {
-       // if input looks like an email (contains letters or dot) show email error,
-       // otherwise it's likely an invalid phone number
-       if (looksLikeEmail) {
-         newErrors.emailOrPhone = "Please enter a valid email";
-       } else {
-         newErrors.emailOrPhone = "Phone number must be 10 digits";
-       }
-     }
+   if (!phone.trim()) {
+     newErrors.phone = "Phone number is required";
+   } else if (!phoneRegex.test(phone.trim())) {
+     newErrors.phone = "Phone number must be exactly 10 digits";
    }
 
    if (!password) {
@@ -75,17 +68,15 @@ const CompanyRegister = () => {
     if (!validateForm()) return;
 
     try {
-      let payload = {
+      // Email and Phone are mapped directly to the existing backend fields
+      // (`email` and `number`) — the API/DB shape is unchanged, only the UI
+      // now collects them as two separate, mandatory inputs.
+      const payload = {
         fullName,
+        email: email.trim(),
+        number: phone.trim(),
         password,
       };
-
-      // Decide email or phone
-      if (emailOrPhone.includes("@")) {
-        payload.email = emailOrPhone;
-      } else {
-        payload.number = emailOrPhone;
-      }
 
       const response = await axios.post(
         `${config.BASE_URL}company/register`,
@@ -157,27 +148,64 @@ const CompanyRegister = () => {
               )}
             </div>
 
-            {/* Email or Phone */}
+            {/* Email Address */}
             <div className="space-y-1">
               <label className="block text-sm font-semibold text-gray-700">
-                Email or Phone<span className="text-[#EA2831] ml-0.5">*</span>
+                Email Address<span className="text-[#EA2831] ml-0.5">*</span>
               </label>
 
               <input
-                value={emailOrPhone}
-                onChange={(e) => setEmailOrPhone(e.target.value)}
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 className={`block w-full h-12 px-4 py-3 rounded-lg border outline-none focus:ring-2 focus:ring-[#ea2a33]/10 ${
-                  errors.emailOrPhone
+                  errors.email
                     ? "border-red-500"
                     : "border-gray-300 focus:border-[#ea2a33]"
                 }`}
-                placeholder="Enter email or 10-digit phone"
-                type="text"
+                placeholder="Enter email address"
+                type="email"
+                autoComplete="email"
+                required
               />
 
-              {errors.emailOrPhone && (
+              {errors.email && (
                 <p className="text-red-500 text-xs font-medium mt-1">
-                  ⚠ {errors.emailOrPhone}
+                  ⚠ {errors.email}
+                </p>
+              )}
+            </div>
+
+            {/* Phone Number */}
+            <div className="space-y-1">
+              <label className="block text-sm font-semibold text-gray-700">
+                Phone Number<span className="text-[#EA2831] ml-0.5">*</span>
+              </label>
+
+              <input
+                value={phone}
+                onChange={(e) => {
+                  // Strip anything that isn't a digit and cap length at 10 so
+                  // invalid characters / extra digits can never be entered.
+                  const digitsOnly = e.target.value.replace(/\D/g, "").slice(0, 10);
+                  setPhone(digitsOnly);
+                }}
+                className={`block w-full h-12 px-4 py-3 rounded-lg border outline-none focus:ring-2 focus:ring-[#ea2a33]/10 ${
+                  errors.phone
+                    ? "border-red-500"
+                    : "border-gray-300 focus:border-[#ea2a33]"
+                }`}
+                placeholder="Enter 10-digit phone number"
+                type="tel"
+                inputMode="numeric"
+                pattern="[0-9]{10}"
+                maxLength={10}
+                autoComplete="tel"
+                required
+              />
+
+              {errors.phone && (
+                <p className="text-red-500 text-xs font-medium mt-1">
+                  ⚠ {errors.phone}
                 </p>
               )}
             </div>

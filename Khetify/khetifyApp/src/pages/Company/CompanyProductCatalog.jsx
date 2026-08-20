@@ -145,7 +145,7 @@ const CompanyProductCatalog = () => {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 flex-1 max-w-3xl">
             <div className="relative">
               <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-xl">search</span>
-              <input className="pl-10 w-full border-stone-200 rounded-xl focus:ring-[#EA2831] focus:border-[#EA2831] text-sm py-2.5 outline-none" placeholder="Search products..." type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+              <input className="pl-10 w-full border-stone-200 rounded-xl focus:ring-[#EA2831] focus:border-[#EA2831] text-sm py-2.5 outline-none" placeholder="Search by name or product code..." type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
             </div>
             <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} className="border-stone-200 rounded-xl text-sm py-2.5 bg-white outline-none">
               <option>Category</option>
@@ -173,6 +173,7 @@ const CompanyProductCatalog = () => {
               <thead>
                 <tr className="bg-stone-50/50 border-b border-stone-200">
                   <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Product Details</th>
+                  <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Product Code</th>
                   <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Category</th>
                   {/* <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">SKU Number</th> */}
                   <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Status</th>
@@ -198,6 +199,12 @@ const CompanyProductCatalog = () => {
                           <span className="text-[10px] text-stone-400 font-medium uppercase tracking-tighter">{product.unit}</span>
                         </div>
                       </div>
+                    </td>
+                    <td data-label="Product Code" className="px-6 py-4">
+                      {/* Server-generated, immutable identifier (3 letters + 3 digits). */}
+                      <span className="inline-block font-mono text-[11px] font-black tracking-widest text-stone-700 bg-stone-100 px-2.5 py-1 rounded-lg">
+                        {product.product_code || '---'}
+                      </span>
                     </td>
                     <td data-label="Category" className="px-6 py-4 text-xs text-stone-500 font-bold uppercase">{product.category}</td>
                     {/* <td data-label="SKU Number" className="px-6 py-4 text-[11px] font-bold font-mono text-stone-400 uppercase">{product.skuNumber || '---'}</td> */}
@@ -285,6 +292,11 @@ const CompanyProductCatalog = () => {
                 </div>
 
                 <div>
+                  <p className="text-[9px] font-bold text-stone-400 uppercase tracking-widest mb-1">Product Code</p>
+                  <p className="font-mono font-black text-sm text-stone-900 tracking-widest">{selectedProduct.product_code || '---'}</p>
+                </div>
+
+                <div>
                   <p className="text-[9px] font-bold text-stone-400 uppercase tracking-widest mb-1">Price (MRP)</p>
                   <p className="font-black text-base text-[#EA2831]">₹{selectedProduct.mrp}</p>
                 </div>
@@ -295,10 +307,10 @@ const CompanyProductCatalog = () => {
                 </div>
 
                 {/* Identification Section */}
-                <div>
+                {/* <div>
                   <p className="text-[9px] font-bold text-stone-400 uppercase tracking-widest mb-1">SKU Number</p>
                   <p className="font-mono font-bold text-sm text-stone-900 uppercase">{selectedProduct.skuNumber || '---'}</p>
-                </div>
+                </div> */}
 
                 <div>
                   <p className="text-[9px] font-bold text-stone-400 uppercase tracking-widest mb-1">HSN Code</p>
@@ -332,10 +344,10 @@ const CompanyProductCatalog = () => {
                 </div>
 
                 {/* Logistics & Handling */}
-                <div>
+                {/* <div>
                   <p className="text-[9px] font-bold text-stone-400 uppercase tracking-widest mb-1">Dispatch Location</p>
                   <p className="font-bold text-sm text-stone-900">{selectedProduct.dispatchLocation || 'N/A'}</p>
-                </div>
+                </div> */}
 
                 <div>
                   <p className="text-[9px] font-bold text-stone-400 uppercase tracking-widest mb-1">Packaging Type</p>

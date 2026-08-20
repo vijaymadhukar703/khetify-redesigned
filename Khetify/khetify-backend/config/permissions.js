@@ -277,6 +277,18 @@ const READONLY_SUFFIXES = [":read", ":view", ":export", ":read_own"];
  */
 const ROLE_DENIED = {
   company_admin: ["inventory:transfer", "shipment:create"],
+
+  // The SELLER mirror of the rule above, and for the same reason: stock is
+  // moved by the warehouse that physically holds it, not by the head office.
+  //
+  // seller_admin reviews and APPROVES customer orders and supply requests, and
+  // sees every shipment — but the picking, packing and dispatching is the
+  // seller_manager's job (their "transfer:*" is untouched). Without this deny,
+  // seller_admin's "*" would silently grant it back.
+  //
+  // Deliberately NOT denied: transfer:read (they still see everything) and
+  // order:* / supply:* (approving is theirs).
+  seller_admin: ["transfer:create"],
 };
 
 /** Capabilities denied to `role` (empty array if none). */

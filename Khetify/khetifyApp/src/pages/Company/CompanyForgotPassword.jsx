@@ -20,9 +20,19 @@ const CompanyForgotPassword = () => {
 
     try {
       setLoading(true);
-      await axios.post(`${config.BASE_URL}company/forgot-password`, {
-        email: email.trim().toLowerCase(),
-      });
+      const body = { email: email.trim().toLowerCase() };
+      // One login screen serves BOTH principals: the company OWNER (a Company
+      // document) and TEAM MEMBERS such as Warehouse Managers (User documents).
+      // The address alone can't tell them apart, so ask both endpoints and let
+      // whichever owns the account send the link. Both are enumeration-safe —
+      // they answer identically whether or not the account exists — so this
+      // leaks nothing and the company request is byte-identical to before.
+      // allSettled: one side having no such account must not fail the other.
+      const results = await Promise.allSettled([
+        axios.post(`${config.BASE_URL}company/forgot-password`, body),
+        axios.post(`${config.BASE_URL}users/forgot-password`, body),
+      ]);
+      if (results.every((r) => r.status === 'rejected')) throw results[0].reason;
       setSent(true);
     } catch (err) {
       setError(err.response?.data?.message || "Something went wrong. Try again.");

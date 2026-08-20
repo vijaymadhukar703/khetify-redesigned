@@ -29,6 +29,12 @@ const warehouseSchema = new mongoose.Schema(
       type: { type: String, enum: ["Point"], default: "Point" },
       coordinates: { type: [Number], default: [0, 0] }, // [lng, lat]
     },
+    // OPTIONAL Google Maps share link for the warehouse, captured on the
+    // Add Warehouse form. Purely informational — a human-openable pointer to
+    // the site. `location` above remains the machine-readable geo field used
+    // by the 2dsphere index, the nearest-warehouse lookup and the delivery
+    // geofence, and is unchanged.
+    mapsUrl: { type: String, trim: true },
     capacityUnits: { type: Number },
     // Radius (metres) around `location` within which a delivery may be
     // verified — the geofence check during shipment receipt.

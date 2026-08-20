@@ -40,13 +40,16 @@ describe("loginCompany tolerates a stale/legacy field on the document", () => {
 
 describe("registerCompany required-field validation", () => {
   test("rejects payloads missing/blank a required field", async () => {
-    const base = { fullName: "Acme Agro", email: "acme@x.com", password: "secret123" };
+    const base = { fullName: "Acme Agro", email: "acme@x.com", number: "9876543210", password: "secret123" };
     for (const body of [
       { ...base, fullName: "" },                 // blank name
       { ...base, fullName: "   " },              // whitespace name
-      { fullName: "Acme", password: "secret123" }, // no email/number
+      { fullName: "Acme", number: "9876543210", password: "secret123" }, // no email
+      { fullName: "Acme", email: "acme@x.com", password: "secret123" }, // no phone
       { ...base, email: "not-an-email" },        // bad email
-      { fullName: "Acme", number: "12345", password: "secret123" }, // bad phone
+      { ...base, number: "12345" },              // bad phone (too short)
+      { ...base, number: "98765432101" },        // bad phone (extra digit)
+      { ...base, number: "98765abcde" },         // bad phone (invalid characters)
       { ...base, password: "123" },              // short password
     ]) {
       const res = mockRes();
@@ -55,13 +58,15 @@ describe("registerCompany required-field validation", () => {
     }
   });
 
-  test("accepts a complete payload and creates a pending company", async () => {
+  test("accepts a complete payload (email AND phone) and creates a pending company", async () => {
     const res = mockRes();
-    await companyCtrl.registerCompany({ body: { fullName: "Acme Agro", email: "ok@x.com", password: "secret123" } }, res);
+    await companyCtrl.registerCompany({ body: { fullName: "Acme Agro", email: "ok@x.com", number: "9876543210", password: "secret123" } }, res);
     expect(res.statusCode).toBe(201);
     expect(res.body.token).toBeTruthy();
     const saved = await Company.findById(res.body.company._id);
     expect(saved.status).toBe("pending");
+    expect(saved.email).toBe("ok@x.com");
+    expect(saved.number).toBe("9876543210");
   });
 });
 

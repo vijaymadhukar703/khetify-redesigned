@@ -16,6 +16,7 @@ const mongoose = require("mongoose");
 
 const Company = require("../model/Company/Company");
 const Product = require("../model/Company/productModel");
+const { generateUniqueProductCode } = require("../services/productCodeService");
 const Warehouse = require("../model/Warehouse/Warehouse");
 const Location = require("../model/Warehouse/Location");
 const Inventory = require("../model/Inventory/Inventory");
@@ -165,6 +166,10 @@ async function resolveCompany(args) {
           productUpload: "uploaded",
           trackSerial: SERIAL_KEYS.has(p.key),
         },
+        // An upsert bypasses document middleware, so the schema hook can't
+        // assign the code — do it here. $setOnInsert leaves an already-seeded
+        // product's existing code alone.
+        $setOnInsert: { product_code: await generateUniqueProductCode(p.productName) },
       },
       { upsert: true }
     );

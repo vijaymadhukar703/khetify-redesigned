@@ -23,8 +23,17 @@ const shipmentLineSchema = new mongoose.Schema(
     pickedQty: { type: Number, default: 0 },
     serials: { type: [String], default: [] },
     receivedQty: { type: Number, default: null },
+    // NOTE: transfers are planned by product + quantity and identified by
+    // SCANNING AT DISPATCH (dispatchScanService), so a line carries no
+    // plan-time scan record. Shipments raised while the New Shipment form
+    // scanned may still hold a `lines[].scans` array in the database; it is
+    // read by nothing and is left in place deliberately — see the strict-mode
+    // note below.
   },
-  { _id: false }
+  // strict:false so a document written with the retired `lines[].scans` array
+  // still loads (and re-saves) intact instead of having the field silently
+  // stripped on the next write.
+  { _id: false, strict: false }
 );
 
 const statusEventSchema = new mongoose.Schema(
@@ -79,6 +88,50 @@ const shipmentSchema = new mongoose.Schema(
     deliveryChallanNumber: { type: String },
     invoiceChallanNumber: { type: String },
     gatePassNumber: { type: String },
+
+    // THE SCANNED DELIVERY CHALLAN itself, captured when a warehouse raises the
+    // shipment. Stored as the storage KEY (services/fileService), never as a
+    // guessed public URL — the reachable link is resolved at read time, which is
+    // what keeps a private S3 bucket working. `name`/`mime`/`size` are kept for
+    // display and are the values multer reported for the uploaded file.
+    challanDocument: {
+      key: { type: String },
+      name: { type: String },
+      mime: { type: String },
+      size: { type: Number },
+    },
+
+    /**
+     * BILTY and BILL — the two other despatch papers the Transfers table shows
+     * beside the challan. Named exactly as the SupplyOrder already names them
+     * (`biltyNumber` / `billNumber`), so the value means the same thing on both
+     * records and the mirror between them is a straight copy.
+     *
+     * Deliberately the SAME shape as `challanDocument` above: only the storage
+     * KEY is persisted and the reachable link is re-resolved on every read, so
+     * these reuse the existing upload and viewing path rather than growing a
+     * second one. Both additive and optional — every existing shipment keeps
+     * them unset and is completely unaffected.
+     *
+     * For a COMPANY → SELLER transfer these are mirrored across from the
+     * SupplyOrder, which already collects a bill and a bilty at dispatch. A
+     * warehouse → warehouse transfer has no capture for them yet, so its cells
+     * read as empty.
+     */
+    biltyNumber: { type: String },
+    biltyDocument: {
+      key: { type: String },
+      name: { type: String },
+      mime: { type: String },
+      size: { type: Number },
+    },
+    billNumber: { type: String },
+    billDocument: {
+      key: { type: String },
+      name: { type: String },
+      mime: { type: String },
+      size: { type: Number },
+    },
 
     plannedRoute: [{ stopType: String, refId: mongoose.Schema.Types.ObjectId, eta: Date }],
 

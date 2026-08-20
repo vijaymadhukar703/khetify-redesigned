@@ -1,45 +1,169 @@
 const Inventory = require("../model/Inventory/Inventory");
 const StockMovement = require("../model/Inventory/StockMovement");
-const Warehouse = require("../model/Warehouse/Warehouse");
 const UnitSerial = require("../model/Barcode/UnitSerial");
 const UnitEvent = require("../model/Barcode/UnitEvent");
 const { emitInventoryUpdate, checkLowStock } = require("./inventoryService");
 const { withTransaction } = require("./txn");
 const { frozenWarehouseIds } = require("./freezeService");
-const { nextSeq } = require("./counterService");
+const { generateKhetifyLotNumber, nextLotSerial, formatLotSerial, registerLotNumber, LOT_NUMBER_TAKEN } = require("./lotNumberService");
+const {
+  validateBulkPackaging,
+  createBulkPackages,
+  boxIdFor,
+  lotHasBoxes,
+  summaryForLot,
+  SCAN_BOXES_SEPARATELY,
+} = require("./bulkPackageService");
+const BulkPackage = require("../model/Inventory/BulkPackage");
+const { buildMainBoxId } = require("./lotNumberSegmentService");
+const { normalizeSegments, buildLotNumber, packagingSpans } = require("./lotNumberSegmentService");
+// Unit labels for a boxed lot are minted at creation — see the end of receiveLot.
+const { ensureLotUnitLabels } = require("./barcodeService");
 const { assertSellerWarehouse, assertCompanyWarehouse } = require("./warehouseOwnershipService");
 const { assertWarehouseCapacity } = require("./warehouseCapacityService");
 
-/* ---------- lot numbering ---------- */
-
-/** Resolve a warehouse's 3-letter code (uppercased), or "GEN". */
-async function warehouseCode3(companyId, warehouseId) {
-  if (!warehouseId) return "GEN";
-  const wh = await Warehouse.findOne({ _id: warehouseId, companyId }).select("code name");
-  const base = (wh?.code || wh?.name || "GEN").toUpperCase().replace(/[^A-Z0-9]/g, "");
-  return base ? base.slice(0, 3).padEnd(3, "X") : "GEN";
+/**
+ * Error carrying an HTTP status the controller can surface.
+ *
+ * NOTE: findPendingLot/confirmLotReceipt below already called httpErr() but it
+ * was never defined in this module, so every one of those branches threw
+ * "ReferenceError: httpErr is not defined" and the caller saw a 500 instead of
+ * the intended message ("Lot not found.", "already been received", …). Defining
+ * it here fixes those paths as a side effect of using it in the new code.
+ */
+function httpErr(message, status = 400) {
+  const err = new Error(message);
+  err.status = status;
+  return err;
 }
+
+/* ---------- lot numbering ---------- */
 
 /**
  * Auto lot number used when the operator doesn't type one when creating a lot.
- * Always the Khetify-generated number (KH-<WH>-<YYYYMM>-<seq>); the numbering
- * choice is made per-lot in the UI, not as a company-wide setting.
+ * Always the Khetify-generated shape:
+ *
+ *   KH-<COMPANY>-<PRODUCT_CODE>[-BP001~BPnnn]-<YYYY>-<MM>-<DD>-<SKU0001~SKUnnnn>-<SERIAL>
+ *   e.g. KH-BHO-PRE498-BP001~BP005-2026-07-25-SKU0001~SKU1000-0001
+ *
+ * The Bulk Packaging range appears only for a lot packed into boxes; the date is
+ * the lot's MANUFACTURING date. The numbering choice is made per-lot in the UI,
+ * not as a company-wide setting.
+ *
+ * Returns { lotNumber, serial, segments } — see services/lotNumberService.js.
  */
-async function autoLotNumber(companyId, warehouseId, session) {
-  return generateKhetifyLotNumber(companyId, warehouseId, session);
+async function autoLotNumber(
+  companyId,
+  { productId, mfgDate, boxCount = 0, innerCount = 0, unitCount = 0, session } = {}
+) {
+  const { segments, serial } = await generateKhetifyLotNumber(companyId, {
+    productId,
+    mfgDate,
+    boxed: boxCount > 0,
+    // A three-level lot has inner boxes as well as main ones, and each level
+    // gets its OWN range rather than the two being multiplied into one span.
+    nested: innerCount > 0,
+    session,
+  });
+  // Assembled here because only this call knows what the two ranges span: the
+  // Bulk Packaging range covers the boxes, the SKU range the lot's quantity.
+  // The serial closes it — see generateKhetifyLotNumber for why it is kept.
+  const body = buildLotNumber(segments, { boxCount, innerCount, unitCount });
+  return { lotNumber: `${body}-${formatLotSerial(serial)}`, serial, segments };
 }
 
 /**
- * Khetify-generated lot number: KH-<WH3>-<YYYYMM>-<seq4>,
- * e.g. KH-KHA-202606-0001 (Khargone, June 2026, first lot of the month).
- * Sequence is per (company, warehouse, month) via the atomic Counter.
+ * Lot origins whose numbers are claimed in the LotNumber registry: the lots a
+ * human MINTS through Create Lot (Main Company) or Receive Lot (Company
+ * Warehouse). A GRN carries the supplier's own lot codes — two suppliers may
+ * legitimately reuse a code across products — so GRN postings are left out, as
+ * are unlabelled/legacy callers.
  */
-async function generateKhetifyLotNumber(companyId, warehouseId, session) {
-  const wh3 = await warehouseCode3(companyId, warehouseId);
-  const now = new Date();
-  const period = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
-  const seq = await nextSeq(companyId, `kh-lot-${wh3}-${period}`, session);
-  return `KH-${wh3}-${period}-${String(seq).padStart(4, "0")}`;
+const REGISTERED_LOT_ORIGINS = new Set(["company", "warehouse"]);
+
+/**
+ * A BOX ID CLASH, named — and told which parts can actually resolve it.
+ *
+ * The SKU range is deliberately left out of a box ID (a box is not a unit), so
+ * changing it cannot separate two lots' boxes. Saying so is the difference
+ * between a message the operator can act on and one that sends them in circles.
+ */
+/**
+ * The lot cannot tell its OWN boxes apart. Distinct from MSG_BOX_ID_TAKEN: no
+ * other lot is involved, so the parts that usually resolve a clash (Batch, the
+ * date) are irrelevant — the number is missing a packaging level.
+ */
+const MSG_BOX_ID_SELF_CLASH = (boxId) =>
+  `This lot would give two different boxes the same Bulk Packaging ID (${boxId}). `
+  + "Boxes are packed inside main boxes, so the lot number needs an Inner Box part "
+  + "— tick it (set to Variable) so a box and the main box holding it get different IDs.";
+
+const MSG_BOX_ID_TAKEN = (boxId, onLot) =>
+  `Bulk Packaging ID ${boxId} is already used by lot ${onLot}. `
+  + "A box ID is built from the same parts as the lot number WITHOUT the SKU range, "
+  + "so change a part that appears in it — Bulk Packaging, Batch or the date.";
+
+/**
+ * The FIRST box ID this lot would mint that another lot already owns, or null.
+ *
+ * Read-only, and run before anything is written, so a refusal costs nothing. It
+ * mints the very IDs createBulkPackages would (boxIdFor / buildMainBoxId), so
+ * the two can never disagree about what the clash is.
+ *
+ * A box belonging to a row of the SAME lot number is not a clash — receiveLot
+ * upserts, and a top-up receive into an existing lot re-runs this path while
+ * createBulkPackages is idempotent for it.
+ */
+async function firstTakenBoxId(companyId, { lotNumber, segments, lotSerial, packaging, nestedBoxes, session } = {}) {
+  // The shape boxIdFor / buildMainBoxId read a lot through.
+  const probe = {
+    lotNumber,
+    batchNumber: lotNumber,
+    lot_number_segments: segments || null,
+    lot_number_serial: lotSerial || null,
+    packaging_boxes_per_main: nestedBoxes?.boxesPerMain || null,
+  };
+
+  const ids = [];
+  for (let i = 1; i <= Number(packaging.numberOfBoxes); i += 1) ids.push(boxIdFor(probe, i));
+  if (nestedBoxes) {
+    for (let i = 1; i <= nestedBoxes.mainBoxes; i += 1) {
+      const id = buildMainBoxId(probe, i);
+      if (id) ids.push(id);
+    }
+  }
+
+  // A LOT THAT CLASHES WITH ITSELF — checked before anything is looked up,
+  // because no other lot has to exist for this to fail.
+  //
+  // Every box of a lot needs its own ID, and the number is the only thing that
+  // supplies one. When a packaging level has no part in the number, the boxes at
+  // that level render identically: a main box states the inner span it holds
+  // ("...-IB01~IB03") where an inner box states its own member ("...-IB01"), so
+  // with no inner part BOTH come out as the bare value segments and the lot mints
+  // the same ID twice.
+  //
+  // This used to be invisible here — the candidates were de-duplicated into a Set
+  // and only compared against OTHER lots — so the collision surfaced from
+  // insertMany as a raw E11000 on `bulkpackages`, which lotController can only
+  // report as "a Bulk Packaging ID that already exists". It does not exist; the
+  // lot is about to create it twice, and no amount of changing the Batch or the
+  // date can help. Naming the missing part is the only actionable message.
+  //
+  // Khetify-generated numbers never reach this: khetifyLotSegments always emits
+  // the inner range for a nested lot (services/lotNumberService.js).
+  const firstSelfDupe = ids.find((id, i) => id && ids.indexOf(id) !== i);
+  if (firstSelfDupe) throw httpErr(MSG_BOX_ID_SELF_CLASH(firstSelfDupe), 400);
+
+  const taken = await BulkPackage.find({
+    bulk_packaging_id: { $in: [...new Set(ids.filter(Boolean))] },
+    lot_number: { $ne: lotNumber },
+  })
+    .select("bulk_packaging_id lot_number")
+    .session(session || null)
+    .lean();
+
+  return taken.length ? { id: taken[0].bulk_packaging_id, lotNumber: taken[0].lot_number } : null;
 }
 
 /* Ledger writer (same shape inventoryService uses internally).
@@ -136,20 +260,38 @@ async function getLots(ownerId, { ownerType = "company", productId, warehouseId,
 
 /**
  * Find the lot AWAITING RECEIPT at this warehouse, by EXACT parent lot number.
- * Read-only — moves nothing. Normalisation is trim + uppercase only; the lot
- * number is matched verbatim (never partial/prefix).
+ *
+ * Read-only — moves nothing. The scanned string is trimmed and then matched
+ * WHOLE against the stored number: it is never parsed, split or pattern-tested,
+ * so a composed number carrying "/" or "~", with any number of parts, resolves
+ * exactly like a Khetify-generated one. Both the code as scanned and its
+ * uppercase form are tried, because stored numbers are uppercase.
  */
 async function findPendingLot(companyId, { lotNumber, allowedWarehouseIds = null }) {
-  const lot = String(lotNumber || "").trim().toUpperCase();
-  if (!lot) throw httpErr("Lot not found.", 404);
+  const raw = String(lotNumber || "").trim();
+  if (!raw) throw httpErr("Lot not found.", 404);
+  const forms = [raw, raw.toUpperCase()];
 
   const rows = await Inventory.find({
     ownerType: "company", ownerId: companyId,
-    $or: [{ lotNumber: lot }, { batchNumber: lot }],
+    $or: [{ lotNumber: { $in: forms } }, { batchNumber: { $in: forms } }],
   })
     .populate("productId", "productName skuNumber")
     .populate("warehouseId", "name code");
-  if (!rows.length) throw httpErr("Lot not found.", 404);
+  if (!rows.length) {
+    // Verbatim, with character codes — a label that encoded a sanitised version
+    // of the number looks identical on screen but can never match.
+    console.warn(
+      "[scan] no match on lot number",
+      JSON.stringify({
+        company: String(companyId),
+        scanned: raw,
+        length: raw.length,
+        charCodes: [...raw].map((ch) => ch.charCodeAt(0)).join(","),
+      })
+    );
+    throw httpErr("Lot not found.", 404);
+  }
 
   const pending = rows.filter((r) => (r.inTransitStock || 0) > 0);
   if (!pending.length) {
@@ -167,6 +309,15 @@ async function findPendingLot(companyId, { lotNumber, allowedWarehouseIds = null
   if (!mine.length) throw httpErr("This lot is not assigned to your warehouse.", 403);
 
   const row = mine[0];
+  // BULK PACKAGING: a lot packed into boxes must be received ONE BOX AT A TIME.
+  // Scanning the parent lot would book the whole quantity in a single go, which
+  // is exactly what the box-by-box flow exists to prevent.
+  if (await lotHasBoxes(row._id)) {
+    const err = httpErr(SCAN_BOXES_SEPARATELY, 409);
+    err.packaging = await summaryForLot(companyId, row._id);
+    throw err;
+  }
+
   return {
     inventoryId: row._id,
     lotNumber: row.lotNumber || row.batchNumber,
@@ -197,6 +348,10 @@ async function confirmLotReceipt(companyId, inventoryId, { performedBy, allowedW
   if (Array.isArray(allowedWarehouseIds) && !allowedWarehouseIds.map(String).includes(String(row.warehouseId))) {
     throw httpErr("This lot is not assigned to your warehouse.", 403);
   }
+  // BULK PACKAGING: never let the whole lot land in one confirm — each box is
+  // received by scanning its own Bulk Packaging ID.
+  if (await lotHasBoxes(row._id)) throw httpErr(SCAN_BOXES_SEPARATELY, 409);
+
   const qty = Number(row.inTransitStock || 0);
   if (qty <= 0) throw httpErr("This transfer has already been received.", 409);
 
@@ -206,7 +361,8 @@ async function confirmLotReceipt(companyId, inventoryId, { performedBy, allowedW
       { _id: row._id, ownerType: "company", ownerId: companyId, inTransitStock: { $gte: qty } },
       {
         $inc: { inTransitStock: -qty, offlineStock: qty, availableStock: qty },
-        $set: { receivedAt: new Date(), receivedBy: performedBy || null },
+        // Single-package lot: this one confirm IS the whole receipt.
+        $set: { receivedAt: new Date(), receivedBy: performedBy || null, receiving_status: "received" },
       },
       { new: true, session }
     );
@@ -258,6 +414,15 @@ async function receiveLot({
   productId,
   warehouseId = null,
   lotNumber,
+  // Segmented manual entry: the LEADING parts only — the serial is appended
+  // here, never sent by the client. Ignored when a full lotNumber is present.
+  lotNumberPrefix,
+  // COMPOSED manual entry: the ordered parts themselves. Preferred over
+  // lotNumberPrefix because the Bulk Packaging / SKU parts render as RANGES
+  // whose span is the box count and the lot quantity — values only this call
+  // knows. Kept on the row so each box and unit ID descends from the same
+  // recipe. See services/lotNumberSegmentService.js.
+  lotSegments,
   batchNumber,
   mfgBatchNo,
   expiryDate = null,
@@ -281,12 +446,42 @@ async function receiveLot({
   // Company original-lot register. Defaults to "unknown" rather than guessing —
   // an unlabelled row is reviewable, a mislabelled one is invisible.
   lotOrigin = "unknown",
+  // BULK PACKAGING — the lot is physically packed into `numberOfBoxes` outer
+  // boxes of `unitsPerBox` units each. When on, the lot gets one Bulk Packaging
+  // ID per box and the warehouse receives it box by box instead of in one go.
+  // Off (the default) is the historical single-package behaviour, unchanged.
+  hasBulkPackaging = false,
+  numberOfBoxes,
+  unitsPerBox,
+  // THREE-LEVEL PACKAGING. `numberOfBoxes` remains the INNER box count
+  // (main × per-main), so every existing reader is untouched; these two say how
+  // those inner boxes are grouped. Absent → the historical two-level lot.
+  mainBoxes,
+  boxesPerMain,
+  // Mint every box's unit labels once the lot exists (see the end of this
+  // function). Set by the Create Lot / Receive Lot endpoint; off for GRN
+  // postings and internal callers, which keep the on-demand labelling flow.
+  mintUnitLabels = false,
 }) {
   if (!productId || !qty || qty <= 0) {
     const err = new Error("productId, batchNumber and positive qty are required");
     err.status = 400;
     throw err;
   }
+  // BULK PACKAGING validation runs FIRST, before a lot number is minted or any
+  // stock is touched — a mismatched boxes × units-per-box must cost nothing.
+  // This is the authoritative check: the browser form enforces the same rule,
+  // but editing the quantity field there cannot get past this.
+  const packaging = validateBulkPackaging({ hasBulkPackaging, numberOfBoxes, unitsPerBox, qty });
+  // The three-level grouping, only when both counts are given AND they agree
+  // with the inner box count the payload already carries.
+  const mainCount = Math.trunc(Number(mainBoxes) || 0);
+  const perMain = Math.trunc(Number(boxesPerMain) || 0);
+  const nestedBoxes = packaging && mainCount > 0 && perMain > 0
+    && mainCount * perMain === packaging.numberOfBoxes
+    ? { mainBoxes: mainCount, boxesPerMain: perMain }
+    : null;
+
   // Lot number is the SINGLE identity. A manually-typed lotNumber wins; a
   // client-supplied batchNumber is honoured as the lot only when no lotNumber
   // was given (legacy callers) — never as a separate value. When neither is
@@ -294,13 +489,106 @@ async function receiveLot({
   // The batch column always SHADOWS the lot number so the two can never
   // diverge; it survives only as the unique-index key (CLAUDE.md invariant #3).
   let lot = lotNumber || batchNumber;
+  // Manual = the operator typed the number; generated = we mint it. Both end up
+  // in the same field, but only one of them is ours to guarantee the shape of.
+  let isManualLot = !!lot;
+  let lotSerial = null;
+  // SEGMENTED MANUAL: the operator chose the leading parts, we own the serial.
+  // It comes from the SAME lifetime per-(company, product) counter the Khetify
+  // number uses and is allocated inside THIS transaction, so two operators
+  // creating a lot at the same instant can never mint the same number. The
+  // client cannot supply or influence it.
+  // COMPOSED MANUAL: the number is assembled here from the operator's parts so
+  // the range parts can state their real spans — Bulk Packaging over the boxes,
+  // SKU over the lot quantity.
+  //
+  // NO SERIAL IS ADDED. The operator defined the whole format, so nothing may be
+  // appended that they did not choose. Uniqueness therefore has to be enforced
+  // rather than manufactured: the number must be genuinely free, checked below
+  // and guaranteed by the registry's unique index.
+  let segments = lot ? null : normalizeSegments(lotSegments);
+  // Only a HAND-BUILT composed number has no serial and therefore has to be
+  // proved unique. A generated one is closed by its serial, so it keeps the
+  // ordinary registry behaviour (a re-receive into the same lot is a top-up).
+  // Only a HAND-BUILT composed number has no serial and therefore has to be
+  // proved unique. A generated one is closed by its serial, so it keeps the
+  // ordinary registry behaviour (a re-receive into the same lot is a top-up).
+  const composedManual = !!segments;
+  if (segments) {
+    // Spans come from packagingSpans, the same rule the generated number below
+    // uses and the same one the Create Lot preview shows. Passing them by hand
+    // here is what made the stored number disagree with the preview: the INNER
+    // box count went in as `boxCount`, so the Bulk Packaging range spanned the
+    // inner boxes instead of the cartons and the Inner Box part, having no count
+    // of its own, rendered as nothing and vanished from the number.
+    lot = buildLotNumber(segments, packagingSpans({
+      qty,
+      numberOfBoxes: packaging?.numberOfBoxes || 0,
+      ...(nestedBoxes || {}),
+    }));
+    if (!lot) throw httpErr("Please fill in at least one part of the lot number.", 400);
+    isManualLot = true;
+
+    /**
+     * A SERIAL FOR THE BOX AND UNIT IDS — never for the lot number itself.
+     *
+     * A box ID is the lot number's parts MINUS the SKU range (a box is not a
+     * unit), and a unit ID collapses that range to one member starting at 001.
+     * So two composed lots differing only in their SKU span — say SKU001~SKU010
+     * and SKU001~SKU020 — minted byte-identical box IDs, inner box IDs, main
+     * carton IDs AND unit codes. The global unique indexes then refused the
+     * second lot, and told the operator to change the one part that cannot
+     * possibly help.
+     *
+     * A KHETIFY-GENERATED lot never had this problem, because its serial closes
+     * every derived ID (see withSerial / serialOf). This gives a composed lot
+     * the same thing. The LOT NUMBER is untouched — buildLotNumber above has
+     * already run and appends no serial, so the operator's format is still
+     * theirs in full.
+     *
+     * Allocated from the SAME lifetime per-(company, product) counter the
+     * generated number uses. `nextSeq` is an atomic $inc, so two operators
+     * saving at the same instant get different serials and cannot collide.
+     *
+     * BACKWARD COMPATIBLE BY CONSTRUCTION: a lot created before this has no
+     * stored serial, serialOf() returns "", and every one of its printed IDs
+     * still reads and scans exactly as it does today.
+     */
+    lotSerial = await nextLotSerial(ownerId, productId, session);
+  }
+  if (!lot && lotNumberPrefix) {
+    lotSerial = await nextLotSerial(ownerId, productId, session);
+    lot = `${String(lotNumberPrefix).trim().toUpperCase()}-${formatLotSerial(lotSerial)}`;
+    // The SHAPE is the operator's, so the registry records it as manual — but
+    // with the real serial, exactly like a generated number.
+    isManualLot = true;
+  }
   if (!lot) {
-    lot = await autoLotNumber(ownerId, warehouseId, session);
+    // KHETIFY-GENERATED. Its ranges span the same things the operator's do — the
+    // boxes and the lot quantity — and its segments are kept on the row so each
+    // box and unit ID descends from this number exactly as it does in the manual
+    // mode. The serial still closes it; nothing here can clash.
+    let generated;
+    ({ lotNumber: lot, serial: lotSerial, segments: generated } = await autoLotNumber(ownerId, {
+      productId,
+      mfgDate,
+      // Bulk range = the MAIN boxes; inner range = the boxes inside ONE of them.
+      // A two-level lot has no inner range and the bulk range spans its boxes,
+      // exactly as before. Derived by the same rule as the composed number above
+      // so the two shapes can never drift apart again.
+      ...packagingSpans({
+        qty,
+        numberOfBoxes: packaging?.numberOfBoxes || 0,
+        ...(nestedBoxes || {}),
+      }),
+      session,
+    }));
     if (!lot) {
       const err = new Error("productId, a lot number and positive qty are required");
       err.status = 400;
       throw err;
     }
+    segments = normalizeSegments(generated);
   }
   lotNumber = lot;
   batchNumber = lot;
@@ -321,8 +609,117 @@ async function receiveLot({
   // the lot identity, so a second receive into the same lot adds stock but must
   // leave the original creation figures alone.
   const insertOnlyFields = { originalQuantity: qty, lotOrigin };
+  // The recipe that built this number — generated or hand-composed — kept so
+  // each box and unit ID descends from it. Insert-only: the number is the row's
+  // identity, so a top-up receive must never re-write how it was formed.
+  //
+  // `lot_number_serial` closes every BOX and UNIT id this lot mints (withSerial
+  // / serialOf), which is what keeps them apart from another lot built out of
+  // the same parts. Stored for a composed number as well as a generated one —
+  // the LOT NUMBER still carries no serial either way, because buildLotNumber
+  // does not add one.
+  if (segments) {
+    insertOnlyFields.lot_number_segments = segments;
+    if (lotSerial) insertOnlyFields.lot_number_serial = lotSerial;
+  }
+  if (packaging) {
+    setFields.has_bulk_packaging = true;
+    setFields.number_of_boxes = packaging.numberOfBoxes;
+    setFields.units_per_box = packaging.unitsPerBox;
+    // How those inner boxes are grouped, so a label can name the main box that
+    // holds one. Only on a three-level lot.
+    if (nestedBoxes) {
+      setFields.packaging_main_boxes = nestedBoxes.mainBoxes;
+      setFields.packaging_boxes_per_main = nestedBoxes.boxesPerMain;
+    }
+  }
+  // A lot booked to a warehouse starts out awaiting receipt; one stocked
+  // immediately is already on the books. Insert-only so a later top-up receive
+  // can't reset a partially-received lot back to "pending".
+  if (pendingReceipt) insertOnlyFields.receiving_status = "pending";
+
+  // One Bulk Packaging ID per physical box, minted inside the same transaction
+  // as the lot itself. No-op when bulk packaging is off, and idempotent — a
+  // second receive into an existing lot row never doubles the boxes up.
+  const mintBoxes = async (invDoc, s) => {
+    if (!packaging) return;
+    await createBulkPackages({
+      companyId: ownerId,
+      productId,
+      lot: invDoc,
+      numberOfBoxes: packaging.numberOfBoxes,
+      unitsPerBox: packaging.unitsPerBox,
+      warehouseId,
+      session: s,
+    });
+  };
 
   const core = async (s) => {
+    // A COMPOSED number has no serial to keep it apart from an earlier lot, so
+    // it must be free before anything is written. The registry claim below is
+    // the atomic guarantee; this also catches a clash with a lot that never
+    // reached the registry (a GRN's supplier code, a legacy row), which would
+    // otherwise be silently TOPPED UP by the upsert further down instead of
+    // being reported as the duplicate it is.
+    if (composedManual) {
+      const clash = await Inventory.findOne({
+        ownerType: "company",
+        ownerId,
+        batchNumber: lot,
+      })
+        .select("_id")
+        .session(s || null);
+      if (clash) throw httpErr(LOT_NUMBER_TAKEN, 409);
+    }
+
+    // A BOX ID THAT IS ALREADY TAKEN — checked here, by name, before anything
+    // is written.
+    //
+    // A box ID is built from the SAME parts as the lot number MINUS the SKU
+    // range: a box is not a unit, so it carries no unit number. Two lots that
+    // differ only in that range therefore mint IDENTICAL box IDs, and the
+    // global unique index on `bulk_packaging_id` refuses the second one.
+    //
+    // That refusal used to surface as "This lot number already exists" — which
+    // is not true and sends the operator to change the one part that cannot
+    // help, since the SKU range is not in the box ID at all. Worse, on a
+    // standalone MongoDB (no transaction to roll back) the lot could be written
+    // and its labels silently fail, leaving a lot with no unit codes.
+    if (packaging) {
+      const clashingBox = await firstTakenBoxId(ownerId, {
+        lotNumber: lot,
+        segments,
+        // The SAME serial the boxes will actually be minted with, so the probe
+        // builds the very IDs createBulkPackages would. Composed lots carry one
+        // now too — without it this checked a shape that is no longer minted and
+        // reported a clash against every older lot built from the same parts.
+        lotSerial,
+        packaging,
+        nestedBoxes,
+        session: s,
+      });
+      if (clashingBox) throw httpErr(MSG_BOX_ID_TAKEN(clashingBox.id, clashingBox.lotNumber), 409);
+    }
+
+    // Claim the number in the lot-number registry (unique index on
+    // companyId+lotNumber) BEFORE any stock moves, so a duplicate — typed by
+    // hand or produced by a race — is rejected with nothing written. Only lots
+    // minted through Create Lot / Receive Lot are claimed; GRN and legacy
+    // callers keep their previous behaviour exactly.
+    if (REGISTERED_LOT_ORIGINS.has(lotOrigin)) {
+      await registerLotNumber({
+        companyId: ownerId,
+        productId,
+        lotNumber: lot,
+        source: isManualLot ? "manual" : "khetify",
+        serial: lotSerial,
+        // A composed number must be genuinely new — not even the same product
+        // may re-use it, because there is no serial to tell the two lots apart.
+        requireNew: composedManual,
+        session: s,
+      });
+    }
+
     // Capacity guard: this lot's qty must fit within the destination warehouse's
     // remaining space. Checked inside the txn so it sees earlier lines' stock-in
     // (e.g. a multi-line GRN) and the cap holds cumulatively.
@@ -350,6 +747,7 @@ async function receiveLot({
         },
         { new: true, upsert: true, session: s }
       );
+      await mintBoxes(pending, s);
       return pending;
     }
 
@@ -372,11 +770,53 @@ async function receiveLot({
       note: note || `Lot ${setFields.lotNumber} received`,
       session: s,
     });
+    // Boxes are a PHYSICAL identity, so they exist even when the lot is stocked
+    // straight away (nothing to scan-receive, but the labels still print).
+    await mintBoxes(doc, s);
     return doc;
   };
 
   // Run within the caller's transaction if given, else open our own.
   const inv = session ? await core(session) : await withTransaction(core);
+
+  // UNIT LABELS FOR THE WHOLE LOT, minted at creation rather than left for an
+  // operator to ask for. Generation fills a boxed lot's boxes in order, so a lot
+  // that was only ever partly generated had its first box fully labelled and the
+  // rest empty — a received box would then show "No unit labels generated for
+  // this box yet" while its neighbour listed all of them.
+  //
+  // EVERY LOT, not only a boxed one. This was gated on `packaging`, which is
+  // null when bulk packaging is off, so a SINGLE-PACKAGE lot was created with no
+  // unit labels at all: the Labels page opened on "0 of 10 unit(s) already
+  // labelled" and someone had to press Generate by hand, for a lot whose boxed
+  // neighbour had been labelled automatically. Nothing about the packaging
+  // decides whether a unit deserves an identity.
+  //
+  // ensureLotUnitLabels is lot-generic — it asks for the shortfall against the
+  // lot's created quantity and hands it to generateUnits, which is the very
+  // function the manual Generate button calls. So a single-package lot's codes
+  // come out in exactly the format they always did; only the trigger is new.
+  //
+  // OPT-IN (`mintUnitLabels`). Create Lot / Receive Lot asks for it; GRN
+  // postings, the seeder and every internal caller keep the on-demand flow,
+  // where the Labels page decides how many to print and when.
+  //
+  // Deliberately AFTER the transaction and best-effort: the lot is already
+  // committed, so a label failure must not turn a successful create into a 500.
+  // A create that FAILS never reaches this line, so a rolled-back lot can never
+  // leave unit codes behind. ensureLotUnitLabels is idempotent and the backfill
+  // script runs the same rule, so a lot that misses out here is repairable
+  // rather than broken.
+  if (mintUnitLabels) {
+    try {
+      await ensureLotUnitLabels(ownerId, inv._id, { performedBy });
+    } catch (err) {
+      console.warn(
+        "[lot] unit labels not minted at creation",
+        JSON.stringify({ lot: inv.lotNumber || inv.batchNumber, inventoryId: String(inv._id), error: err?.message })
+      );
+    }
+  }
 
   emitInventoryUpdate(inv);
   return inv;

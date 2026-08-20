@@ -3,7 +3,8 @@
     "allow": [
       "Bash(npx jest *)",
       "Bash(npx eslint *)",
-      "Bash(echo \"ESLINT_EXIT=$?\")"
+      "Bash(echo \"ESLINT_EXIT=$?\")",
+      "Bash(npx vite *)"
     ]
   }
 }

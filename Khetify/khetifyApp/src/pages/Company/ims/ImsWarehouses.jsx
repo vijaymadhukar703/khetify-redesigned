@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import { getWarehouses, createWarehouse, updateWarehouse, getLots, fmtDate } from '../../../lib/imsApi';
 import { Modal, Field, inputCls, PrimaryBtn } from './ImsUi';
@@ -6,6 +7,62 @@ import { usePermission } from '../../../context/PermissionContext';
 import { State, City } from 'country-state-city';
 
 const OTHER_CITY = '__other__';
+
+// ── WAREHOUSE MANAGER (company member) ──
+// A warehouse's manager is created WITH the warehouse; there is no separate
+// Add Member flow anymore. These rules mirror validators/userValidators.js
+// exactly, so the form and the API agree on what a valid manager looks like.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const validateManager = (m) => {
+  const v = {
+    name: m.name.trim(), email: m.email.trim(),
+    phone: m.phone.trim(), password: m.password.trim(),
+  };
+  const e = {};
+  if (!v.name) e.name = 'Manager name is required';
+  if (!v.email) e.email = 'Email is required';
+  else if (!EMAIL_RE.test(v.email)) e.email = 'Enter a valid email';
+  if (!v.phone) e.phone = 'Phone is required';
+  else if (!/^\d{10}$/.test(v.phone)) e.phone = 'Enter a valid 10-digit phone number';
+  if (!v.password) e.password = 'Password is required';
+  else if (v.password.length < 6) e.password = 'Password must be at least 6 characters';
+  return e;
+};
+
+// ── WAREHOUSE ADDRESS & MAP LINK ──
+// Address and Pincode are mandatory; the Google Maps link is OPTIONAL and must
+// never block a save. These mirror validators/warehouseValidators.js exactly,
+// so the form and the API agree.
+const MAPS_URL_RE = /^https?:\/\/\S+$/i;
+
+const validateWarehouse = (f) => {
+  const e = {};
+  if (!f.name.trim()) e.name = 'Warehouse name is required';
+  if (!f.state) e.state = 'State is required';
+  if (!f.city.trim()) e.city = 'City is required';
+  if (!f.line1.trim()) e.line1 = 'Address is required';
+  if (!f.pincode.trim()) e.pincode = 'Pincode is required';
+  else if (!/^\d{6}$/.test(f.pincode.trim())) e.pincode = 'Enter a valid 6-digit pincode';
+  // Optional: only a NON-EMPTY value is format-checked. Blank is always fine.
+  const link = f.mapsUrl.trim();
+  if (link && !MAPS_URL_RE.test(link)) {
+    e.mapsUrl = 'Enter a valid link starting with http:// or https://';
+  }
+  return e;
+};
+
+/** A saved warehouse's [lng, lat], or null when never set (missing or [0, 0]). */
+const coordsOf = (w) => {
+  const c = w?.location?.coordinates;
+  if (!Array.isArray(c) || c.length < 2) return null;
+  const [lng, lat] = c.map(Number);
+  if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
+  if (lng === 0 && lat === 0) return null;
+  return { lng, lat };
+};
+
+const FieldError = ({ msg }) => (msg ? <p className="text-xs font-medium text-[#EA2831] mt-1">⚠ {msg}</p> : null);
 
 /**
  * Occupancy figures from live units vs capacity.
@@ -46,6 +103,15 @@ const ImsWarehouses = () => {
     getLots().then((r) => r?.success && setLots(r.data)).catch(() => {});
   };
   useEffect(refresh, []);
+
+  // Deep link from the Inventory gate ("Create Warehouse"): /warehouses?new=1
+  // opens Add Warehouse straight away. Ignored for anyone without
+  // warehouse:manage, and a no-op for every normal visit to this page.
+  const [searchParams] = useSearchParams();
+  useEffect(() => {
+    if (searchParams.get('new') && canManageWarehouses) setShowCreate(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canManageWarehouses]);
 
   const byWarehouse = useMemo(() => {
     const map = {};
@@ -100,7 +166,7 @@ const ImsWarehouses = () => {
                   </div>
                 </div>
                 <p className="text-xs text-stone-400 mb-4">
-                  {[w.address?.city, w.address?.state].filter(Boolean).join(', ') || w.code || '—'}
+                  {[w.address?.city, w.address?.state, w.address?.pincode].filter(Boolean).join(', ') || w.code || '—'}
                 </p>
                 <div className="flex justify-between text-xs font-bold mb-1.5">
                   <span className="text-stone-900">{occ.units.toLocaleString('en-IN')} units</span>
@@ -183,15 +249,36 @@ const Meta = ({ label, value }) => (
 /** Read-only warehouse detail: profile + occupancy + the full lot list. */
 const WarehouseDetailModal = ({ warehouse: w, occ, onClose }) => {
   const info = occupancyInfo(occ.units, w.capacityUnits);
+  const coords = coordsOf(w);
+  // Prefer the saved share link; fall back to coordinates for older warehouses.
+  const mapsHref = w.mapsUrl || (coords ? `https://www.google.com/maps?q=${coords.lat},${coords.lng}` : null);
   const addr = [w.address?.line1, w.address?.city, w.address?.district, w.address?.state, w.address?.pincode]
     .filter(Boolean).join(', ');
   return (
     <Modal title={w.name} onClose={onClose} wide>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
         <Meta label="Code" value={w.code || '—'} />
-        <Meta label="Location" value={addr || '—'} />
+        <Meta label="Address" value={addr || '—'} />
         <Meta label="Capacity" value={w.capacityUnits ? `${w.capacityUnits.toLocaleString('en-IN')} units` : '—'} />
         <Meta label="In stock" value={`${occ.units.toLocaleString('en-IN')} units`} />
+      </div>
+
+      {/* Map location — the optional Google Maps link. Older records that only
+          have stored coordinates still get a working link from those. */}
+      <div className="mb-4">
+        <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400">Map Location</p>
+        {mapsHref ? (
+          <a
+            href={mapsHref}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-sm font-bold text-[#EA2831] hover:underline break-all"
+          >
+            <span className="material-symbols-outlined text-base">location_on</span> Open in Maps
+          </a>
+        ) : (
+          <p className="text-sm font-bold text-stone-800">Not set</p>
+        )}
       </div>
 
       {info && (
@@ -274,9 +361,38 @@ const WarehouseFormModal = ({ warehouse, onClose, onDone }) => {
     city: warehouse?.address?.city || '',
     state: warehouse?.address?.state || '',
     pincode: warehouse?.address?.pincode || '',
+    line1: warehouse?.address?.line1 || '',
     capacityUnits: warehouse?.capacityUnits ?? '',
+    // OPTIONAL Google Maps share link. Blank is a perfectly valid warehouse.
+    mapsUrl: warehouse?.mapsUrl || '',
   });
-  const u = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const [wErrors, setWErrors] = useState({});
+  // Editing a field clears its own message as it's fixed.
+  const clearErr = (k) => setWErrors((prev) => (prev[k] ? { ...prev, [k]: undefined } : prev));
+  const u = (k) => (e) => { setF({ ...f, [k]: e.target.value }); clearErr(k); };
+  // Pincode is digits only, capped at the 6 an Indian PIN has.
+  const onPincode = (e) => {
+    const digits = e.target.value.replace(/\D/g, '').slice(0, 6);
+    setF((prev) => ({ ...prev, pincode: digits }));
+    clearErr('pincode');
+  };
+
+  // Manager block — CREATE ONLY. Editing a warehouse never touches its
+  // manager (that account already exists and is managed from Team & Roles),
+  // so none of this renders or submits in edit mode.
+  const [m, setM] = useState({ name: '', email: '', phone: '', password: '' });
+  const [mErrors, setMErrors] = useState({});
+  // Editing a field clears its own message as it is fixed.
+  const um = (k) => (e) => {
+    setM((prev) => ({ ...prev, [k]: e.target.value }));
+    if (mErrors[k]) setMErrors((prev) => ({ ...prev, [k]: undefined }));
+  };
+  const onManagerPhone = (e) => {
+    const digits = e.target.value.replace(/\D/g, '').slice(0, 10);
+    setM((prev) => ({ ...prev, phone: digits }));
+    if (mErrors.phone) setMErrors((prev) => ({ ...prev, phone: undefined }));
+  };
+  const managerFilled = !!(m.name.trim() && m.email.trim() && m.phone.trim() && m.password.trim());
 
   const [stateIso, setStateIso] = useState(initialStateIso);
   const cities = useMemo(() => (stateIso ? City.getCitiesOfState('IN', stateIso) : []), [stateIso]);
@@ -301,15 +417,37 @@ const WarehouseFormModal = ({ warehouse, onClose, onDone }) => {
     const v = e.target.value;
     setOtherCity(v);
     setF((prev) => ({ ...prev, city: v }));
+    clearErr('city');
   };
 
   const submit = async () => {
+    // Address / Pincode / Location are mandatory in BOTH create and edit, so a
+    // warehouse can never be left without them. The backend re-validates the
+    // same rules on create.
+    const we = validateWarehouse(f);
+    setWErrors(we);
+    if (Object.keys(we).length) return;
+    // Create needs a valid manager; format errors surface here, and the
+    // backend re-validates the identical rules regardless.
+    if (!isEdit) {
+      const me = validateManager(m);
+      setMErrors(me);
+      if (Object.keys(me).length) return;
+    }
     // Edit keeps '' so the server can clear capacity; create omits it (undefined).
     const capacity = f.capacityUnits === '' ? (isEdit ? '' : undefined) : Number(f.capacityUnits);
     const payload = {
       name: f.name,
       code: f.code,
-      address: { city: f.city, state: f.state, pincode: f.pincode },
+      address: {
+        line1: f.line1.trim(),
+        city: f.city,
+        state: f.state,
+        pincode: f.pincode.trim(),
+      },
+      // Optional Google Maps link. Sent even when blank so an edit can CLEAR a
+      // previously saved link; the backend treats "" as "remove it".
+      mapsUrl: f.mapsUrl.trim(),
       capacityUnits: capacity,
     };
     try {
@@ -317,8 +455,18 @@ const WarehouseFormModal = ({ warehouse, onClose, onDone }) => {
         await updateWarehouse(warehouse._id, payload);
         toast('success', 'Warehouse updated');
       } else {
-        await createWarehouse(payload);
-        toast('success', 'Warehouse created');
+        // Warehouse + its manager in ONE call — the backend creates both
+        // together and assigns the manager to the new warehouse.
+        await createWarehouse({
+          ...payload,
+          manager: {
+            name: m.name.trim(),
+            email: m.email.trim(),
+            phone: m.phone.trim(),
+            password: m.password.trim(),
+          },
+        });
+        toast('success', 'Warehouse and manager created');
       }
       onDone();
     } catch (err) {
@@ -328,7 +476,10 @@ const WarehouseFormModal = ({ warehouse, onClose, onDone }) => {
   };
   return (
     <Modal title={isEdit ? 'Edit Warehouse' : 'Add Warehouse'} onClose={onClose}>
-      <Field label="Name *"><input className={inputCls} value={f.name} onChange={u('name')} /></Field>
+      <Field label="Name *">
+        <input className={inputCls} value={f.name} onChange={u('name')} />
+        <FieldError msg={wErrors.name} />
+      </Field>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4">
         <Field label="Code"><input className={inputCls} value={f.code} onChange={u('code')} placeholder="WH-JBP" /></Field>
         <Field label="Capacity (units)"><input type="number" className={inputCls} value={f.capacityUnits} onChange={u('capacityUnits')} /></Field>
@@ -337,6 +488,7 @@ const WarehouseFormModal = ({ warehouse, onClose, onDone }) => {
             <option value="">Select state…</option>
             {states.map((s) => <option key={s.isoCode} value={s.isoCode}>{s.name}</option>)}
           </select>
+          <FieldError msg={wErrors.state} />
         </Field>
         <Field label="City *">
           <select className={inputCls} value={cityChoice} onChange={onCityChange} disabled={!stateIso}>
@@ -344,13 +496,95 @@ const WarehouseFormModal = ({ warehouse, onClose, onDone }) => {
             {cities.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
             <option value={OTHER_CITY}>Other…</option>
           </select>
+          <FieldError msg={wErrors.city} />
         </Field>
       </div>
       {cityChoice === OTHER_CITY && (
         <Field label="Enter city"><input className={inputCls} value={otherCity} onChange={onOtherCity} placeholder="Type the city name" /></Field>
       )}
-      <Field label="Pincode"><input className={inputCls} value={f.pincode} onChange={u('pincode')} /></Field>
-      <PrimaryBtn disabled={!f.name || !f.state || !f.city} onClick={submit}>
+      <Field label="Address *">
+        <textarea
+          className={`${inputCls} min-h-[76px] resize-y`}
+          value={f.line1}
+          onChange={u('line1')}
+          placeholder="Building / plot, street, landmark"
+        />
+        <FieldError msg={wErrors.line1} />
+      </Field>
+      <Field label="Pincode *">
+        <input
+          className={inputCls}
+          type="text"
+          inputMode="numeric"
+          maxLength={6}
+          value={f.pincode}
+          onChange={onPincode}
+          placeholder="6-digit PIN code"
+        />
+        <FieldError msg={wErrors.pincode} />
+      </Field>
+
+      {/* OPTIONAL — a warehouse saves perfectly well with this left blank. */}
+      <Field label="Google Maps Location URL (Optional)">
+        <input
+          className={inputCls}
+          type="url"
+          inputMode="url"
+          value={f.mapsUrl}
+          onChange={u('mapsUrl')}
+          placeholder="Paste Google Maps share link (Optional)"
+        />
+        <FieldError msg={wErrors.mapsUrl} />
+      </Field>
+
+      {/* WAREHOUSE MANAGER — created and assigned to this warehouse on save. */}
+      {!isEdit && (
+        <div className="mt-6 pt-5 border-t border-stone-200">
+          <div className="flex items-start gap-2 mb-4">
+            <span className="material-symbols-outlined text-[#EA2831] text-[20px]">badge</span>
+            <div>
+              <h4 className="text-sm font-bold text-stone-900">Warehouse Manager</h4>
+              <p className="text-xs text-stone-500 mt-0.5">
+                This account is created with the warehouse and assigned to it. They sign in with the email and password below.
+              </p>
+            </div>
+          </div>
+
+          <Field label="Full Name *">
+            <input className={inputCls} value={m.name} onChange={um('name')} placeholder="Manager's full name" />
+            <FieldError msg={mErrors.name} />
+          </Field>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4">
+            <Field label="Email *">
+              <input className={inputCls} type="email" value={m.email} onChange={um('email')} placeholder="manager@company.com" />
+              <FieldError msg={mErrors.email} />
+            </Field>
+            <Field label="Phone Number *">
+              <input
+                className={inputCls}
+                type="tel"
+                inputMode="numeric"
+                maxLength={10}
+                value={m.phone}
+                onChange={onManagerPhone}
+                placeholder="10-digit mobile number"
+              />
+              <FieldError msg={mErrors.phone} />
+            </Field>
+          </div>
+          <Field label="Password *">
+            <input className={inputCls} type="password" value={m.password} onChange={um('password')} placeholder="At least 6 characters" />
+            <FieldError msg={mErrors.password} />
+          </Field>
+        </div>
+      )}
+      <PrimaryBtn
+        disabled={
+          !f.name.trim() || !f.state || !f.city || !f.line1.trim() || !f.pincode.trim() ||
+          (!isEdit && !managerFilled)
+        }
+        onClick={submit}
+      >
         <span className="material-symbols-outlined text-base">{isEdit ? 'save' : 'add_business'}</span> {isEdit ? 'Save Changes' : 'Create'}
       </PrimaryBtn>
     </Modal>

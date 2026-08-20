@@ -19,6 +19,7 @@ app.set('trust proxy', 1); // correct client IPs behind a proxy (rate-limit/logs
 /* ----- existing marketplace routes (stay under routes/Company/) ----- */
 const companyRoutes = require("./routes/Company/companyRoutes");
 const productRoutes = require("./routes/Company/productRoutes");
+const hsnRoutes = require("./routes/Master/hsnRoutes");
 
 /* ----- NEW: IMS routes (siblings of Company, NOT inside it) ----- */
 const subscriptionRoutes = require("./routes/Subscription/subscriptionRoutes");
@@ -30,6 +31,8 @@ const supportRoutes = require("./routes/Support/supportRoutes");
 const chatRoutes = require("./routes/Support/chatRoutes"); // company↔admin live support chat (company side)
 const adminChatRoutes = require("./routes/Support/adminChatRoutes"); // live support chat (admin side)
 const lotRoutes = require("./routes/Inventory/lotRoutes");
+// Repack cartons assembled at dispatch out of loose picked units.
+const repackRoutes = require("./routes/Inventory/repackRoutes");
 const transportRoutes = require("./routes/Transport/transportRoutes");
 const orderRoutes = require("./routes/Order/orderRoutes");
 const analyticsRoutes = require("./routes/Analytics/analyticsRoutes");
@@ -113,6 +116,7 @@ app.get("/healthz", (req, res) => {
 });
 
 app.use("/api/lots", lotRoutes);
+app.use("/api/repack-boxes", repackRoutes);
 app.use("/api/transport", transportRoutes);
 
 /* =========================
@@ -166,6 +170,7 @@ app.use("/api/company/certificates", companyCertRoutes); // PC: company certific
 app.use("/api/company/seller-documents", companySellerDocRoutes); // PC: verify/reject seller docs
 app.use("/api/company", companyRoutes);
 app.use("/api/product", productRoutes);
+app.use("/api/hsn", hsnRoutes); // GST rate master lookup (read-only)
 
 // Auth (identity + capabilities for the frontend)
 app.use("/api/auth", authRoutes);

@@ -38,9 +38,32 @@ const taxSchema = new mongoose.Schema(
 const orderItemSchema = new mongoose.Schema(
   {
     productId: { type: mongoose.Schema.Types.ObjectId, ref: "Product" },
+    // 🛒 STOREFRONT: which SellerListing this line was bought from. The order
+    //    only ever recorded productId, so "Buy it again" had no way to get back
+    //    to a purchasable listing (the same product can be listed by several
+    //    sellers at different prices). Additive and optional — POS/company
+    //    orders simply leave it unset, and older orders won't have it.
+    listingId: { type: mongoose.Schema.Types.ObjectId, ref: "SellerListing" },
     name: { type: String },
+    // 🖼️ STOREFRONT: product image AS SOLD. The order never stored one, so the
+    //    shopper's order history was a wall of text. Snapshotted at checkout so
+    //    it stays truthful even if the product is later edited or delisted.
+    image: { type: String },
     qty: { type: Number, required: true },
     price: { type: Number, required: true }, // unit price at time of sale
+    // 🏬 The warehouse assigned to fulfil THIS LINE, chosen by the seller when
+    //    they approve the order. Additive and optional.
+    //
+    //    A single-warehouse order sets the same id on every line (and also on
+    //    the order-level `sourceWarehouseId` below, so anything reading that
+    //    keeps working). A SPLIT order — where no one warehouse holds the whole
+    //    basket — sets different ids per line, and confirm then raises one
+    //    shipment per distinct warehouse so each warehouse only ever sees the
+    //    products it was actually assigned.
+    //
+    //    Null on every pre-existing order, which keeps the old behaviour of
+    //    drawing FEFO across all warehouses.
+    sourceWarehouseId: { type: mongoose.Schema.Types.ObjectId, ref: "Warehouse", default: null },
     pickedQty: { type: Number, default: 0 }, // direct-pick progress (no wave)
     allocations: { type: [allocationSchema], default: [] },
     taxes: { type: taxSchema, default: undefined },
@@ -88,8 +111,24 @@ const orderSchema = new mongoose.Schema(
       default: "pending",
     },
 
+    // 🏬 The warehouse fulfilling this order when it is fulfilled from ONE
+    //    warehouse — set alongside the per-line `items[].sourceWarehouseId`
+    //    whenever every line resolved to the same place. Left null for a SPLIT
+    //    order (no single warehouse is "the" source), so read the per-line
+    //    field when you need the answer for a specific product.
+    //
+    //    Additive and optional: every existing order leaves it null and behaves
+    //    exactly as before, where the fulfilling warehouse was whichever one
+    //    FEFO happened to draw the first lot from.
+    sourceWarehouseId: { type: mongoose.Schema.Types.ObjectId, ref: "Warehouse", default: null },
+
     placedAt: { type: Date, default: Date.now },
     dispatchedAt: { type: Date },
+    // 🛒 STOREFRONT: set when a shopper cancels their own order (only allowed
+    //    while it is still "pending", i.e. before the seller reserves stock).
+    cancelledAt: { type: Date },
+    // Why the shopper cancelled — picked from a list or free-typed ("Other").
+    cancelReason: { type: String },
   },
   { timestamps: true }
 );

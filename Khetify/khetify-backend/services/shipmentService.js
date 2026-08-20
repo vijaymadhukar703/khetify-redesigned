@@ -10,10 +10,20 @@ const Order = require("../model/Order/Order");
 const Package = require("../model/Outbound/Package");
 const UnitSerial = require("../model/Barcode/UnitSerial");
 const UnitEvent = require("../model/Barcode/UnitEvent");
+// Physical outer boxes of a lot — read here only, to group a transfer's serials
+// under the Bulk Packaging ID they travelled in (shipmentDetails).
+const BulkPackage = require("../model/Inventory/BulkPackage");
+const RepackBox = require("../model/Inventory/RepackBox");
 const { withTransaction } = require("./txn");
 const { withinGeofence } = require("./geoService");
 const { assertWarehouseCapacity } = require("./warehouseCapacityService");
 const barcodeService = require("./barcodeService");
+// planAllocation only — it SPLITS a product quantity across lots (earliest
+// expiry first) and writes nothing. lotService does not require this module
+// back, so there is no cycle.
+const lotService = require("./lotService");
+// Scan-out verification for warehouse→warehouse transfers (dispatch only).
+const { assertDispatchScanned } = require("./dispatchScanService");
 let emitToCompany = () => {};
 let emitToSeller = () => {};
 try { ({ emitToCompany, emitToSeller } = require("../sockets")); } catch { /* sockets optional in tests */ }
@@ -22,6 +32,32 @@ function httpErr(message, status = 400) {
   const err = new Error(message);
   err.status = status;
   return err;
+}
+
+/**
+ * Resolve actor ids to display names for READ-ONLY detail views.
+ *
+ * A shipment step can be taken by a warehouse USER or by the company owner —
+ * company-owner tokens are signed with `id === companyId`, so the same id space
+ * covers both collections and both must be consulted. Unknown ids are simply
+ * absent from the map, which renders as "—" rather than a raw ObjectId.
+ */
+async function actorNames(ids) {
+  const uniq = [...new Set((ids || []).filter(Boolean).map(String))];
+  if (!uniq.length) return new Map();
+  const User = require("../model/User/User");
+  const Company = require("../model/Company/Company");
+  const [users, companies] = await Promise.all([
+    User.find({ _id: { $in: uniq } }).select("name").lean(),
+    Company.find({ _id: { $in: uniq } }).select("companyInfo.companyName fullName").lean(),
+  ]);
+  const byId = new Map();
+  for (const u of users) if (u.name) byId.set(String(u._id), u.name);
+  for (const c of companies) {
+    const label = c.companyInfo?.companyName || c.fullName;
+    if (label && !byId.has(String(c._id))) byId.set(String(c._id), label);
+  }
+  return byId;
 }
 
 /**
@@ -42,6 +78,32 @@ function httpErr(message, status = 400) {
 function shipmentRef(shipment) {
   if (!shipment?._id) return null;
   return shipment.lrNumber || `SH-${String(shipment._id).slice(-6).toUpperCase()}`;
+}
+
+/**
+ * A REACHABLE link to this shipment's delivery challan scan, resolved from the
+ * stored key at read time (signed under the S3 driver, /uploads/<key> under
+ * local). Null when the shipment carries no challan document.
+ */
+async function challanUrl(shipment) {
+  const key = shipment?.challanDocument?.key;
+  if (!key) return null;
+  return require("./fileService").signedUrl(key);
+}
+
+/**
+ * The same resolver, for any stored despatch document on a shipment.
+ *
+ * `challanUrl` above is left exactly as it is because other callers use it by
+ * name; this is the general form the list uses for the BL and the Bill so all
+ * three documents are read through ONE code path instead of three copies.
+ * Returns null when nothing is stored, so a row without the paper skips the
+ * signing call entirely.
+ */
+async function shipmentDocUrl(shipment, field) {
+  const key = shipment?.[field]?.key;
+  if (!key) return null;
+  return require("./fileService").signedUrl(key);
 }
 
 /** Name off a populated warehouse ref; null when it is still a bare ObjectId. */
@@ -120,7 +182,7 @@ function emit(shipment) {
 async function createShipment(ownerArg, body) {
   const owner = normalizeOwner(ownerArg);
   const companyId = owner.ownerType === "company" ? owner.ownerId : undefined;
-  const { refType = "Manual", refId = null, fromWarehouseId = null, toType = "customer", toWarehouseId = null, toOwnerType = "company", toOwnerId = null, customerId = null, toLabel, lines = [], vehicleId, driverId, vehicleNo, driverName, driverPhone, transporter, ewayBillNo, lrNumber, freightCost, plannedRoute, performedBy } = body;
+  const { refType = "Manual", refId = null, fromWarehouseId = null, toType = "customer", toWarehouseId = null, toOwnerType = "company", toOwnerId = null, customerId = null, toLabel, lines = [], vehicleId, driverId, vehicleNo, driverName, driverPhone, transporter, ewayBillNo, lrNumber, freightCost, plannedRoute, deliveryChallanNumber, challanDocument, biltyNumber, biltyDocument, billNumber, billDocument, performedBy } = body;
   if (!toLabel) throw httpErr("toLabel is required");
   if (vehicleId) {
     const v = await Vehicle.findOne({ _id: vehicleId, ...warehouseOwnerScope(owner) });
@@ -130,10 +192,31 @@ async function createShipment(ownerArg, body) {
   // For warehouse transfers, enrich each line from its OWNER's source inventory
   // row. Supply shipments arrive with fully-built lines (FEFO-picked by the
   // supply controller) — pass them through.
+  //
+  // A line may name EITHER an exact lot (`inventoryId`, what Lots → Transfer and
+  // accepted stock requests send) OR just a PRODUCT and a quantity, which is
+  // what the warehouse New Shipment form sends: the operator says what and how
+  // much, and the lots are chosen here, earliest expiry first. Nothing is
+  // reserved or deducted either way — lotService.planAllocation only plans, and
+  // stock moves at dispatch.
   let enriched = lines;
   if (toType === "warehouse") {
     enriched = [];
     for (const l of lines) {
+      if (!l.inventoryId && l.productId) {
+        if (!fromWarehouseId) throw httpErr("A source warehouse is required to ship by product", 400);
+        const allocs = await lotService.planAllocation({
+          ownerType: owner.ownerType, ownerId: owner.ownerId,
+          productId: l.productId, qty: Number(l.qty), warehouseId: fromWarehouseId,
+        });
+        for (const a of allocs) {
+          enriched.push({
+            inventoryId: a.inventoryId, productId: l.productId,
+            lotNumber: a.lotNumber, batchNumber: a.batchNumber, qty: a.qty,
+          });
+        }
+        continue;
+      }
       const inv = await Inventory.findOne({ _id: l.inventoryId, ownerId: owner.ownerId, ownerType: owner.ownerType });
       if (!inv) throw httpErr(`Source inventory ${l.inventoryId} not found`, 404);
       enriched.push({ inventoryId: inv._id, productId: inv.productId, lotNumber: inv.lotNumber, batchNumber: inv.batchNumber, qty: Number(l.qty) });
@@ -146,6 +229,15 @@ async function createShipment(ownerArg, body) {
     refType, refId, fromWarehouseId, fromLabel: from?.name, toType, toWarehouseId,
     toOwnerType, toOwnerId: toOwnerId || (toOwnerType === "company" ? companyId : null), customerId, toLabel,
     lines: enriched, vehicleId, driverId, vehicleNo, driverName, driverPhone, transporter, ewayBillNo, lrNumber, freightCost,
+    // Delivery challan captured when the shipment is raised. Both are optional
+    // at this layer — the warehouse form requires them, other creators (Lots →
+    // Transfer, accepted stock requests, supply) raise shipments without one.
+    deliveryChallanNumber, ...(challanDocument?.key ? { challanDocument } : {}),
+    // BL and BILL — persisted exactly like the challan beside them: the number
+    // always, the document only when one was actually stored, so an absent file
+    // leaves the field unset rather than writing an empty sub-document.
+    ...(biltyNumber ? { biltyNumber } : {}), ...(biltyDocument?.key ? { biltyDocument } : {}),
+    ...(billNumber ? { billNumber } : {}), ...(billDocument?.key ? { billDocument } : {}),
     plannedRoute, status: "planned", statusHistory: [{ status: "planned", at: new Date(), byUserId: performedBy }],
   });
   return shipment;
@@ -232,11 +324,51 @@ async function packShipment(ownerArg, shipmentId, { performedBy } = {}) {
  * The manifest QR/barcode (qrPayload) is not secret: the sender can re-display
  * it any time. Receiving needs only this QR + destination-warehouse validation.
  */
-async function dispatchShipment(ownerArg, shipmentId, { performedBy, lat, lng } = {}) {
+async function dispatchShipment(ownerArg, shipmentId, { performedBy, lat, lng, scannedCodes } = {}) {
   const owner = normalizeOwner(ownerArg);
   const companyId = owner.ownerType === "company" ? owner.ownerId : undefined;
   const shipment = await Shipment.findOne({ _id: shipmentId, ...ownerScope(owner) });
   if (!shipment) throw httpErr("Shipment not found", 404);
+
+  // SCAN-OUT for a warehouse→warehouse transfer. Runs before the status gate
+  // and before anything moves, so a shipment that fails verification is left
+  // exactly as it was. No-op unless the caller actually supplied a scan, which
+  // keeps every existing dispatch path untouched.
+  if (companyId && Array.isArray(scannedCodes)) {
+    const verified = await assertDispatchScanned(companyId, shipment, scannedCodes);
+    /**
+     * WHAT WAS SCANNED IS WHAT LEAVES.
+     *
+     * The lines on a planned shipment are an ALLOCATION — chosen by earliest
+     * expiry when the transfer was raised, before a single carton was picked.
+     * The stock loop below deducts per line, so it was debiting the lots the
+     * PLAN named rather than the lots the operator actually scanned out. With
+     * two lots of one product (100 + 10) and a scan of 100 from the first and
+     * 4 from the second, the plan's split (10 + 94) emptied the wrong lot and
+     * left 6 in the other — exactly inverted.
+     *
+     * So the lines are rewritten from the verified scan before anything moves:
+     * one line per lot ACTUALLY scanned, carrying its own serials. Everything
+     * downstream — this deduction, the units marked shipped, and what the
+     * destination receives — then follows the physical goods.
+     *
+     * Only ever narrows to what the scan proved: assertDispatchScanned has
+     * already refused any code that is not on this shipment, not received, not
+     * at this warehouse, or not in stock.
+     */
+    if (verified?.byLot?.length) {
+      shipment.lines = verified.byLot.map((l) => ({
+        inventoryId: l.inventoryId,
+        productId: l.productId,
+        lotNumber: l.lotNumber,
+        batchNumber: l.batchNumber,
+        qty: l.qty,
+        serials: l.serials,
+        pickedQty: l.qty,
+        receivedQty: null,
+      }));
+    }
+  }
   // "picked"/"packed" are the Send-Stock pipeline states (transfer shipments);
   // "planned"/"approved"/"loading" stay dispatchable for back-compat.
   if (!["draft", "planned", "picked", "packed", "approved", "loading"].includes(shipment.status)) throw httpErr(`Cannot dispatch a ${shipment.status} shipment`, 409);
@@ -294,12 +426,27 @@ async function dispatchShipment(ownerArg, shipmentId, { performedBy, lat, lng } 
           if (!inv) throw httpErr(`No reservation to dispatch for lot ${line.lotNumber} — re-approve to allocate`, 409);
           await StockMovement.create([{ inventoryId: inv._id, productId: inv.productId, ownerType: srcOwnerType, ownerId: srcOwnerId, type: "supply_out", channel: "internal", quantity: -line.qty, balanceAfter: inv.availableStock, refType: "SupplyOrder", refId: shipment._id, performedBy, note: `Supply out (shipment ${shipment._id})` }], { session });
 
-          // The packed (or in-stock) labeled units of this lot go in-transit
-          // with the goods. Guarded — a no-op when no units exist.
-          const units = await UnitSerial.find({
+          // EXACTLY THE UNITS THE PICKER ACCEPTED go in-transit — they are
+          // recorded on the line at manifest time (supplyController.manifestLines).
+          //
+          // Selecting by lot + `.limit(line.qty)` instead hands out whichever
+          // units of the lot happen to sort first, which need not be the picked
+          // ones: a Bulk Packaging ID whose scan was REJECTED is still `in_stock`
+          // on the same lot, and its units — minted first — sorted ahead of the
+          // boxes that were actually picked. They shipped, landed at the seller's
+          // receipt, and showed up in Seller Lot Details. Honouring the recorded
+          // serials is what keeps a rejected package out of the transfer.
+          //
+          // No serials on the line = non-serialized stock, or a shipment planned
+          // before serials were carried: keep the original quantity-only path.
+          const pickedSerials = (line.serials || []).filter(Boolean);
+          const unitScope = {
             ownerType: srcOwnerType, ownerId: srcOwnerId, inventoryId: line.inventoryId,
             status: { $in: ["packed", "picked", "in_stock"] },
-          }).limit(line.qty).session(session);
+          };
+          const units = pickedSerials.length
+            ? await UnitSerial.find({ ...unitScope, serial: { $in: pickedSerials } }).session(session)
+            : await UnitSerial.find(unitScope).limit(line.qty).session(session);
           if (units.length) {
             await UnitSerial.updateMany(
               { _id: { $in: units.map((u) => u._id) } },
@@ -328,10 +475,21 @@ async function dispatchShipment(ownerArg, shipmentId, { performedBy, lat, lng } 
           // No-op when the lot has no child units (non-serialized stock is
           // completely unaffected). Creates/deletes nothing; serial, lotNumber,
           // productId and printed status are untouched.
-          const units = await UnitSerial.find({
+          //
+          // EXACTLY THE UNITS THAT WERE SCANNED, when the line records them.
+          // Taking any `line.qty` units of the lot marked arbitrary serials as
+          // shipped, so the codes that physically left were not the codes that
+          // disappeared from the source's unit list. A line with no serials
+          // (non-serialised stock, or a dispatch with no scan) keeps the
+          // original quantity-only path.
+          const shippedSerials = (line.serials || []).filter(Boolean);
+          const unitFilter = {
             ownerType: srcOwnerType, ownerId: srcOwnerId, inventoryId: line.inventoryId,
             status: { $in: ["packed", "picked", "in_stock"] },
-          }).limit(line.qty).session(session);
+          };
+          const units = shippedSerials.length
+            ? await UnitSerial.find({ ...unitFilter, serial: { $in: shippedSerials } }).session(session)
+            : await UnitSerial.find(unitFilter).limit(line.qty).session(session);
           if (units.length) {
             await UnitSerial.updateMany(
               { _id: { $in: units.map((u) => u._id) } },
@@ -451,6 +609,64 @@ async function markArrived(ownerArg, shipmentId, { driverId, lat, lng } = {}) {
  * receipt marks it "received" (stock updated). Lots stay in transit until
  * this runs. Every step lands in statusHistory with user/time/warehouse.
  */
+/**
+ * MOVE THE PHYSICAL CARTONS that the just-landed units came in.
+ *
+ * WHY BOTH FIELDS. `lot_id` is what a reader follows to find a box's parent lot
+ * (pickScanService.scanBulkPackage), `warehouse_id` is where the carton is
+ * booked (assertBoxOnShelf). Updating only one leaves the two disagreeing: with
+ * `warehouse_id` alone the location check passes and the lot check then refuses
+ * the same scan, because `lot_id` still resolves the source row.
+ *
+ * WHY MAIN BOXES ARE HANDLED SEPARATELY. On a three-level lot the units hang off
+ * the INNER boxes; a main box holds no units of its own, so it never appears in
+ * the unit set and would be stranded in the source warehouse while the boxes
+ * inside it moved. It is carried across only when EVERY inner box it holds has
+ * moved — a carton half of which is still at the source has not gone anywhere.
+ *
+ * Writes nothing else: `bulk_packaging_id`, `box_serial`, `box_level`,
+ * `parent_box_id`, `lot_number` and the receive history are all untouched, and a
+ * lot with no bulk packaging is a no-op.
+ */
+async function moveBoxesWithUnits({ companyId, units, toLotId, toWarehouseId, session }) {
+  const movedIds = [...new Set(
+    units.map((u) => u.bulk_packaging_record_id).filter(Boolean).map(String)
+  )];
+  if (!movedIds.length) return;
+
+  // The main boxes above the inner boxes that moved, and how many inner boxes
+  // each of them actually holds — a parent travels only when all of them did.
+  const moved = await BulkPackage.find({ _id: { $in: movedIds }, company_id: companyId })
+    .select("parent_box_id")
+    .session(session)
+    .lean();
+  const parentIds = [...new Set(moved.map((b) => b.parent_box_id).filter(Boolean).map(String))];
+
+  const wholeParents = [];
+  if (parentIds.length) {
+    const movedSet = new Set(movedIds);
+    const children = await BulkPackage.find({ parent_box_id: { $in: parentIds }, company_id: companyId })
+      .select("parent_box_id")
+      .session(session)
+      .lean();
+    const byParent = new Map();
+    for (const c of children) {
+      const key = String(c.parent_box_id);
+      if (!byParent.has(key)) byParent.set(key, []);
+      byParent.get(key).push(String(c._id));
+    }
+    for (const [parent, kids] of byParent) {
+      if (kids.every((id) => movedSet.has(id))) wholeParents.push(parent);
+    }
+  }
+
+  await BulkPackage.updateMany(
+    { _id: { $in: [...movedIds, ...wholeParents] }, company_id: companyId },
+    { $set: { lot_id: toLotId, warehouse_id: toWarehouseId } },
+    { session }
+  );
+}
+
 async function verifyReceipt(ownerArg, shipmentId, { verifierId, qr, warehouseId, allowedWarehouseIds = null, lat, lng, lines = [], performedBy }) {
   const owner = normalizeOwner(ownerArg);
   const companyId = owner.ownerType === "company" ? owner.ownerId : undefined;
@@ -530,9 +746,14 @@ async function verifyReceipt(ownerArg, shipmentId, { verifierId, qr, warehouseId
         await StockMovement.create([{ inventoryId: sellerLot._id, productId: line.productId, ownerType: "seller", ownerId: landOwnerId, type: "supply_in", channel: "internal", quantity: recvQty, balanceAfter: sellerLot.availableStock, refType: "SupplyOrder", refId: shipment.refId, performedBy, note: `Supply received (shipment ${shipment._id})` }], { session });
 
         // Path A: the in-transit (shipped) units of this lot become seller-owned.
+        // Narrowed to the line's recorded serials so ONLY units this shipment
+        // actually dispatched can ever become seller stock — a second guard on
+        // the same invariant dispatch enforces above.
+        const landSerials = (line.serials || []).filter(Boolean);
         const units = await UnitSerial.find({
           ownerType: "company", ownerId: companyId, inventoryId: line.inventoryId,
           status: "shipped", currentShipmentId: shipment._id,
+          ...(landSerials.length && { serial: { $in: landSerials } }),
         }).limit(recvQty).session(session);
         if (units.length) {
           await UnitSerial.updateMany(
@@ -608,6 +829,32 @@ async function verifyReceipt(ownerArg, shipmentId, { verifierId, qr, warehouseId
             { session }
           );
         }
+
+        // BOXES FOLLOW THEIR UNITS, for the same reason the units follow their
+        // lot — and they were the one thing this landing left behind.
+        //
+        // A BulkPackage row states its location TWICE: `lot_id` (the Inventory
+        // row the carton belongs to) and `warehouse_id` (where it is booked).
+        // Neither was touched here, so after a warehouse->warehouse transfer the
+        // quantity and the unit labels sat in the destination while every carton
+        // still pointed at the SOURCE row in the SOURCE warehouse.
+        //
+        // That is exactly what a pick scan reads: assertBoxOnShelf takes the
+        // carton's location from `box.warehouse_id || lot.warehouseId`, and
+        // scanBulkPackage resolves its parent lot through `box.lot_id`
+        // (services/pickScanService.js). So scanning a BOX at the destination was
+        // refused with "... is currently at <source>, not <destination>", while
+        // scanning the parent LOT NUMBER resolved the destination Inventory row
+        // and reported the opposite — two answers to one question, from two
+        // records that had stopped agreeing.
+        //
+        // Derived from the units that actually landed, so a PARTIAL transfer
+        // moves only the cartons that travelled. Nothing is created or deleted
+        // and no `bulk_packaging_id` is rewritten — that identity is printed on
+        // the physical carton and never changes; only where the carton IS does.
+        await moveBoxesWithUnits({
+          companyId, units, toLotId: inv._id, toWarehouseId: shipment.toWarehouseId, session,
+        });
       }
 
       const shortageQty = line.qty - recvQty;
@@ -788,7 +1035,10 @@ async function shipmentDetails(ownerArg, shipmentId, { allowedWarehouseIds = nul
   const shipment = await Shipment.findOne({ _id: shipmentId, ...ownerScope(owner) })
     .populate("fromWarehouseId", "name code")
     .populate("toWarehouseId", "name code")
-    .populate("lines.productId", "productName skuNumber mrp")
+    // ADDITIVE: `category` joins the existing projection so Transfer History →
+    // View can show Product Information without a second request. No existing
+    // field is removed, so every current consumer is unaffected.
+    .populate("lines.productId", "productName skuNumber mrp category")
     .lean();
   if (!shipment) throw httpErr("Shipment not found", 404);
 
@@ -813,16 +1063,41 @@ async function shipmentDetails(ownerArg, shipmentId, { allowedWarehouseIds = nul
   }
   const serials = [...stamps.keys()];
   const units = serials.length
-    ? await UnitSerial.find({ serial: { $in: serials } }).select("serial lotNumber status ownerType inventoryId").lean()
+    // ADDITIVE projection: unit_code is the spec's name for the printed code and
+    // bulk_packaging_* is how a unit knows which physical box it travelled in —
+    // both are needed to group this transfer's serials under their Bulk
+    // Packaging IDs below. The pre-existing fields are all still selected.
+    ? await UnitSerial.find({ serial: { $in: serials } })
+        .select("serial lotNumber status ownerType inventoryId unit_code bulk_packaging_id bulk_packaging_record_id box_serial")
+        .lean()
     : [];
   const bySerial = new Map(units.map((u) => [u.serial, u]));
 
   // Lot metadata for each line's parent lot.
   const invIds = [...new Set((shipment.lines || []).map((l) => String(l.inventoryId)).filter(Boolean))];
   const invRows = invIds.length
-    ? await Inventory.find({ _id: { $in: invIds } }).select("mfgBatchNo mfgDate expiryDate lotNumber batchNumber").lean()
+    // ADDITIVE fields: warehouseId + the has_bulk_packaging/number_of_boxes/
+    // units_per_box trio let the View page state how the source lot was packed.
+    ? await Inventory.find({ _id: { $in: invIds } })
+        .select("mfgBatchNo mfgDate expiryDate lotNumber batchNumber warehouseId has_bulk_packaging number_of_boxes units_per_box")
+        .populate("warehouseId", "name code")
+        .lean()
     : [];
   const byInv = new Map(invRows.map((r) => [String(r._id), r]));
+
+  // BULK PACKAGING for this transfer. The BulkPackage rows are the physical
+  // boxes of the SOURCE lot; the serials above are what this shipment actually
+  // moved. Joining the two gives "which box each transferred unit came out of"
+  // WITHOUT inventing anything: a box only appears if this transfer carried at
+  // least one unit from it. Read-only — nothing is written.
+  const boxIds = [...new Set(units.map((u) => String(u.bulk_packaging_record_id || "")).filter(Boolean))];
+  const boxRows = boxIds.length
+    ? await BulkPackage.find({ _id: { $in: boxIds } })
+        .select("bulk_packaging_id box_serial units_in_box status received_at lot_id")
+        .sort({ box_serial: 1 })
+        .lean()
+    : [];
+  const byBox = new Map(boxRows.map((b) => [String(b._id), b]));
 
   const parentLots = (shipment.lines || []).map((l) => {
     const meta = byInv.get(String(l.inventoryId)) || {};
@@ -836,11 +1111,56 @@ async function shipmentDetails(ownerArg, shipmentId, { allowedWarehouseIds = nul
       batchNumber: l.batchNumber || null,
       mfgBatchNo: meta.mfgBatchNo || null,
       productName: l.productId?.productName || "—",
+      // ADDITIVE — Product Information on the read-only View page.
+      category: l.productId?.category || null,
+      // ADDITIVE — Product Details on the Company Transfer Details page. Both
+      // values are already in the projection above; they were only being used to
+      // compute the shipment `value` and were never surfaced per line.
+      productCode: l.productId?.skuNumber || null,
+      mrp: l.productId?.mrp ?? null,
+      warehouse: meta.warehouseId?.name || null,
       allocatedQty: Number(l.qty || 0),
       receivedQty: l.receivedQty ?? null,
       mfgDate: meta.mfgDate || null,
       expiryDate: meta.expiryDate || null,
       status: shipment.status,
+      // ADDITIVE — how the SOURCE lot was packed, so the page can say
+      // "single package" vs "N boxes" without a second request.
+      hasBulkPackaging: !!meta.has_bulk_packaging,
+      numberOfBoxes: meta.number_of_boxes ?? null,
+      unitsPerBox: meta.units_per_box ?? null,
+      // ADDITIVE — the Bulk Packaging IDs this transfer drew units from, each
+      // carrying ONLY the unit codes this transfer actually moved out of it.
+      bulkPackages: mine
+        .reduce((acc, s) => {
+          const u = bySerial.get(s) || {};
+          const key = String(u.bulk_packaging_record_id || "");
+          if (!key) return acc; // unit not packed into a box — listed below
+          let entry = acc.find((b) => b.key === key);
+          if (!entry) {
+            const box = byBox.get(key) || {};
+            entry = {
+              key,
+              bulkPackagingId: box.bulk_packaging_id || u.bulk_packaging_id || "—",
+              boxSerial: box.box_serial ?? u.box_serial ?? null,
+              unitsInBox: box.units_in_box ?? null,
+              status: box.status || null,
+              receivedAt: box.received_at || null,
+              unitCodes: [],
+            };
+            acc.push(entry);
+          }
+          entry.unitCodes.push(u.unit_code || s);
+          return acc;
+        }, [])
+        .sort((a, b) => (a.boxSerial || 0) - (b.boxSerial || 0))
+        .map(({ key, ...rest }) => rest),
+      // ADDITIVE — transferred units with no parent box (single-package lots,
+      // or labels minted before the lot was packed). A transfer carrying both
+      // this AND bulkPackages is the "mixed" case; the UI shows both sections.
+      looseUnitCodes: mine
+        .filter((s) => !(bySerial.get(s) || {}).bulk_packaging_record_id)
+        .map((s) => (bySerial.get(s) || {}).unit_code || s),
       units: mine.map((s) => {
         const u = bySerial.get(s) || {};
         const t = stamps.get(s) || {};
@@ -861,6 +1181,24 @@ async function shipmentDetails(ownerArg, shipmentId, { allowedWarehouseIds = nul
   const value = (shipment.lines || []).reduce(
     (s, l) => s + Number(l.qty || 0) * Number(l.productId?.mrp || 0), 0);
 
+  // ── ADDITIVE: who approved and who received ──
+  // Read straight off records that already exist — the append-only statusHistory
+  // and the proof-of-delivery block. A transfer raised as a stock REQUEST carries
+  // its authorisation on the TransferRequest instead (decidedBy/decidedAt), so
+  // that is the fallback. Nothing is written and no existing field changes.
+  const history = shipment.statusHistory || [];
+  const approvedEvent = history.find((e) => e.status === "approved");
+  const receivedEvent = history.find((e) => ["received", "partially_received"].includes(e.status));
+  const request = await require("../model/Transport/TransferRequest")
+    .findOne({ shipmentId: shipment._id })
+    .select("decidedBy decidedAt")
+    .lean();
+  const names = await actorNames([
+    approvedEvent?.byUserId, request?.decidedBy,
+    shipment.pod?.verifiedBy, receivedEvent?.byUserId,
+  ]);
+  const nameOf = (id) => (id ? names.get(String(id)) || null : null);
+
   return {
     summary: {
       ref: shipmentRef(shipment),
@@ -874,11 +1212,21 @@ async function shipmentDetails(ownerArg, shipmentId, { allowedWarehouseIds = nul
       quantity: totalQty,
       value,
       status: shipment.status,
+      // ADDITIVE — the delivery challan captured when the shipment was raised.
+      // The link is resolved from the stored key on every read, so it is a
+      // signed, short-lived URL on S3 and the served /uploads path locally.
+      deliveryChallanNumber: shipment.deliveryChallanNumber || null,
+      challanDocumentName: shipment.challanDocument?.name || null,
+      challanDocumentUrl: await challanUrl(shipment),
       createdAt: shipment.createdAt,
       dispatchedAt: shipment.dispatchedAt || null,
       deliveredAt: shipment.deliveredAt || null,
       pickedAt: (shipment.statusHistory || []).find((e) => e.status === "picked")?.at || null,
       receivedAt: (shipment.statusHistory || []).find((e) => ["received", "partially_received"].includes(e.status))?.at || null,
+      // ADDITIVE — Transfer Summary on the read-only Company Transfer Details page.
+      approvedBy: nameOf(approvedEvent?.byUserId) || nameOf(request?.decidedBy),
+      approvedAt: approvedEvent?.at || request?.decidedAt || null,
+      receivedBy: nameOf(shipment.pod?.verifiedBy) || nameOf(receivedEvent?.byUserId),
     },
     parentLots,
     timeline: (shipment.statusHistory || []).map((e) => ({ status: e.status, at: e.at })),
@@ -911,7 +1259,64 @@ async function listShipments(ownerArg, { status, warehouseIds } = {}) {
   // Supply Request, plus the From/To resolved from the warehouse relations.
   // Every existing field is passed through untouched — this only adds keys. No
   // shipment is created, modified or filtered out here.
-  return rows.map((s) => ({ ...s, ref: shipmentRef(s), ...shipmentRoute(s) }));
+  //
+  // The challan link is RESOLVED FROM THE STORED KEY on every read (a signed,
+  // short-lived URL under the S3 driver), never persisted — see fileService.
+  // Rows without a challan skip the resolver entirely.
+  // ADDITIVE — HOW MANY REPACK CARTONS were packed for each row.
+  //
+  // Cartons are assembled in the scan-out dialog out of loose picked units and,
+  // once that dialog closed, their IDs were not reachable from anywhere: there
+  // was no way to print a label or look one up again. The Shipments table now
+  // offers "Box Packaging (n)" on the rows that have any, so the count has to
+  // come back with the list — one grouped read for the whole page rather than a
+  // request per row.
+  //
+  // Counted over PACKED cartons only: an unpacked one is kept as an audit record
+  // and no longer exists as a physical box, so it must not be offered for
+  // printing. Scoped by shipment id, which is already owner-scoped by the filter
+  // above, so this can never reach another tenant's boxes.
+  const shipmentIds = rows.map((s) => s._id);
+  const packedCounts = shipmentIds.length
+    ? await RepackBox.aggregate([
+      { $match: { shipment_id: { $in: shipmentIds }, status: "packed" } },
+      { $group: { _id: "$shipment_id", n: { $sum: 1 } } },
+    ])
+    : [];
+  const repackCountBy = new Map(packedCounts.map((c) => [String(c._id), c.n]));
+
+  /* ADDITIVE — THE PRODUCT NAMES ON EACH SHIPMENT.
+
+     The lines carry only `productId`, so the table had no name to print. Every
+     product across the whole page is read in ONE query and mapped back, rather
+     than a lookup per row. Nothing is filtered: a line whose product no longer
+     resolves simply contributes no name. */
+  const productIds = [...new Set(
+    rows.flatMap((s) => (s.lines || []).map((l) => l.productId).filter(Boolean).map(String))
+  )];
+  const products = productIds.length
+    ? await require("../model/Company/productModel").find({ _id: { $in: productIds } })
+      .select("productName")
+      .lean()
+    : [];
+  const productNameById = new Map(products.map((p) => [String(p._id), p.productName]));
+
+  return Promise.all(rows.map(async (s) => ({
+    ...s,
+    ref: shipmentRef(s),
+    ...shipmentRoute(s),
+    repackBoxCount: repackCountBy.get(String(s._id)) || 0,
+    // DISTINCT names, in line order. A transfer of one product shows one name;
+    // several lots of that product still show it once.
+    productNames: [...new Set(
+      (s.lines || [])
+        .map((l) => productNameById.get(String(l.productId)))
+        .filter(Boolean)
+    )],
+    ...(s.challanDocument?.key ? { challanDocumentUrl: await challanUrl(s) } : {}),
+    ...(s.biltyDocument?.key ? { biltyDocumentUrl: await shipmentDocUrl(s, "biltyDocument") } : {}),
+    ...(s.billDocument?.key ? { billDocumentUrl: await shipmentDocUrl(s, "billDocument") } : {}),
+  })));
 }
 async function getShipment(ownerArg, id) {
   const owner = normalizeOwner(ownerArg);
