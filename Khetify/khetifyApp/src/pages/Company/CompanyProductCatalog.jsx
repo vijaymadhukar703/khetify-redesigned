@@ -23,8 +23,9 @@ const CompanyProductCatalog = () => {
 
   // Base origin for this page's product API calls. (Image URL building moved to
   // the shared getProductImage helper, which also fixes legacy absolute paths.)
-  const BASE_URL = "http://localhost:5000";
-
+  //const BASE_URL = "http://localhost:5000";
+  const BASE_URL = import.meta.env.VITE_API_URL;
+  
   // 1. Fetch Products logic
   const fetchProducts = async () => {
     try {
