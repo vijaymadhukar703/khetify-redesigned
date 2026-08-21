@@ -145,6 +145,9 @@ const DashboardLayout = () => {
             mobileOpen={mobileOpen}
             onMobileClose={() => setMobileOpen(false)}
             entries={entries}
+            // Sidebar header shows the company's name instead of the generic
+            // "Menu" label; falls back to "Menu" until /auth/me resolves it.
+            title={companyName || 'Menu'}
             onLocked={(entry) => navigate('/billing', { state: { fromKey: entry?.moduleKey, fromTitle: entry?.title } })}
           />
         )}
