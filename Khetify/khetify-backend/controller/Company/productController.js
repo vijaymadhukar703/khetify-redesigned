@@ -299,27 +299,27 @@ exports.createProduct = async (req, res) => {
     // ================= NORMALIZE + VALIDATE =================
     // Blank numeric strings ("" from an untouched input) would otherwise reach
     // mongoose as a Number cast error → 500. Coerce first, validate second.
-    coerceNumbers(req.body);
-    coerceDates(req.body);
-    normalizeMeasurementUnits(req.body);
-    normalizeHsn(req.body);
-    normalizeThirdParty(req.body);
-    deriveShelfLife(req.body);
+    // coerceNumbers(req.body);
+    // coerceDates(req.body);
+    // normalizeMeasurementUnits(req.body);
+    // normalizeHsn(req.body);
+    // normalizeThirdParty(req.body);
+    // deriveShelfLife(req.body);
 
-    // COUNTRY OF ORIGIN IS FIXED. The form renders it read-only, and the value
-    // is set here as well so it can be neither left blank nor overridden by a
-    // hand-made request.
-    req.body.countryOrigin = "India";
+    // // COUNTRY OF ORIGIN IS FIXED. The form renders it read-only, and the value
+    // // is set here as well so it can be neither left blank nor overridden by a
+    // // hand-made request.
+    // req.body.countryOrigin = "India";
 
-    const isDraft = req.body.productUpload === "saveDraft";
-    const invalid = validateProductPayload(req.body, {
-      // Drafts are deliberately allowed to be incomplete.
-      requireUnitValue: !isDraft,
-      requireUpload: !isDraft,
-    });
-    if (invalid) {
-      return res.status(400).json({ success: false, message: invalid });
-    }
+    // const isDraft = req.body.productUpload === "saveDraft";
+    // const invalid = validateProductPayload(req.body, {
+    //   // Drafts are deliberately allowed to be incomplete.
+    //   requireUnitValue: !isDraft,
+    //   requireUpload: !isDraft,
+    // });
+    // if (invalid) {
+    //   return res.status(400).json({ success: false, message: invalid });
+    // }
 
     // ================= VARIANT HANDLE =================
     if (req.body.variants && typeof req.body.variants === "string") {
