@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import Swal from 'sweetalert2';
 import 'sweetalert2/dist/sweetalert2.min.css'; 
@@ -52,6 +52,22 @@ const MAX_BULK_ATTR_VALUES = 25;
 const MAX_BULK_TEXT_LEN = 60;
 // Suggestions only — the user is free to type any attribute name.
 const BULK_ATTR_SUGGESTIONS = ['Color', 'Material', 'Size', 'Capacity', 'Finish', 'Model'];
+
+// Pure utility: cartesian product of an array of arrays.
+// e.g. cartesian([['Red','Blue'],['S','M']]) → [['Red','S'],['Red','M'],['Blue','S'],['Blue','M']]
+const cartesian = (arrays) => {
+  if (!arrays.length) return [[]];
+  const [first, ...rest] = arrays;
+  const restCombos = cartesian(rest);
+  return first.flatMap(v => restCombos.map(r => [v, ...r]));
+};
+
+// Auto-generate a SKU from product name + variant combination values.
+const autoSku = (productName, combo) => {
+  const prefix = (productName || 'PRD').replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 4) || 'PRD';
+  const suffix = combo.map(v => v.replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 5)).join('-');
+  return `${prefix}-${suffix}`;
+};
 
 const CompanyUploadProduct = () => {
   const navigate = useNavigate();
@@ -109,7 +125,63 @@ const CompanyUploadProduct = () => {
   const makeBulkAttr = () => ({ id: bulkAttrId.current++, name: '', values: [], draft: '' });
   const [bulkAttrs, setBulkAttrs] = useState([]);
 
-  const [selectedFiles, setSelectedFiles] = useState([]); 
+  /* HSN → GST LOOKUP (Company Upload Product only).
+     `hsn` holds the outcome of the last resolved lookup, never a guess:
+       null                     — nothing looked up yet
+       { status:'single'   }    — one rate; auto-filled into the GST field
+       { status:'multiple' }    — several rates; the user must pick one
+       { status:'not_found' }   — not in the master; GST stays manual
+     `hsnLoading` only drives the little "Looking up…" line. */
+  const [hsn, setHsn] = useState(null);
+  const [hsnLoading, setHsnLoading] = useState(false);
+  /* Autocomplete: `hsnOptions` is the list the dropdown renders, `hsnOpen`
+     whether it is showing. `hsnPicked` records that the current code came from
+     the list rather than being typed — the GST field is only ever filled from a
+     resolved lookup, so this just controls the helper text. */
+  const [hsnOptions, setHsnOptions] = useState([]);
+  /* 'idle' | 'loading' | 'ok' | 'empty' | 'error'
+     A failed or empty search USED TO BE SILENT — the list simply never appeared
+     and there was no way to tell "no such code" from "the server is not
+     reachable" from "I forgot to restart the backend". The state is tracked so
+     the dropdown can say which it is. */
+  const [hsnSearchState, setHsnSearchState] = useState('idle');
+  const [hsnOpen, setHsnOpen] = useState(false);
+  const [hsnPicked, setHsnPicked] = useState(false);
+  const hsnBoxRef = useRef(null);
+
+  // Each row: { label, attrMap, sku, mrp, stock }
+  // Auto-computed from bulkAttrs; existing edits are preserved when attrs change.
+  const [variantRows, setVariantRows] = useState([]);
+
+  const patchVariantRow = (label, patch) =>
+    setVariantRows(prev => prev.map(r => (r.label === label ? { ...r, ...patch } : r)));
+
+  const applyBaseMrpToAll = () =>
+    setVariantRows(prev => prev.map(r => ({ ...r, mrp: formData.mrp })));
+
+  const resetAllStock = () =>
+    setVariantRows(prev => prev.map(r => ({ ...r, stock: '0' })));
+
+  const handleVariantImageChange = (label, file) => {
+    if (!file) return;
+    const preview = URL.createObjectURL(file);
+    setVariantRows(prev => prev.map(r => {
+      if (r.label !== label) return r;
+      // Revoke old preview URL to avoid memory leaks.
+      if (r.imagePreview) URL.revokeObjectURL(r.imagePreview);
+      return { ...r, image: file, imagePreview: preview };
+    }));
+  };
+
+  const removeVariantImage = (label) => {
+    setVariantRows(prev => prev.map(r => {
+      if (r.label !== label) return r;
+      if (r.imagePreview) URL.revokeObjectURL(r.imagePreview);
+      return { ...r, image: null, imagePreview: null };
+    }));
+  };
+
+  const [selectedFiles, setSelectedFiles] = useState([]);
   const [previews, setPreviews] = useState([]); 
 
   const handleInputChange = (e) => {
@@ -117,13 +189,36 @@ const CompanyUploadProduct = () => {
     setFormData(prev => ({ ...prev, [id]: value }));
   };
 
-  // HSN accepts DIGITS ONLY, capped at 8. Filtering on the way in means a
-  // pasted "3102-1000" simply becomes "31021000" rather than being rejected
-  // after the fact; the length is still checked before upload.
-  const HSN_LENGTH = 8;
+  /* HSN accepts DIGITS ONLY, 4 to 8 of them. Filtering on the way in means a
+     pasted "3102-1000" simply becomes "31021000" rather than being rejected
+     after the fact; the length is still checked before upload.
+
+     THE MINIMUM IS 4, NOT 8. The GST notification is written at HEADING level —
+     of its 1163 codes, 1018 are 4-digit — so a 4-digit code is a complete,
+     valid answer and refusing it would reject the very form most rates are
+     published in. */
+  const HSN_MIN = 4;
+  const HSN_MAX = 8;
   const handleHsnChange = (e) => {
-    const digits = e.target.value.replace(/\D/g, '').slice(0, HSN_LENGTH);
+    const digits = e.target.value.replace(/\D/g, '').slice(0, HSN_MAX);
     setFormData(prev => ({ ...prev, hsn: digits }));
+    // The previous result belongs to the previous code — drop it immediately so
+    // a stale rate can never sit next to a half-typed HSN. The GST field goes
+    // with it: it is filled ONLY from a resolved lookup, never left over.
+    setHsn(null);
+    setHsnPicked(false);
+    setFormData(prev => ({ ...prev, gst: '0' }));
+    setHsnOpen(true);
+  };
+
+  /** Choosing a code from the dropdown. The rate still comes from the lookup
+      effect below — this only sets the code and closes the list, so there is
+      exactly one place that decides GST. */
+  const pickHsn = (code) => {
+    setFormData(prev => ({ ...prev, hsn: code }));
+    setHsn(null);
+    setHsnPicked(true);
+    setHsnOpen(false);
   };
 
   /* MANUFACTURER LICENCE NO.
@@ -189,6 +284,31 @@ const CompanyUploadProduct = () => {
   const handleToggle = () => {
     setFormData(prev => ({ ...prev, isActive: !prev.isActive }));
   };
+
+  // Recompute the combinations table whenever variant attributes or the toggle changes.
+  // Existing row edits are preserved for unchanged combinations.
+  useEffect(() => {
+    if (formData.bulk_has_variants !== 'yes') { setVariantRows([]); return; }
+    const filled = bulkAttrs.filter(a => a.name.trim() && a.values.length > 0);
+    if (!filled.length) { setVariantRows([]); return; }
+    const combos = cartesian(filled.map(a => a.values));
+    setVariantRows(prev =>
+      combos.map(combo => {
+        const label = combo.join(' / ');
+        const attrMap = Object.fromEntries(filled.map((a, i) => [a.name, combo[i]]));
+        const existing = prev.find(r => r.label === label);
+        return {
+          label,
+          attrMap,
+          sku: existing?.sku ?? autoSku(formData.product_name, combo),
+          mrp: existing?.mrp ?? formData.mrp ?? '',
+          stock: existing?.stock ?? '',
+          image: existing?.image ?? null,
+          imagePreview: existing?.imagePreview ?? null,
+        };
+      })
+    );
+  }, [bulkAttrs, formData.bulk_has_variants]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ================= BULK PACKAGING VARIANTS ================= */
   // Answering "Yes" seeds one empty attribute row; "No" clears the list so no
@@ -268,6 +388,102 @@ const CompanyUploadProduct = () => {
     setPreviews(updatedPreviews);
   };
 
+  /* ================= HSN AUTOCOMPLETE =================
+     Fetches codes starting with what has been typed, from 2 digits up. Same
+     400ms debounce and same out-of-order guard as the lookup below. The list is
+     only ever a NAVIGATION aid — no GST is read from it; that still comes from
+     the lookup, so there is one source of truth for the rate. */
+  useEffect(() => {
+    const q = formData.hsn;
+    if (q.length < 2) { setHsnOptions([]); setHsnSearchState('idle'); return undefined; }
+
+    let ignore = false;
+    setHsnSearchState('loading');
+    const timer = setTimeout(async () => {
+      try {
+        const token = localStorage.getItem("token");
+        const res = await axios.get(`${config.BASE_URL}hsn/search`, {
+          params: { q, limit: 20 },
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (ignore) return;
+        const list = res.data?.results || [];
+        setHsnOptions(list);
+        setHsnSearchState(list.length ? 'ok' : 'empty');
+      } catch (err) {
+        if (ignore) return;
+        setHsnOptions([]);
+        // 404 on the ROUTE ITSELF (not a missing code) almost always means the
+        // backend is running an older build without /api/hsn/search — worth
+        // saying out loud rather than showing an empty list.
+        setHsnSearchState('error');
+        console.error('HSN search failed:', err?.response?.status, err?.response?.data || err.message);
+      }
+    }, 400);
+
+    return () => { ignore = true; clearTimeout(timer); };
+  }, [formData.hsn]);
+
+  /* HAS THE CURRENT CODE BEEN RESOLVED AGAINST THE MASTER?
+     Upload is blocked unless it has, so a code that is not in the GST master —
+     and therefore has no rate we could stand behind — cannot be submitted.
+     'multiple' counts as resolved only once a rate has actually been picked. */
+  const hsnResolved =
+    hsn?.status === 'single' ||
+    (hsn?.status === 'multiple' && hsn.rates?.some(r => String(r.gstRate) === String(formData.gst)));
+
+  // Close the dropdown on an outside click, the way a native select behaves.
+  useEffect(() => {
+    if (!hsnOpen) return undefined;
+    const onDown = (e) => {
+      if (hsnBoxRef.current && !hsnBoxRef.current.contains(e.target)) setHsnOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [hsnOpen]);
+
+  /* ================= HSN → GST LOOKUP =================
+     Runs whenever the HSN reaches a valid 4-8 digits. Debounced by 400ms so
+     typing 31021000 fires ONE request, not five.
+
+     THE RATE ALWAYS COMES FROM THE DATABASE. There is no rate table in this
+     file; the server resolves the code against the GST master and this only
+     renders what it is told. `ignore` guards the classic out-of-order race —
+     a slow reply for an old code must never overwrite a fast reply for the
+     current one. */
+  useEffect(() => {
+    const code = formData.hsn;
+    if (!(code.length >= HSN_MIN && code.length <= HSN_MAX)) { setHsn(null); return undefined; }
+
+    let ignore = false;
+    const timer = setTimeout(async () => {
+      setHsnLoading(true);
+      try {
+        const token = localStorage.getItem("token");
+        const res = await axios.get(`${config.BASE_URL}hsn/${code}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (ignore) return;
+        const data = res.data;
+        setHsn(data);
+        // ONE RATE → fill it in. Several → fill NOTHING and let the user choose;
+        // picking any of them here would be a guess with real tax consequences.
+        if (data.status === "single") {
+          setFormData(prev => ({ ...prev, gst: String(data.gstRate) }));
+        }
+      } catch (err) {
+        if (ignore) return;
+        // A 404 is a normal outcome (code genuinely absent), not a failure —
+        // the server's own payload explains it, so it is shown as-is.
+        setHsn(err.response?.data || { status: "error", message: "Could not reach the GST rate master." });
+      } finally {
+        if (!ignore) setHsnLoading(false);
+      }
+    }, 400);
+
+    return () => { ignore = true; clearTimeout(timer); };
+  }, [formData.hsn]);
+
   /* ================= UNIT OF MEASUREMENT (DYNAMIC) =================
      The value field below the Unit dropdown is driven entirely by the selected
      unit. A custom unit typed through SelectWithOther's "Other…" escape hatch is
@@ -307,8 +523,22 @@ const CompanyUploadProduct = () => {
     }
 
     /* ── Identification & Traceability ── */
-    if (!/^\d{8}$/.test(formData.hsn)) {
-      return 'HSN Code must be exactly 8 digits (numbers only).';
+    if (!new RegExp(`^\\d{${HSN_MIN},${HSN_MAX}}$`).test(formData.hsn)) {
+      return `HSN Code must be ${HSN_MIN} to ${HSN_MAX} digits (numbers only).`;
+    }
+    /* THE HSN MUST EXIST IN THE GST MASTER.
+       GST is not typed on this form any more — it is read from the master — so a
+       code the master does not know would leave the product with the default 0%
+       and no way for anyone to notice. Blocking here means only codes we hold a
+       statutory rate for can be uploaded. */
+    if (hsn?.status === 'not_found') {
+      return `HSN ${formData.hsn} is not in the GST master. Please choose an HSN code from the suggestions.`;
+    }
+    if (hsn?.status === 'multiple' && !hsnResolved) {
+      return `HSN ${hsn.matchedHsn} has more than one GST rate — please select the one that applies to this product.`;
+    }
+    if (!hsnResolved) {
+      return 'Please wait for the GST rate to load, or pick an HSN code from the suggestions.';
     }
     const licence = formData.license_no.trim();
     // The wording names WHOSE licence it is, because when the box is ticked the
@@ -433,7 +663,28 @@ const CompanyUploadProduct = () => {
     data.append('safetyInstructions', formData.handling_inst);
     data.append('productStatus', formData.isActive ? 'active' : 'inactive');
     data.append('productUpload', uploadStatus === 'draft' ? 'saveDraft' : 'uploaded');
-    
+    if (formData.bulk_has_variants === 'yes' && variantRows.length > 0) {
+      // Build sequential file index: only rows that have an image get an index
+      // (0, 1, 2…). Rows without an image send imageIndex: undefined so the
+      // backend knows to leave that variant's image field empty.
+      let fileIdx = 0;
+      data.append('variants', JSON.stringify(
+        variantRows.map((r) => ({
+          label: r.label,
+          attributes: r.attrMap,
+          sku: r.sku,
+          mrp: r.mrp !== '' ? Number(r.mrp) : undefined,
+          stock: r.stock !== '' ? Number(r.stock) : undefined,
+          imageIndex: r.image != null ? fileIdx++ : undefined,
+        }))
+      ));
+      // Append variant image files in row order under the same field name so
+      // multer collects them as an ordered array (req.files.variantImages[]).
+      variantRows.forEach((r) => {
+        if (r.image) data.append('variantImages', r.image);
+      });
+    }
+
     selectedFiles.forEach((file) => data.append('productImages', file));
 
     try {
@@ -660,22 +911,152 @@ const CompanyUploadProduct = () => {
                 />
               </div>
 
-              {/* 2 — HSN CODE. Exactly 8 digits; the field itself accepts only
+              {/* 2 — HSN CODE. 4 to 8 digits; the field itself accepts only
                   digits so letters, spaces and punctuation can never be typed or
-                  pasted in, and the length is checked before upload. */}
+                  pasted in, and the length is checked before upload.
+
+                  Entering a valid code looks the GST rate up in the master and
+                  reports the outcome directly beneath the field. */}
               <div>
                 <label className={labelClass}>HSN Code <span className="text-[#EA2831]">*</span></label>
-                <input
-                  id="hsn"
-                  className={inputClass}
-                  value={formData.hsn}
-                  onChange={handleHsnChange}
-                  placeholder="e.g., 31021000"
-                  inputMode="numeric"
-                  maxLength={HSN_LENGTH}
-                  required
-                />
-                <p className={hintClass}>Must be exactly {HSN_LENGTH} digits.</p>
+                {/* The input and its dropdown share a positioned wrapper so the
+                    list hangs directly under the field. The input itself is
+                    unchanged — same id, same class, same handler, same cap. */}
+                <div className="relative" ref={hsnBoxRef}>
+                  <input
+                    id="hsn"
+                    className={inputClass}
+                    value={formData.hsn}
+                    onChange={handleHsnChange}
+                    onFocus={() => setHsnOpen(true)}
+                    placeholder="Type digits to search, e.g. 3105"
+                    inputMode="numeric"
+                    maxLength={HSN_MAX}
+                    autoComplete="off"
+                    required
+                  />
+
+                  {/* The panel opens as soon as there is something to SAY —
+                      results, "searching", "nothing matched" or a reachability
+                      problem. Rendering only on a non-empty list is what made a
+                      broken endpoint look identical to an unfinished code.
+                      `!hsnPicked` keeps it closed immediately after a selection —
+                      it is cleared again the moment the user edits the field. */}
+                  {hsnOpen && !hsnPicked && formData.hsn.length >= 2 && hsnSearchState !== 'idle' && (
+                    <ul className="absolute z-30 mt-1 max-h-72 w-full overflow-y-auto rounded-xl border border-stone-200 bg-white py-1 shadow-xl">
+                      {hsnSearchState === 'loading' && (
+                        <li className="px-3 py-2 text-[11px] text-stone-400">Searching the GST master…</li>
+                      )}
+                      {hsnSearchState === 'empty' && (
+                        <li className="px-3 py-2 text-[11px] text-stone-500">
+                          No HSN code starts with <b>{formData.hsn}</b> in the GST master.
+                        </li>
+                      )}
+                      {hsnSearchState === 'error' && (
+                        <li className="px-3 py-2 text-[11px] text-[#EA2831]">
+                          Could not reach the GST master. Check that the backend is running and has been
+                          restarted, and that <span className="font-mono">npm run seed:hsn</span> has been run.
+                        </li>
+                      )}
+                      {hsnOptions.map(opt => (
+                        <li key={opt.hsnCode}>
+                          <button
+                            type="button"
+                            onClick={() => pickHsn(opt.hsnCode)}
+                            className="flex w-full items-start gap-2 px-3 py-2 text-left transition-colors hover:bg-stone-50"
+                          >
+                            <span className="shrink-0 font-mono text-xs font-bold text-stone-800">{opt.hsnCode}</span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-[11px] text-stone-500">{opt.description}</span>
+                            </span>
+                            {/* A code with several rates is flagged rather than
+                                shown with one of them — the choice belongs to
+                                the user, after they pick the code. */}
+                            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                              opt.multiple ? 'bg-amber-50 text-amber-700' : 'bg-green-50 text-green-700'
+                            }`}>
+                              {opt.multiple
+                                ? `${[...new Set(opt.rates.map(r => r.gstRate))].join('% / ')}%`
+                                : `${opt.gstRate}%`}
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+               
+
+                {/* The code is in the field but the master has no rate for it.
+                    Upload is blocked here rather than at submit, so the problem
+                    is visible while the field is still in front of the user. */}
+                {!hsnLoading && formData.hsn.length >= HSN_MIN && hsn?.status === 'not_found' && (
+                  <p className="mt-1 text-xs font-medium text-[#EA2831]">
+                    ⚠ Pick an HSN code from the list — only codes present in the GST master can be used.
+                  </p>
+                )}
+
+                {hsnLoading && (
+                  <p className="text-xs text-stone-400 mt-1">Looking up the GST rate…</p>
+                )}
+
+                {/* ONE RATE — filled in. The matched level is stated because it
+                    may be a parent of what was typed (08045020 → 0804), and the
+                    operator should see which entry the rate actually came from. */}
+                {/* {!hsnLoading && hsn?.status === 'single' && (
+                  <div className="mt-2 rounded-lg border border-green-200 bg-green-50/60 px-3 py-2">
+                    <p className="text-xs font-bold text-green-700">
+                      GST {hsn.gstRate}% applied
+                      {hsn.matchedHsn !== formData.hsn && <> · matched HSN {hsn.matchedHsn}</>}
+                    </p>
+                    {hsn.rates?.[0]?.description && (
+                      <p className="text-[11px] text-stone-500 mt-0.5">{hsn.rates[0].description}</p>
+                    )}
+                  </div>
+                )} */}
+
+                {/* SEVERAL RATES — nothing is chosen automatically. Each option
+                    is shown with the condition from the notification that makes
+                    it apply, and the user picks the one matching their product. */}
+                {!hsnLoading && hsn?.status === 'multiple' && !hsnResolved && (
+                  <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
+                    <p className="text-xs font-bold text-amber-800">
+                      HSN {hsn.matchedHsn} has more than one GST rate — select the one that applies to your product.
+                    </p>
+                    <div className="mt-2 space-y-1.5">
+                      {hsn.rates.map((r, i) => (
+                        <label
+                          key={`${r.gstRate}-${i}`}
+                          className={`flex cursor-pointer items-start gap-2 rounded-lg border px-2.5 py-2 transition-colors ${
+                            String(formData.gst) === String(r.gstRate)
+                              ? 'border-[#EA2831] bg-white'
+                              : 'border-stone-200 bg-white/70 hover:border-stone-300'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="hsnGstChoice"
+                            className="mt-0.5 h-4 w-4 shrink-0 accent-[#EA2831]"
+                            checked={String(formData.gst) === String(r.gstRate)}
+                            onChange={() => setFormData(prev => ({ ...prev, gst: String(r.gstRate) }))}
+                          />
+                          <span className="min-w-0">
+                            <span className="block text-xs font-bold text-stone-800">{r.gstRate}%</span>
+                            <span className="block text-[11px] leading-snug text-stone-500">{r.description}</span>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* NOT IN THE MASTER — say so plainly and leave GST manual. No
+                    rate is inferred from a chapter or a neighbouring code. */}
+                {!hsnLoading && (hsn?.status === 'not_found' || hsn?.status === 'error') && (
+                  <p className="mt-2 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-[11px] text-stone-600">
+                    {hsn.message || 'No GST rate found for this HSN code.'} Please select the GST rate manually below.
+                  </p>
+                )}
               </div>
 
               {/* 3 — MANUFACTURER LICENCE.
@@ -788,114 +1169,83 @@ const CompanyUploadProduct = () => {
               <div><label className={labelClass}>MRP (₹) <span className="text-[#EA2831]">*</span></label>
               <input id="mrp" type="number" className={inputClass} value={formData.mrp} onChange={handleInputChange} placeholder="0.00" required /></div>
               <div>
-                {/* <label className="block text-sm font-semibold text-stone-700 mb-1.5 flex justify-between">Cost Price (₹) <span className="text-[#EA2831]">*</span> <span className="text-[9px] bg-stone-100 px-1.5 py-0.5 rounded border border-stone-200 text-stone-500 font-bold uppercase">INTERNAL ONLY</span></label> */}
                 <label className="block text-sm font-semibold text-stone-700 mb-1.5 flex justify-between">
-  <span>
-    Cost Price (₹)<span className="text-[#EA2831]">*</span>
-  </span>
-
-  <span className="text-[9px] bg-stone-100 px-1.5 py-0.5 rounded border border-stone-200 text-stone-500 font-bold uppercase">
-    INTERNAL ONLY
-  </span>
-</label>
+                  <span>Cost Price (₹)<span className="text-[#EA2831]">*</span></span>
+                  <span className="text-[9px] bg-stone-100 px-1.5 py-0.5 rounded border border-stone-200 text-stone-500 font-bold uppercase">INTERNAL ONLY</span>
+                </label>
                 <input id="cost_price" type="number" className={inputClass} value={formData.cost_price} onChange={handleInputChange} placeholder="0.00" required />
               </div>
               <div><label className={labelClass}>GST (%)</label>
-                <select id="gst" className={inputClass} value={formData.gst} onChange={handleInputChange}>
-                  <option value="0">0% (Exempt)</option>
-                  <option value="5">5%</option>
-                  <option value="12">12%</option>
-                  <option value="18">18%</option>
-                  <option value="28">28%</option>
-                </select>
+                {/* READ-ONLY. The rate is statutory — it belongs to the HSN code,
+                    not to whoever is filling the form — so it is displayed, not
+                    entered. It is set in exactly two places, both driven by the
+                    database: the lookup effect (single rate) and the radio
+                    buttons under the HSN field (multiple rates).
+
+                    A DISABLED <select> IS NOT USED. A disabled control is
+                    skipped by form serialisation and reads as unavailable to a
+                    screen reader, and there is nothing here for the user to do —
+                    so this is a plain read-only display of the resolved value,
+                    with the same `formData.gst` still going to the API under the
+                    same key. The payload is unchanged. */}
+                <div className={`${inputClass} flex items-center justify-between bg-stone-50 text-stone-700 cursor-not-allowed`}>
+                  <span className="font-semibold">
+                    {formData.gst === '0' ? '0% (Exempt)' : `${formData.gst}%`}
+                  </span>
+                  <span className="material-symbols-outlined text-base text-stone-400" title="Set automatically from the HSN code">lock</span>
+                </div>
+                {/* The value still reaches the form the same way for anything
+                    that reads the DOM, and stays in formData for the submit. */}
+                <input type="hidden" id="gst" name="gst" value={formData.gst} readOnly />
+                <p className={hintClass}>
+                  {hsn?.status === 'single'
+                    ? `Set from the GST master for HSN ${hsn.matchedHsn}.`
+                    : hsn?.status === 'multiple'
+                      ? 'Select the applicable rate under the HSN Code field above.'
+                      : 'Determined automatically by the HSN code.'}
+                </p>
               </div>
             </div>
           </section>
 
-          {/* Section 4: Supply & Logistics */}
+          {/* Section 4: Product Variants */}
           <section>
-            <h3 className="text-lg font-bold text-stone-900 mb-6 border-b border-stone-100 pb-2 uppercase tracking-wide">Supply & Logistics</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* <div><label className="block text-sm font-semibold text-stone-700 mb-1.5">Available Stock <span className="text-[#EA2831]">*</span></label><input id="stock" type="number" className={inputClass} value={formData.stock} onChange={handleInputChange} placeholder="e.g., 5000" required /></div> */}
-              <div><label className={labelClass}>Minimum Order Quantity (MOQ)</label><input id="moq" type="number" className={inputClass} value={formData.moq} onChange={handleInputChange} placeholder="e.g., 10" /></div>
-              <div><label className={labelClass}>Monthly Production Capacity</label><input id="capacity" className={inputClass} value={formData.capacity} onChange={handleInputChange} placeholder="e.g., 20000 Units" /></div>
-              {/* Packaging Type now lives in "Packaging & Measurement" above — kept
-                  here only as a pointer so nothing is asked for twice. */}
-              <div>
-                <label className={labelClass}>Bulk Packaging Type</label>
-                <select id="bulk_type" className={inputClass} value={formData.bulk_type} onChange={handleInputChange}>
-                  <option value="">Select Bulk Packaging</option>
-                  <option value="Carton">Carton</option>
-                  <option value="Bag">Bag</option>
-                  <option value="Box">Box</option>
-                  <option value="Sack">Sack</option>
-                  <option value="Drum">Drum</option>
-                  <option value="Other">Other…</option>
-                </select>
-                {formData.bulk_type === 'Other' && (
-                  <input
-                    id="bulk_custom_type"
-                    className={`${inputClass} mt-2`}
-                    value={formData.bulk_custom_type}
-                    onChange={handleInputChange}
-                    placeholder="Enter bulk packaging type"
-                  />
-                )}
-              </div>
-              <div>
-                <label className={labelClass}>Capacity Bulk Package</label>
-                <div className="flex gap-2">
-                  <input
-                    id="bulk_capacity"
-                    type="number"
-                    min="0"
-                    className={inputClass}
-                    value={formData.bulk_capacity}
-                    onChange={handleInputChange}
-                    placeholder="e.g., 50"
-                  />
-                  <input
-                    id="bulk_capacity_unit"
-                    className={`${inputClass} max-w-[120px]`}
-                    value={formData.bulk_capacity_unit}
-                    onChange={handleInputChange}
-                    placeholder="units"
-                  />
+            <h3 className="text-lg font-bold text-stone-900 mb-6 border-b border-stone-100 pb-2 uppercase tracking-wide">Product Variants</h3>
+            <div className="rounded-xl border border-stone-200 bg-stone-50/60 p-5">
+              {/* Toggle */}
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <label className={labelClass}>Does this product have variants?</label>
+                  <p className="text-xs text-stone-400">
+                    Choose Yes if the same product ships in different options (e.g. Size, Color, Capacity).
+                  </p>
                 </div>
-                <p className="text-xs text-stone-400 mt-1">e.g. 1 Carton contains 50 units</p>
+                <div className="flex rounded-lg border border-stone-200 bg-white p-1">
+                  {['no', 'yes'].map((answer) => (
+                    <button
+                      key={answer}
+                      type="button"
+                      onClick={() => setHasBulkVariants(answer)}
+                      aria-pressed={formData.bulk_has_variants === answer}
+                      className={`px-6 py-1.5 text-xs font-bold uppercase tracking-wider rounded-md transition-all ${
+                        formData.bulk_has_variants === answer
+                          ? 'bg-[#EA2831] text-white shadow-sm'
+                          : 'text-stone-400 hover:text-stone-600'
+                      }`}
+                    >
+                      {answer === 'yes' ? 'Yes' : 'No'}
+                    </button>
+                  ))}
+                </div>
               </div>
 
-              {/* ===== Bulk packaging variants ===== */}
-              <div className="md:col-span-2">
-                <div className="rounded-xl border border-stone-200 bg-stone-50/60 p-5">
-                  <div className="flex flex-wrap items-center justify-between gap-4">
-                    <div>
-                      <label className={labelClass}>Is there a variant of product?</label>
-                      <p className="text-xs text-stone-400">
-                        Choose Yes if the same product ships in different options (e.g. Color, Material, Size).
-                      </p>
-                    </div>
-                    <div className="flex rounded-lg border border-stone-200 bg-white p-1">
-                      {['no', 'yes'].map((answer) => (
-                        <button
-                          key={answer}
-                          type="button"
-                          onClick={() => setHasBulkVariants(answer)}
-                          aria-pressed={formData.bulk_has_variants === answer}
-                          className={`px-6 py-1.5 text-xs font-bold uppercase tracking-wider rounded-md transition-all ${
-                            formData.bulk_has_variants === answer
-                              ? 'bg-[#EA2831] text-white shadow-sm'
-                              : 'text-stone-400 hover:text-stone-600'
-                          }`}
-                        >
-                          {answer === 'yes' ? 'Yes' : 'No'}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+              {formData.bulk_has_variants === 'yes' && (
+                <div className="mt-6 space-y-6 animate__animated animate__fadeIn">
 
-                  {formData.bulk_has_variants === 'yes' && (
-                    <div className="mt-5 space-y-4 animate__animated animate__fadeIn">
+                  {/* Part A: Attribute builder */}
+                  <div>
+                    <p className="text-xs font-bold text-stone-500 uppercase tracking-wider mb-3">Variant Attributes</p>
+                    <div className="space-y-3">
                       {bulkAttrs.map((attr, index) => (
                         <div key={attr.id} className="rounded-lg border border-stone-200 bg-white p-4">
                           <div className="flex items-start justify-between gap-3">
@@ -909,20 +1259,19 @@ const CompanyUploadProduct = () => {
                                   className={inputClass}
                                   value={attr.name}
                                   onChange={(e) => patchBulkAttr(attr.id, { name: e.target.value })}
-                                  placeholder="e.g., Color"
+                                  placeholder="e.g., Size"
                                   list="bulk-attr-suggestions"
                                   maxLength={MAX_BULK_TEXT_LEN}
                                 />
                               </div>
                               <div>
-                                <label className="block text-xs font-semibold text-stone-500 mb-1.5">Available Values</label>
+                                <label className="block text-xs font-semibold text-stone-500 mb-1.5">Values</label>
                                 <div className="flex gap-2">
                                   <input
                                     className={inputClass}
                                     value={attr.draft}
                                     onChange={(e) => patchBulkAttr(attr.id, { draft: e.target.value })}
                                     onKeyDown={(e) => {
-                                      // Enter adds a value without submitting the form.
                                       if (e.key === 'Enter' || e.key === ',') {
                                         e.preventDefault();
                                         commitBulkValue(attr.id);
@@ -973,22 +1322,190 @@ const CompanyUploadProduct = () => {
                           </div>
                         </div>
                       ))}
+                    </div>
 
-                      <datalist id="bulk-attr-suggestions">
-                        {BULK_ATTR_SUGGESTIONS.map((name) => <option key={name} value={name} />)}
-                      </datalist>
+                    <datalist id="bulk-attr-suggestions">
+                      {BULK_ATTR_SUGGESTIONS.map((name) => <option key={name} value={name} />)}
+                    </datalist>
 
-                      {bulkAttrs.length < MAX_BULK_ATTRS && (
-                        <button type="button" onClick={addBulkAttr} className="text-xs font-bold text-[#EA2831] hover:underline">
-                          + Add another attribute
-                        </button>
-                      )}
-                      
+                    {bulkAttrs.length < MAX_BULK_ATTRS && (
+                      <button
+                        type="button"
+                        onClick={addBulkAttr}
+                        className="mt-3 text-xs font-bold text-[#EA2831] hover:underline"
+                      >
+                        + Add another attribute
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Part B: Generated combinations table */}
+                  {variantRows.length === 0 && (
+                    <div className="rounded-lg border border-dashed border-stone-200 bg-white px-6 py-8 text-center">
+                      <span className="material-symbols-outlined text-stone-300 text-4xl block mb-2">table_rows</span>
+                      <p className="text-sm font-semibold text-stone-400">Variant table will appear here</p>
+                      <p className="text-xs text-stone-300 mt-1">
+                        Enter an attribute name (e.g. <b>Size</b>) and add at least one value (e.g. <b>500g</b>) — press <kbd className="bg-stone-100 border border-stone-200 rounded px-1 py-0.5 text-[10px]">Enter</kbd> to confirm each value.
+                      </p>
+                    </div>
+                  )}
+                  {variantRows.length > 0 && (
+                    <div className="animate__animated animate__fadeIn">
+                      <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+                        <p className="text-xs font-bold text-stone-500 uppercase tracking-wider">
+                          {variantRows.length} variant{variantRows.length !== 1 ? 's' : ''} generated
+                        </p>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={applyBaseMrpToAll}
+                            className="text-xs font-semibold text-[#EA2831] border border-[#EA2831]/30 rounded-lg px-3 py-1.5 hover:bg-[#EA2831]/5 transition-all"
+                          >
+                            Apply base MRP to all
+                          </button>
+                          <button
+                            type="button"
+                            onClick={resetAllStock}
+                            className="text-xs font-semibold text-stone-500 border border-stone-200 rounded-lg px-3 py-1.5 hover:bg-stone-100 transition-all"
+                          >
+                            Set stock to 0
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border border-stone-200 overflow-hidden">
+                        {/* Table header */}
+                        <div className="grid grid-cols-[1.5fr_1.5fr_1fr_1fr_72px] bg-stone-100 border-b border-stone-200 px-4 py-2.5 gap-3">
+                          <span className="text-[10px] font-black uppercase tracking-widest text-stone-400">Variant</span>
+                          <span className="text-[10px] font-black uppercase tracking-widest text-stone-400">SKU</span>
+                          <span className="text-[10px] font-black uppercase tracking-widest text-stone-400">MRP (₹)</span>
+                          <span className="text-[10px] font-black uppercase tracking-widest text-stone-400">Stock</span>
+                          <span className="text-[10px] font-black uppercase tracking-widest text-stone-400">Photo</span>
+                        </div>
+                        {/* Table rows */}
+                        {variantRows.map((row, i) => (
+                          <div
+                            key={row.label}
+                            className={`grid grid-cols-[1.5fr_1.5fr_1fr_1fr_72px] gap-3 px-4 py-3 items-center ${
+                              i % 2 === 0 ? 'bg-white' : 'bg-stone-50/50'
+                            } ${i < variantRows.length - 1 ? 'border-b border-stone-100' : ''}`}
+                          >
+                            <span className="text-sm font-semibold text-stone-700 truncate" title={row.label}>
+                              {row.label}
+                            </span>
+                            <input
+                              className={inputClass}
+                              value={row.sku}
+                              onChange={e => patchVariantRow(row.label, { sku: e.target.value })}
+                              placeholder="SKU"
+                            />
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              className={inputClass}
+                              value={row.mrp}
+                              onChange={e => patchVariantRow(row.label, { mrp: e.target.value })}
+                              placeholder="0.00"
+                            />
+                            <input
+                              type="number"
+                              min="0"
+                              step="1"
+                              className={inputClass}
+                              value={row.stock}
+                              onChange={e => patchVariantRow(row.label, { stock: e.target.value })}
+                              placeholder="0"
+                            />
+                            {/* Per-variant image upload */}
+                            <div className="relative w-[60px] h-[60px] shrink-0">
+                              {row.imagePreview ? (
+                                <>
+                                  <img
+                                    src={row.imagePreview}
+                                    alt={row.label}
+                                    className="w-full h-full object-cover rounded-lg border border-stone-200"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => removeVariantImage(row.label)}
+                                    className="absolute -top-1.5 -right-1.5 bg-[#EA2831] text-white rounded-full w-4 h-4 flex items-center justify-center shadow hover:bg-black transition-colors"
+                                    aria-label="Remove photo"
+                                  >
+                                    <span className="material-symbols-outlined text-[10px] leading-none">close</span>
+                                  </button>
+                                </>
+                              ) : (
+                                <label className="w-full h-full flex flex-col items-center justify-center border border-dashed border-stone-300 rounded-lg bg-stone-50 hover:bg-stone-100 hover:border-[#EA2831]/50 cursor-pointer transition-colors group">
+                                  <input
+                                    type="file"
+                                    accept="image/*"
+                                    className="sr-only"
+                                    onChange={e => handleVariantImageChange(row.label, e.target.files[0])}
+                                  />
+                                  <span className="material-symbols-outlined text-stone-300 group-hover:text-[#EA2831] text-xl transition-colors">add_photo_alternate</span>
+                                </label>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>
+              )}
+            </div>
+          </section>
+
+          {/* Section 5: Supply & Logistics */}
+          <section>
+            <h3 className="text-lg font-bold text-stone-900 mb-6 border-b border-stone-100 pb-2 uppercase tracking-wide">Supply & Logistics</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div><label className={labelClass}>Minimum Order Quantity (MOQ)</label><input id="moq" type="number" className={inputClass} value={formData.moq} onChange={handleInputChange} placeholder="e.g., 10" /></div>
+              <div><label className={labelClass}>Monthly Production Capacity</label><input id="capacity" className={inputClass} value={formData.capacity} onChange={handleInputChange} placeholder="e.g., 20000 Units" /></div>
+              <div>
+                <label className={labelClass}>Bulk Packaging Type</label>
+                <select id="bulk_type" className={inputClass} value={formData.bulk_type} onChange={handleInputChange}>
+                  <option value="">Select Bulk Packaging</option>
+                  <option value="Carton">Carton</option>
+                  <option value="Bag">Bag</option>
+                  <option value="Box">Box</option>
+                  <option value="Sack">Sack</option>
+                  <option value="Drum">Drum</option>
+                  <option value="Other">Other…</option>
+                </select>
+                {formData.bulk_type === 'Other' && (
+                  <input
+                    id="bulk_custom_type"
+                    className={`${inputClass} mt-2`}
+                    value={formData.bulk_custom_type}
+                    onChange={handleInputChange}
+                    placeholder="Enter bulk packaging type"
+                  />
+                )}
               </div>
-              {/* <div className="md:col-span-2"><label className="block text-sm font-semibold text-stone-700 mb-1.5">Dispatch Location</label><input id="dispatch_location" className={inputClass} value={formData.dispatch_location} onChange={handleInputChange} placeholder="City, State (e.g., Pune, Maharashtra)" /></div> */}
+              <div>
+                <label className={labelClass}>Capacity Bulk Package</label>
+                <div className="flex gap-2">
+                  <input
+                    id="bulk_capacity"
+                    type="number"
+                    min="0"
+                    className={inputClass}
+                    value={formData.bulk_capacity}
+                    onChange={handleInputChange}
+                    placeholder="e.g., 50"
+                  />
+                  <input
+                    id="bulk_capacity_unit"
+                    className={`${inputClass} max-w-[120px]`}
+                    value={formData.bulk_capacity_unit}
+                    onChange={handleInputChange}
+                    placeholder="units"
+                  />
+                </div>
+                <p className="text-xs text-stone-400 mt-1">e.g. 1 Carton contains 50 units</p>
+              </div>
             </div>
           </section>
 

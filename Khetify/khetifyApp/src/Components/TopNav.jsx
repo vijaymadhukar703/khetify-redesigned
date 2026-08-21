@@ -51,24 +51,9 @@ const TopNav = ({ onMenuClick, brand, homePath = '/', resolveCrumb, Bell, profil
           )}
         </button>
 
-        {!onHome && (
-          <button
-            onClick={() => navigate(homePath)}
-            className="flex items-center gap-1.5 text-stone-600 hover:text-stone-900 border border-stone-200 hover:border-stone-300 hover:bg-stone-50 rounded-lg px-2.5 py-1.5 transition-colors shrink-0"
-            title="Back to Home"
-          >
-            <span className="material-symbols-outlined text-[20px]">arrow_back</span>
-            <span className="text-sm font-semibold hidden sm:inline">Back to Home</span>
-          </button>
-        )}
+        
 
-        {!onHome && crumb && (
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="material-symbols-outlined text-stone-300 text-[18px]">chevron_right</span>
-            <span className="material-symbols-outlined text-stone-500 text-[20px] shrink-0">{crumb.icon}</span>
-            <span className="text-base font-bold text-stone-900 truncate">{crumb.title}</span>
-          </div>
-        )}
+       
       </div>
 
       {/* Right: notifications + account */}

@@ -8,7 +8,6 @@ import {
   verifySellerDocument, rejectSellerDocument, attachPcAgreement,
   getCompanyPcForm, saveCompanyPcForm,
 } from '../../lib/imsApi';
-import BackButton from '../../Components/BackButton';
 
 const FIELD_TYPES = ['text', 'number', 'date', 'select', 'file'];
 // Profile autofill targets a seller can map a field to (so it pre-fills).
@@ -75,7 +74,6 @@ const CompanyPcApplications = () => {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-8 py-6 font-sora">
-      <BackButton />
       <div className="flex items-end justify-between gap-3 mb-5 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-stone-900 mb-1">PC Applications</h1>
@@ -131,9 +129,75 @@ const CompanyPcApplications = () => {
 
 // Company-configurable PC application form builder — add / edit / remove /
 // reorder fields, mark required, set the profile autofill mapping, and save.
+
+/**
+ * The per-field actions, collapsed behind a single ⋮ button.
+ *
+ * SAME THREE ACTIONS, SAME HANDLERS — Move up, Move down and Remove still call
+ * the exact `move(i, -1)`, `move(i, 1)` and `remove(i)` they always did. Only
+ * the presentation changed, so a long field row no longer ends in three icons
+ * competing with the inputs beside them.
+ *
+ * Move up is disabled on the first row and Move down on the last, because those
+ * were silent no-ops before: `move` returns the list unchanged at the ends, so
+ * the button looked live and did nothing.
+ */
+const RowActionsMenu = ({ onMoveUp, onMoveDown, onRemove, isFirst, isLast }) => {
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef(null);
+
+  // Close on an outside click, the way a native menu behaves.
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (e) => { if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open]);
+
+  const run = (fn) => () => { setOpen(false); fn(); };
+  const item = 'flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed';
+
+  return (
+    <div className="relative" ref={boxRef}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title="Actions"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className="flex h-8 w-8 items-center justify-center rounded-lg text-stone-400 transition-colors hover:bg-stone-100 hover:text-stone-700"
+      >
+        <span className="material-symbols-outlined text-lg">more_vert</span>
+      </button>
+
+      {open && (
+        /* right-0 so the menu opens INWARDS from a right-aligned button and
+           cannot spill off the edge of the card on a narrow screen. */
+        <div role="menu" className="absolute right-0 z-30 mt-1 w-40 overflow-hidden rounded-xl border border-stone-200 bg-white py-1 shadow-xl">
+          <button type="button" role="menuitem" disabled={isFirst} onClick={run(onMoveUp)}
+            className={`${item} text-stone-600 hover:bg-stone-50`}>
+            <span className="material-symbols-outlined text-base">arrow_upward</span> Move up
+          </button>
+          <button type="button" role="menuitem" disabled={isLast} onClick={run(onMoveDown)}
+            className={`${item} text-stone-600 hover:bg-stone-50`}>
+            <span className="material-symbols-outlined text-base">arrow_downward</span> Move down
+          </button>
+          <button type="button" role="menuitem" onClick={run(onRemove)}
+            className={`${item} text-[#EA2831] hover:bg-red-50`}>
+            <span className="material-symbols-outlined text-base">delete</span> Remove
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const FIELDS_PER_PAGE = 5;
+
 const FormBuilderCard = () => {
   const [fields, setFields] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [page, setPage] = useState(1);
 
   useEffect(() => { getCompanyPcForm().then((r) => setFields(r?.data?.fields || [])).catch(apiErr); }, []);
 
@@ -144,7 +208,13 @@ const FormBuilderCard = () => {
     if (j < 0 || j >= fs.length) return fs;
     const next = [...fs]; [next[i], next[j]] = [next[j], next[i]]; return next;
   });
-  const add = () => setFields((fs) => [...fs, { key: `field_${fs.length + 1}`, label: '', type: 'text', required: false, profileField: null }]);
+  const add = () => setFields((fs) => {
+    const next = [...fs, { key: `field_${fs.length + 1}`, label: '', type: 'text', required: false, profileField: null }];
+    // Jump to the page the new field landed on, otherwise "+ Add field" appears
+    // to do nothing once the list is longer than one page.
+    setPage(Math.ceil(next.length / FIELDS_PER_PAGE));
+    return next;
+  });
 
   const save = async () => {
     setBusy(true);
@@ -160,12 +230,33 @@ const FormBuilderCard = () => {
     } catch (e) { apiErr(e); } finally { setBusy(false); }
   };
 
+  /* PAGINATION — a pure view slice over `fields`. The array itself is never
+     reordered or trimmed, so Save still posts EVERY field, not just the page on
+     screen.
+
+     THE REAL INDEX IS CARRIED THROUGH. `update`, `move` and `remove` all address
+     a field by its position in the full array, so the slice keeps each row's
+     true index (`start + n`). Using the position within the page would edit the
+     wrong field on page 2 onwards — the classic pagination bug. */
+  const total = fields?.length || 0;
+  const totalPages = Math.max(1, Math.ceil(total / FIELDS_PER_PAGE));
+  const currentPage = Math.min(page, totalPages);
+  const start = (currentPage - 1) * FIELDS_PER_PAGE;
+  const pageFields = (fields || []).slice(start, start + FIELDS_PER_PAGE);
+  const rangeStart = total === 0 ? 0 : start + 1;
+  const rangeEnd = Math.min(start + FIELDS_PER_PAGE, total);
+
   const cell = 'h-9 px-2 rounded-lg border border-stone-300 text-sm bg-white outline-none focus:border-[#EA2831]';
   return (
     <div className="bg-white border border-stone-200 rounded-2xl p-5 shadow-sm mb-5">
-      <div className="flex items-center justify-between mb-1">
-        <h2 className="font-bold text-stone-900">Application form</h2>
-        <span className="text-[11px] text-stone-400">Sellers fill this when applying for your PC</span>
+      {/* The explanatory line now sits IN the heading rather than floating at
+          the far right of the card, where on a narrow screen it wrapped away
+          from the title it belongs to. */}
+      <div className="mb-1">
+        <h2 className="font-bold text-stone-900">
+          Application Form{' '}
+          <span className="font-medium text-stone-400">(Sellers fill this when applying for your PC)</span>
+        </h2>
       </div>
       <p className="text-xs text-stone-500 mb-4">Map a field to a profile value to auto-fill it from the seller&apos;s profile (so they never re-type PAN/GSTIN/etc.).</p>
       {fields === null ? <p className="text-sm text-stone-400">Loading…</p> : (
@@ -178,10 +269,14 @@ const FormBuilderCard = () => {
               <span className="w-24">Type</span>
               <span className="w-52">Auto-fill from profile</span>
               <span>Required</span>
-              <span className="ml-auto pr-1">Actions</span>
+              <span className="ml-auto pr-2">Actions</span>
             </div>
           )}
-          {fields.map((f, i) => (
+          {pageFields.map((f, n) => {
+            // The field's position in the FULL array — every handler below
+            // addresses fields by this, never by the index within the page.
+            const i = start + n;
+            return (
             <div key={i} className="flex flex-wrap items-center gap-2 border border-stone-100 rounded-lg p-2">
               <input className={`${cell} w-40`} value={f.label} placeholder="Label" onChange={(e) => update(i, { label: e.target.value })} />
               {/* <input className={`${cell} w-32`} value={f.key} placeholder="key" onChange={(e) => update(i, { key: e.target.value })} /> */}
@@ -198,12 +293,48 @@ const FormBuilderCard = () => {
                 <input type="checkbox" checked={!!f.required} onChange={(e) => update(i, { required: e.target.checked })} /> Required
               </label>
               <div className="ml-auto flex items-center gap-1">
-                <button onClick={() => move(i, -1)} className="text-stone-400 hover:text-stone-700" title="Move up"><span className="material-symbols-outlined text-base">arrow_upward</span></button>
-                <button onClick={() => move(i, 1)} className="text-stone-400 hover:text-stone-700" title="Move down"><span className="material-symbols-outlined text-base">arrow_downward</span></button>
-                <button onClick={() => remove(i)} className="text-red-400 hover:text-red-600" title="Remove"><span className="material-symbols-outlined text-base">delete</span></button>
+                <RowActionsMenu
+                  onMoveUp={() => move(i, -1)}
+                  onMoveDown={() => move(i, 1)}
+                  onRemove={() => remove(i)}
+                  isFirst={i === 0}
+                  isLast={i === total - 1}
+                />
               </div>
             </div>
-          ))}
+            );
+          })}
+
+          {/* PAGINATION. Only shown once there is more than one page — a
+              three-field form should not carry a pager. The counts read the FULL
+              list, so the total is the real number of fields, not the page. */}
+          {total > FIELDS_PER_PAGE && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-stone-400">
+                Showing {rangeStart}–{rangeEnd} of {total} fields
+              </p>
+              <div className="flex items-center gap-1">
+                <button type="button" onClick={() => setPage(currentPage - 1)} disabled={currentPage === 1}
+                  className="rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-xs font-bold text-stone-500 transition-colors hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white">
+                  Previous
+                </button>
+                {Array.from({ length: totalPages }, (_, k) => k + 1).map((num) => (
+                  <button key={num} type="button" onClick={() => setPage(num)}
+                    className={`min-w-[32px] rounded-lg border px-2 py-1.5 text-xs font-bold transition-colors ${
+                      num === currentPage
+                        ? 'border-[#EA2831] bg-[#EA2831] text-white'
+                        : 'border-stone-200 bg-white text-stone-500 hover:bg-stone-50'
+                    }`}>
+                    {num}
+                  </button>
+                ))}
+                <button type="button" onClick={() => setPage(currentPage + 1)} disabled={currentPage === totalPages}
+                  className="rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-xs font-bold text-stone-500 transition-colors hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white">
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
           <div className="flex items-center gap-2 pt-1">
             <button onClick={add} className="text-xs font-bold px-3 py-1.5 rounded-lg border border-stone-200 text-stone-600 hover:bg-stone-50">+ Add field</button>
             <button onClick={save} disabled={busy} className="text-xs font-bold px-4 py-1.5 rounded-lg bg-[#EA2831] text-white hover:bg-red-600 disabled:opacity-60">{busy ? 'Saving…' : 'Save form'}</button>

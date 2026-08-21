@@ -13,6 +13,9 @@ const {
   submitSellerOnboarding,
   getSellerLink,
   ackApproval,
+  sellerForgotPassword,
+  sellerResetPassword,
+  sellerChangePassword,
 } = require("../../controller/Seller/sellerAuthController");
 const {
   getSellerCompanyLinks,
@@ -40,6 +43,22 @@ const manageCompanies = authorize("company:manage");
 // company login/register limiter.
 router.post("/register", registerSeller);
 router.post("/login", loginSeller);
+
+// ── PASSWORD RESET (public, no auth) ──
+// Getting back into your own account must never depend on being signed in, so
+// these sit beside login and carry no auth and no capability. The seller
+// counterpart of /api/users/forgot-password, which is company-members-only.
+// Changing a password while SIGNED IN needs nothing here: that already works
+// through /api/users/change-password, which is scoped to the caller's own
+// account rather than to a company.
+router.post("/forgot-password", sellerForgotPassword);
+router.post("/reset-password", sellerResetPassword);
+
+// CHANGING YOUR PASSWORD WHILE SIGNED IN. It lives here, not on
+// /api/users/change-password, because principalRouteGuard refuses a seller
+// token on any non-/api/seller route ("Company access only"). Authenticated,
+// but no capability check: every principal may change their OWN password.
+router.post("/change-password", authMiddleware, sellerChangePassword);
 
 // Authenticated principal.
 router.get("/me", authMiddleware, getSellerMe);

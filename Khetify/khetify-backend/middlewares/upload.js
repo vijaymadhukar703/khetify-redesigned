@@ -61,4 +61,12 @@ const upload = multer({
   fileFilter,
 });
 
+// Pre-configured fields() middleware for product create/update routes.
+// Accepts up to 5 product gallery images and up to 10 per-variant images in
+// one multipart request, keeping them in separate req.files buckets.
+upload.uploadProductFields = upload.fields([
+  { name: "productImages", maxCount: 5 },
+  { name: "variantImages", maxCount: 10 },
+]);
+
 module.exports = upload;

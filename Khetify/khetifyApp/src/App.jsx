@@ -101,6 +101,7 @@ import SellerBilling from './pages/seller/SellerBilling';
 import SellerTeam from './pages/seller/SellerTeam';
 import SellerAdministration from './pages/seller/SellerAdministration';
 import SellerProfile from './pages/seller/SellerProfile';
+import SellerWarehouseSettings from './pages/seller/SellerWarehouseSettings';
 import SellerFaq from './pages/seller/SellerFaq';
 import { SellerSubscriptionProvider } from './context/SellerSubscriptionContext';
 import { SellerPermissionProvider } from './context/SellerPermissionContext';
@@ -318,6 +319,12 @@ function App() {
         <Route element={<RequireSeller><SellerSubscriptionProvider><SellerPermissionProvider><SellerLayout /></SellerPermissionProvider></SellerSubscriptionProvider></RequireSeller>}>
           <Route path="/seller/hub" element={<SellerHub />} />
           <Route path="/seller/profile" element={<SellerProfile />} />
+          {/* SELLER WAREHOUSE — Account Settings (Change / Forgot password).
+              Inside the seller layout, so it inherits the same auth guard and
+              chrome as every other seller page. The menu entry that reaches it
+              is warehouse-role only; the route itself stays plain, exactly like
+              the company Warehouse Settings route. */}
+          <Route path="/seller/settings" element={<SellerWarehouseSettings />} />
           <Route path="/seller/admin" element={<SellerAdministration />} />
           <Route path="/seller/dashboard" element={<SellerDashboard />} />
           <Route path="/seller/analytics" element={<SellerAnalytics />} />

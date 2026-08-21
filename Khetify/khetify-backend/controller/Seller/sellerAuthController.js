@@ -539,3 +539,197 @@ exports.ackApproval = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+/* ══════════════════════════════════════════════════════════════════════════
+   SELLER MEMBER PASSWORD RESET (email link)
+
+   A seller team member — a Warehouse Manager, say — is a `User` row with
+   `ownerType: "seller"`. The company member flow in
+   controller/User/userController is hard-scoped to `ownerType: "company"`
+   ("seller members reset via the seller portal"), and that portal flow did not
+   exist, so a seller manager who forgot their password had no way back in.
+
+   These two handlers are that flow. They are the company one rule for rule —
+   same 1-hour TTL, same SHA-256-hashed token at rest, same generic reply on
+   every path so the endpoint cannot be used to discover which emails are
+   registered, same rollback if the mail fails — sharing the primitives through
+   services/passwordResetService rather than copying them again.
+
+   CHANGING YOUR PASSWORD WHILE SIGNED IN NEEDS NOTHING HERE: `POST
+   /api/users/change-password` reads `User.findById(req.user.id)` and is not
+   owner-scoped, and a seller member's token carries that same User id, so it
+   already works for sellers exactly as it does for company members.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+const passwordReset = require("../../services/passwordResetService");
+
+/**
+ * POST /api/seller/forgot-password  { email }   (public — no auth)
+ *
+ * Emails a one-time reset link to a SELLER TEAM MEMBER.
+ */
+exports.sellerForgotPassword = async (req, res) => {
+  try {
+    const email = String(req.body.email || "").toLowerCase().trim();
+    if (!email || !isEmail(email)) {
+      return res.status(400).json({ success: false, message: "A valid email is required" });
+    }
+
+    // The SAME reply whether the account was found, not found or disabled —
+    // otherwise this endpoint becomes a way to enumerate registered emails.
+    const genericResponse = {
+      success: true,
+      message: "If an account exists for that email, a reset link has been sent.",
+    };
+
+    // SELLER members only. A company member resetting here would silently
+    // bypass the company flow, so the scope is explicit on both sides.
+    const user = await User.findOne({ ownerType: "seller", email });
+    if (!user || user.status === "disabled") return res.json(genericResponse);
+
+    const { raw, hash, expiresAt } = passwordReset.newResetToken();
+    user.resetPasswordToken = hash;
+    user.resetPasswordExpires = expiresAt;
+    await user.save();
+
+    // `type=seller` tells the shared reset page to consume the token on the
+    // SELLER endpoint. Without it the page keeps its existing company/member
+    // behaviour untouched.
+    const resetUrl = passwordReset.resetUrlFor(raw, "seller");
+
+    try {
+      await passwordReset.sendResetEmail({ to: email, resetUrl });
+    } catch (mailErr) {
+      // Roll back, so a failed send never leaves a live reset token behind.
+      user.resetPasswordToken = null;
+      user.resetPasswordExpires = null;
+      await user.save();
+      console.error("sellerForgotPassword mail error:", mailErr);
+      return res.status(500).json({
+        success: false,
+        message: "Could not send the reset email. Please try again later.",
+      });
+    }
+
+    res.json(genericResponse);
+  } catch (error) {
+    console.error("sellerForgotPassword error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+/**
+ * POST /api/seller/reset-password  { token, password }   (public — no auth)
+ *
+ * Consumes the emailed token and sets the new password. The token is matched by
+ * its HASH and must still be unexpired; it is cleared on use, so a link works
+ * exactly once.
+ */
+exports.sellerResetPassword = async (req, res) => {
+  try {
+    const rawToken = String(req.body.token || "").trim();
+    const password = String(req.body.password || "").trim();
+
+    if (!rawToken) {
+      return res.status(400).json({ success: false, message: "Reset token is required" });
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ success: false, message: "Password must be at least 6 characters" });
+    }
+
+    const user = await User.findOne({
+      ownerType: "seller",
+      resetPasswordToken: passwordReset.hashResetToken(rawToken),
+      resetPasswordExpires: { $gt: new Date() },
+    });
+    if (!user) {
+      return res.status(400).json({ success: false, message: "Reset link is invalid or has expired" });
+    }
+
+    user.passwordHash = await bcrypt.hash(password, 10);
+    // One use only.
+    user.resetPasswordToken = null;
+    user.resetPasswordExpires = null;
+    await user.save();
+
+    res.json({ success: true, message: "Password reset successful. You can now log in." });
+  } catch (error) {
+    console.error("sellerResetPassword error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+/**
+ * POST /api/seller/change-password  { currentPassword, newPassword }
+ *
+ * WHY THIS EXISTS RATHER THAN REUSING /api/users/change-password.
+ *
+ * That shared endpoint is scoped to the caller's own account and would have
+ * suited a seller perfectly — but a seller token can never reach it.
+ * middlewares/principalRouteGuard is an app-wide, defence-in-depth rule:
+ *
+ *     if (!isSellerRoute && isSeller) → 403 "Company access only"
+ *
+ * A `principalType: "seller"` token may ONLY touch /api/seller/*, so the call
+ * was refused before it ever reached the handler. That guard is deliberate and
+ * correct — it stops a token minted for one portal being replayed against the
+ * other — so the endpoint moves into the seller namespace instead of the guard
+ * being weakened.
+ *
+ * The RULES are the company handler's, unchanged: both fields required, at
+ * least 6 characters, the new password must differ from the current one, and
+ * the current one is verified with bcrypt before anything is written.
+ *
+ * TWO KINDS OF PRINCIPAL sign in to this portal, and each keeps its password in
+ * a different collection:
+ *   · a TEAM MEMBER (Warehouse Manager, staff) — a `User` row
+ *   · the SELLER ACCOUNT itself (seller_admin) — the `Seller` row
+ * A member's token carries a User `id` that differs from `sellerId`; for the
+ * account itself the two are the same. Both are supported, so the page works
+ * for whoever opens it.
+ */
+exports.sellerChangePassword = async (req, res) => {
+  try {
+    const currentPassword = String(req.body.currentPassword || "");
+    const newPassword = String(req.body.newPassword || "").trim();
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ success: false, message: "Current and new password are required" });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ success: false, message: "New password must be at least 6 characters" });
+    }
+    if (newPassword === currentPassword.trim()) {
+      return res.status(400).json({ success: false, message: "New password must be different from the current one" });
+    }
+
+    // WHICH RECORD HOLDS THIS PRINCIPAL'S PASSWORD — decided from the VERIFIED
+    // token, never from anything the client sent.
+    const isAccountItself = String(req.user.id) === String(req.user.sellerId);
+    const account = isAccountItself
+      ? await Seller.findById(req.user.id)
+      : await User.findOne({ _id: req.user.id, ownerType: "seller", ownerId: req.user.sellerId });
+
+    if (!account || !account.passwordHash) {
+      return res.status(404).json({ success: false, message: "Account not found" });
+    }
+
+    const ok = await bcrypt.compare(currentPassword.trim(), account.passwordHash);
+    if (!ok) {
+      return res.status(400).json({ success: false, message: "Current password is incorrect" });
+    }
+
+    account.passwordHash = await bcrypt.hash(newPassword, 10);
+    // Any outstanding reset link is void once the password changes by hand.
+    account.resetPasswordToken = null;
+    account.resetPasswordExpires = null;
+    await account.save();
+
+    // The existing token stays valid, so the user is not signed out — the same
+    // behaviour the company Settings page describes on screen.
+    res.json({ success: true, message: "Password updated successfully" });
+  } catch (error) {
+    console.error("sellerChangePassword error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};

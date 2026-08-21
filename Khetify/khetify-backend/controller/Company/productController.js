@@ -260,12 +260,15 @@ exports.createProduct = async (req, res) => {
     }
 
     // ================= IMAGE HANDLE =================
-    if (req.files && req.files.length > 0) {
+    // upload.fields() puts files in named buckets: req.files.productImages and
+    // req.files.variantImages. Previously upload.array() gave a flat array.
+    const productImageFiles = req.files?.productImages ?? [];
+    if (productImageFiles.length > 0) {
       // Store a URL-safe relative path. file.path is an absolute filesystem path
       // (with backslashes on Windows) which breaks every downstream URL builder.
       // file.filename is the disk filename; the multer middleware places it in
       // uploads/products/, served by `app.use("/uploads", ...)`.
-      req.body.productImages = req.files.map((file) => `uploads/products/${file.filename}`);
+      req.body.productImages = productImageFiles.map((file) => `uploads/products/${file.filename}`);
     }
 
     // ================= NORMALIZE + VALIDATE =================
@@ -293,9 +296,49 @@ exports.createProduct = async (req, res) => {
       return res.status(400).json({ success: false, message: invalid });
     }
 
+    // ================= NORMALIZE + VALIDATE =================
+    // Blank numeric strings ("" from an untouched input) would otherwise reach
+    // mongoose as a Number cast error → 500. Coerce first, validate second.
+    // coerceNumbers(req.body);
+    // coerceDates(req.body);
+    // normalizeMeasurementUnits(req.body);
+    // normalizeHsn(req.body);
+    // normalizeThirdParty(req.body);
+    // deriveShelfLife(req.body);
+
+    // // COUNTRY OF ORIGIN IS FIXED. The form renders it read-only, and the value
+    // // is set here as well so it can be neither left blank nor overridden by a
+    // // hand-made request.
+    // req.body.countryOrigin = "India";
+
+    // const isDraft = req.body.productUpload === "saveDraft";
+    // const invalid = validateProductPayload(req.body, {
+    //   // Drafts are deliberately allowed to be incomplete.
+    //   requireUnitValue: !isDraft,
+    //   requireUpload: !isDraft,
+    // });
+    // if (invalid) {
+    //   return res.status(400).json({ success: false, message: invalid });
+    // }
+
     // ================= VARIANT HANDLE =================
     if (req.body.variants && typeof req.body.variants === "string") {
       req.body.variants = JSON.parse(req.body.variants);
+    }
+    // Attach per-variant images. The frontend sends all variant image files under
+    // the "variantImages" field (appended multiple times → multer collects them
+    // as an ordered array), and stores each variant's position in that array as
+    // `imageIndex`. Strip imageIndex before saving — it's a transport artefact.
+    if (Array.isArray(req.body.variants) && req.body.variants.length > 0) {
+      const variantFiles = req.files?.variantImages ?? [];
+      req.body.variants = req.body.variants.map((v) => {
+        const { imageIndex, ...rest } = v;
+        const img =
+          imageIndex != null && variantFiles[imageIndex]
+            ? `uploads/products/${variantFiles[imageIndex].filename}`
+            : undefined;
+        return img != null ? { ...rest, image: img } : rest;
+      });
     }
     // Bulk packaging may arrive as a JSON string from multipart form-data.
     if (req.body.bulkPackaging && typeof req.body.bulkPackaging === "string") {
@@ -521,11 +564,12 @@ exports.updateProduct = async (req, res) => {
         return i >= 0 ? s.slice(i) : s;
       });
 
-    if (req.files && req.files.length > 0) {
+    const productImageFiles = req.files?.productImages ?? [];
+    if (productImageFiles.length > 0) {
       // Keep S3 `location` if present, else the clean relative
       // "uploads/products/<filename>" path (never the absolute Windows
       // file.path, which breaks downstream URL builders).
-      const newImages = req.files.map((file) => file.location || `uploads/products/${file.filename}`);
+      const newImages = productImageFiles.map((file) => file.location || `uploads/products/${file.filename}`);
       currentImages = [...currentImages, ...newImages];
     }
     req.body.productImages = currentImages;
@@ -541,6 +585,18 @@ exports.updateProduct = async (req, res) => {
     if (req.body.variants && typeof req.body.variants === "string") {
       try { req.body.variants = JSON.parse(req.body.variants); }
       catch { delete req.body.variants; }
+    }
+    // Attach newly uploaded variant images (same mapping logic as createProduct).
+    if (Array.isArray(req.body.variants) && req.body.variants.length > 0) {
+      const variantFiles = req.files?.variantImages ?? [];
+      req.body.variants = req.body.variants.map((v) => {
+        const { imageIndex, ...rest } = v;
+        const img =
+          imageIndex != null && variantFiles[imageIndex]
+            ? `uploads/products/${variantFiles[imageIndex].filename}`
+            : undefined;
+        return img != null ? { ...rest, image: img } : rest;
+      });
     }
     if (req.body.bulkPackaging && typeof req.body.bulkPackaging === "string") {
       try { req.body.bulkPackaging = JSON.parse(req.body.bulkPackaging); }

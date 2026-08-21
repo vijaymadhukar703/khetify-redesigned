@@ -4,38 +4,19 @@ const { generateUniqueProductCode } = require("../../services/productCodeService
 // ================= VARIANT SCHEMA =================
 
 const variantSchema = new mongoose.Schema({
-  color: {
-    type: String,
-  },
+  // Human-readable combination label, e.g. "500g / Red"
+  label: { type: String, required: true },
 
-  size: {
-    type: String,
-  },
+  // Key→value map of attribute names to their chosen values,
+  // e.g. { Size: "500g", Color: "Red" }
+  attributes: { type: Map, of: String, default: {} },
 
-  length: {
-    type: Number,
-  },
+  sku:   { type: String },
+  mrp:   { type: Number },
+  stock: { type: Number, default: 0 },
 
-  width: {
-    type: Number,
-  },
-
-  height: {
-    type: Number,
-  },
-
-  weight: {
-    type: Number,
-  },
-
-  price: {
-    type: Number,
-  },
-
-  stock: {
-    type: Number,
-    default: 0,
-  },
+  // Relative path to the variant-specific image, e.g. "uploads/products/<file>"
+  image: { type: String },
 });
 
 // ================= PRODUCT SCHEMA =================

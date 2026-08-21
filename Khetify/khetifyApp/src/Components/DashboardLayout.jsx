@@ -79,6 +79,9 @@ const DashboardLayout = () => {
     { to: '/hub', icon: 'home', title: 'Home', end: true },
     ...MODULES.filter(visible).map((m) => ({
       to: m.path, icon: m.icon, title: companyLabel(m, isMainCompany), isLocked: locked(m), lockTitle: 'Upgrade to unlock',
+      // Carried through to onLocked so Billing can show a message for the
+      // SPECIFIC module the person tried to open, instead of a generic one.
+      moduleKey: m.key,
     })),
     // Help resources — always available, no gating.
     { to: '/faq', icon: 'quiz', title: 'FAQ' },
@@ -142,7 +145,7 @@ const DashboardLayout = () => {
             mobileOpen={mobileOpen}
             onMobileClose={() => setMobileOpen(false)}
             entries={entries}
-            onLocked={() => navigate('/billing')}
+            onLocked={(entry) => navigate('/billing', { state: { fromKey: entry?.moduleKey, fromTitle: entry?.title } })}
           />
         )}
         {/* overflow-x-hidden stops a stray wide element from scrolling the whole

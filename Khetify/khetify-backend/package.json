@@ -6,6 +6,7 @@
     "start": "node Server.js",
     "dev": "nodemon Server.js",
     "seed:ims": "node scripts/seedIms.js",
+    "seed:hsn": "node scripts/seedHsnGst.js",
     "ensure-indexes": "node scripts/ensureIndexes.js",
     "migrate": "node scripts/migrations/001-backfill-customer.js && node scripts/migrations/002-user-roles.js && node scripts/migrations/003-default-bins.js",
     "test": "jest --runInBand --forceExit",
