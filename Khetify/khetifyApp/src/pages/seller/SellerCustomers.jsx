@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import Swal from 'sweetalert2';
 import { Modal, Field, inputCls, PrimaryBtn, GhostBtn, Th } from '../Company/ims/ImsUi';
 import { formatINR, fmtDate } from '../../lib/imsApi';
-import BackButton from '../../Components/BackButton';
+
 import {
   getSellerLink, getSellerCustomers, createSellerCustomer, updateSellerCustomer, getSellerCustomerHistory,
 } from '../../lib/sellerApi';
@@ -108,7 +108,7 @@ const SellerCustomers = () => {
   if (!approved) {
     return (
       <div className="flex-1 p-4 sm:p-8 bg-white font-sora">
-        <div className="max-w-6xl mx-auto"><BackButton to="/seller/admin" /></div>
+      
         <div className="max-w-xl mx-auto mt-10 bg-amber-50 border border-amber-200 rounded-2xl p-6 text-center">
           <span className="material-symbols-outlined text-amber-500 text-4xl">lock</span>
           <h2 className="text-lg font-bold text-amber-800 mt-2">Customers &amp; Dealers is locked</h2>
@@ -121,7 +121,7 @@ const SellerCustomers = () => {
   return (
     <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-white font-sora">
       <div className="max-w-6xl mx-auto space-y-6">
-        <BackButton to="/seller/admin" />
+       
         <div className="flex items-center justify-between gap-3">
           <div>
             <h1 className="text-xl font-bold text-stone-900">Customers &amp; Dealers</h1>

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getSellerCompanies, searchSellerCompanies, getRecommendedCompanies } from '../../lib/sellerApi';
-import BackButton from '../../Components/BackButton';
+
 
 const STATUS_STYLE = {
   active: 'bg-green-50 text-green-700',
@@ -63,7 +63,7 @@ const SellerCompanies = () => {
   return (
     <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-stone-50/50 font-sora">
       <div className="max-w-4xl mx-auto space-y-8">
-        <BackButton to="/seller/admin" />
+        
         <div>
           <h1 className="text-xl font-bold text-stone-900">Companies</h1>
           <p className="text-sm text-stone-500">Companies that issued you a Principal Certificate — and new ones to apply to.</p>

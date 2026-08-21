@@ -3,7 +3,7 @@ import Swal from 'sweetalert2';
 import { getSellerPlans, changeSellerPlan } from '../../lib/sellerApi';
 import { useSellerSubscription } from '../../context/SellerSubscriptionContext';
 import { useSellerPermission } from '../../context/SellerPermissionContext';
-import BackButton from '../../Components/BackButton';
+
 
 const toast = (icon, title) => Swal.fire({ icon, title, toast: true, position: 'top-end', timer: 2200, showConfirmButton: false });
 
@@ -35,7 +35,7 @@ const SellerBilling = () => {
 
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-8 py-8 font-sora">
-      <BackButton to="/seller/admin" />
+     
       <h1 className="text-2xl font-bold text-stone-900 mb-1">Billing &amp; Usage</h1>
       <p className="text-stone-500 mb-6">
         You are on the <b className="text-stone-800 capitalize">{sellerPlan}</b> plan.
