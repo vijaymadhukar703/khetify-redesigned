@@ -13,7 +13,7 @@ import { NavLink } from 'react-router-dom';
  *   - normal entries render a NavLink (active highlight via isActive)
  *   - locked entries render a button → onLocked(entry) (e.g. route to Billing)
  */
-const Sidebar = ({ collapsed, onToggle, mobileOpen, onMobileClose, entries = [], title = 'Menu', onLocked }) => (
+const Sidebar = ({ collapsed, onToggle, mobileOpen, onMobileClose, entries = [], title = '', onLocked }) => (
   <>
     {/* Mobile backdrop */}
     {mobileOpen && (

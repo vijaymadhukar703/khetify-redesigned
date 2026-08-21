@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import { getSupplyOrders, updateSupplyStatus, getSupplySourceOptions } from '../../lib/imsApi';
-import BackButton from '../../Components/BackButton';
+
 import { usePermission } from '../../context/PermissionContext';
 import { WAREHOUSE_ROLES } from '../../lib/roles';
 
@@ -115,7 +115,7 @@ const CompanySupplyRequests = () => {
     // Company Warehouse gets the wider, lot-aware view; every other role keeps
     // the original centred layout.
     <div className={`font-sora py-6 ${enhanced ? 'w-full px-3 sm:px-5' : 'max-w-7xl mx-auto px-4 sm:px-8'}`}>
-      <BackButton />
+     
       <h1 className="text-2xl font-bold text-stone-900 mb-1">Supply Requests</h1>
       <p className="text-stone-500 mb-5">Bulk-supply requests from the dealers you supply. Approving only authorizes the request and assigns a source warehouse — no stock moves. The warehouse reserves it at pick, then packs and dispatches it from Send Stock.</p>
 
