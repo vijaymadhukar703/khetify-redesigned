@@ -1070,10 +1070,81 @@ const OrderProcessModal = ({ shipment: initial, onClose, onDone }) => {
 };
 
 /* ───────── Shipment Tracking & Transfers ───────── */
+// Both tables on this tab paginate 10 rows at a time — the same convention the
+// company Transfers/Requests tables use (Company/ims/ImsTransport.jsx).
+const PAGE_SIZE = 10;
+
+/**
+ * Page numbers to render. Short runs list every page; longer ones show a
+ * window around the current page with the first and last always reachable and
+ * '…' for the gap — identical to the helper in ImsTransport.jsx, so every
+ * paginated table in the app behaves the same way.
+ */
+const pageWindow = (current, total) => {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const pages = [1];
+  const from = Math.max(2, current - 1);
+  const to = Math.min(total - 1, current + 1);
+  if (from > 2) pages.push('start-gap');
+  for (let n = from; n <= to; n += 1) pages.push(n);
+  if (to < total - 1) pages.push('end-gap');
+  pages.push(total);
+  return pages;
+};
+
+/** Previous / page-numbers / Next — one control shared by both tables below. */
+const Pagination = ({ currentPage, totalPages, onPage, rangeStart, rangeEnd, total, noun }) => (
+  <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mt-3">
+    <p className="text-[11px] font-bold uppercase tracking-wider text-stone-400">
+      Showing {rangeStart}–{rangeEnd} of {total} {noun}
+    </p>
+    <div className="flex items-center gap-1">
+      <button
+        onClick={() => onPage(Math.max(1, currentPage - 1))}
+        disabled={currentPage <= 1}
+        className="inline-flex items-center gap-1 text-xs font-bold px-3 py-2 rounded-lg border border-stone-200 text-stone-600 hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        <span className="material-symbols-outlined text-base">chevron_left</span> Previous
+      </button>
+      {pageWindow(currentPage, totalPages).map((n) => (
+        typeof n === 'string'
+          ? <span key={n} className="px-1 text-xs font-bold text-stone-300 select-none">…</span>
+          : (
+            <button
+              key={n}
+              onClick={() => onPage(n)}
+              className={`min-w-[36px] text-xs font-bold px-3 py-2 rounded-lg border transition-colors ${
+                n === currentPage
+                  ? 'bg-[#EA2831] border-[#EA2831] text-white'
+                  : 'border-stone-200 text-stone-600 hover:bg-stone-50'
+              }`}
+            >
+              {n}
+            </button>
+          )
+      ))}
+      <button
+        onClick={() => onPage(Math.min(totalPages, currentPage + 1))}
+        disabled={currentPage >= totalPages}
+        className="inline-flex items-center gap-1 text-xs font-bold px-3 py-2 rounded-lg border border-stone-200 text-stone-600 hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        Next <span className="material-symbols-outlined text-base">chevron_right</span>
+      </button>
+    </div>
+  </div>
+);
+
 const ShipmentsTab = ({ shipments, requests, canWrite, canActOn, onLabel, onReceive, onAccept, onReject, onNewRequest, onNewTransfer, onBoxLabels }) => {
   const [sub, setSub] = useState('shipments');
   // Search over the requests list, mirroring the company Requests tab.
   const [q, setQ] = useState('');
+  // Search over the All Transfers list — same pattern/placement as the
+  // Requests search above, just its own field and its own state.
+  const [shipQ, setShipQ] = useState('');
+  // Pagination — each table keeps its own page, so switching sub-tabs never
+  // resets or shares state between the two.
+  const [shipPage, setShipPage] = useState(1);
+  const [reqPage, setReqPage] = useState(1);
   // The decider for a request: pull → the HOLDER (from); push → the DESTINATION (to).
   const deciderWh = (r) => (r.mode === 'pull' ? r.fromWarehouseId : r.toWarehouseId);
 
@@ -1086,6 +1157,31 @@ const ShipmentsTab = ({ shipments, requests, canWrite, canActOn, onLabel, onRece
       [r.transferRef, r.productId?.productName, r.fromWarehouseId?.name, r.toWarehouseId?.name]
         .some((f) => (f || '').toLowerCase().includes(needle)))
     : requests;
+
+  // Same case-insensitive search, applied to the All Transfers list — matches
+  // on the shipment ref and both warehouse names/labels. Read-only, same as
+  // above; the underlying `shipments` data and its fetch are untouched.
+  const shipNeedle = shipQ.trim().toLowerCase();
+  const visibleShipments = shipNeedle
+    ? shipments.filter((s) =>
+      [s.ref, s.fromName, s.fromLabel, s.toName, s.toLabel]
+        .some((f) => (f || '').toLowerCase().includes(shipNeedle)))
+    : shipments;
+
+  // Derived, never stored. currentPage is clamped so a search or a status
+  // change shrinking the list can never strand the table on a page that no
+  // longer exists.
+  const shipTotalPages = Math.max(1, Math.ceil(visibleShipments.length / PAGE_SIZE));
+  const shipCurrentPage = Math.min(shipPage, shipTotalPages);
+  const shipRangeStart = visibleShipments.length === 0 ? 0 : (shipCurrentPage - 1) * PAGE_SIZE + 1;
+  const shipRangeEnd = Math.min(shipCurrentPage * PAGE_SIZE, visibleShipments.length);
+  const pagedShipments = visibleShipments.slice((shipCurrentPage - 1) * PAGE_SIZE, shipCurrentPage * PAGE_SIZE);
+
+  const reqTotalPages = Math.max(1, Math.ceil(visibleRequests.length / PAGE_SIZE));
+  const reqCurrentPage = Math.min(reqPage, reqTotalPages);
+  const reqRangeStart = visibleRequests.length === 0 ? 0 : (reqCurrentPage - 1) * PAGE_SIZE + 1;
+  const reqRangeEnd = Math.min(reqCurrentPage * PAGE_SIZE, visibleRequests.length);
+  const pagedRequests = visibleRequests.slice((reqCurrentPage - 1) * PAGE_SIZE, reqCurrentPage * PAGE_SIZE);
 
   return (
     <div>
@@ -1110,15 +1206,25 @@ const ShipmentsTab = ({ shipments, requests, canWrite, canActOn, onLabel, onRece
           (All Transfers), Request Stock asks for it (Requests). */}
       <div className="flex flex-wrap justify-between items-center gap-3 mb-4">
         <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400">
-          {sub === 'requests' ? `${visibleRequests.length} request(s)` : `${shipments.length} transfer(s)`}
+          {sub === 'requests' ? `${visibleRequests.length} request(s)` : `${visibleShipments.length} transfer(s)`}
         </p>
         <div className="flex items-center gap-3">
           {sub === 'requests' && (
             <input
               value={q}
-              onChange={(e) => setQ(e.target.value)}
+              onChange={(e) => { setQ(e.target.value); setReqPage(1); }}
               placeholder="Search ref (SH-…), product or warehouse…"
-              className="w-56 sm:w-72 border border-stone-200 rounded-lg text-sm px-3 py-2 bg-white focus:ring-[#EA2831]"
+              className="w-56 sm:w-72 border border-stone-200 rounded-lg text-sm px-3 py-2 bg-white outline-none transition-colors focus:border-[#EA2831] focus:ring-2 focus:ring-[#EA2831]/10"
+            />
+          )}
+          {/* Same field, same placement, same styling as the Requests search
+              above — just scoped to the All Transfers list. */}
+          {sub === 'shipments' && (
+            <input
+              value={shipQ}
+              onChange={(e) => { setShipQ(e.target.value); setShipPage(1); }}
+              placeholder="Search ref (SH-…), product or warehouse…"
+              className="w-56 sm:w-72 border border-stone-200 rounded-lg text-sm px-3 py-2 bg-white outline-none transition-colors focus:border-[#EA2831] focus:ring-2 focus:ring-[#EA2831]/10"
             />
           )}
           {canWrite && sub === 'requests' && (
@@ -1137,13 +1243,14 @@ const ShipmentsTab = ({ shipments, requests, canWrite, canActOn, onLabel, onRece
       </div>
 
       {sub === 'shipments' ? (
-        /* THE TRANSFERS TABLE, laid out exactly like the company one
+        <>
+        {/* THE TRANSFERS TABLE, laid out exactly like the company one
            (pages/Company/ims/ImsTransport.jsx): fixed table-layout with a
            colgroup proportioning every column to the full page width, so nothing
            scrolls horizontally on desktop and long warehouse names wrap instead
            of forcing a min-width. Below lg the shared `resp-table` CSS collapses
            each row into a labelled card, which is what the `data-label`
-           attributes are for. Same Th component, same paddings, same badges. */
+           attributes are for. Same Th component, same paddings, same badges. */}
         <div className="border border-stone-200 rounded-2xl shadow-sm bg-white overflow-hidden">
           <table className="w-full text-left border-collapse table-fixed resp-table">
             <colgroup>
@@ -1169,8 +1276,13 @@ const ShipmentsTab = ({ shipments, requests, canWrite, canActOn, onLabel, onRece
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-100">
-              {shipments.length === 0 ? <tr><td colSpan={8} className="px-3 py-12 text-center text-sm text-stone-400">No transfers yet.</td></tr>
-                : shipments.map((s) => (
+              {visibleShipments.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-3 py-12 text-center text-sm text-stone-400">
+                    {shipNeedle ? `No transfer matches “${shipQ.trim()}”.` : 'No transfers yet.'}
+                  </td>
+                </tr>
+              ) : pagedShipments.map((s) => (
                   <tr key={s._id} className="hover:bg-stone-50/40">
                     {/* The reference the backend derives (shipmentService.shipmentRef)
                         — never rebuilt here, so a row can be matched against the
@@ -1262,17 +1374,50 @@ const ShipmentsTab = ({ shipments, requests, canWrite, canActOn, onLabel, onRece
             </tbody>
           </table>
         </div>
+        {/* Pagination — 10 transfers per page. Hidden when one page holds
+            everything, exactly like the company Transfers table. */}
+        {visibleShipments.length > 0 && shipTotalPages > 1 && (
+          <Pagination
+            currentPage={shipCurrentPage}
+            totalPages={shipTotalPages}
+            onPage={setShipPage}
+            rangeStart={shipRangeStart}
+            rangeEnd={shipRangeEnd}
+            total={visibleShipments.length}
+            noun="transfers"
+          />
+        )}
+        </>
       ) : (
-        /* THE REQUESTS TABLE, laid out like the company one: same eight columns,
+        <>
+        {/* THE REQUESTS TABLE, laid out like the company one: same eight columns,
            same paddings, same ref pill, same status chip and the same
            acknowledgment line in Actions once a decision has been made. Only the
            DATA is seller-side — seller warehouses, the seller's own accept /
            reject calls, and the push/pull distinction the company flow does not
-           have. */
-        <div className="border border-stone-200 rounded-2xl overflow-x-auto">
-          <table className="w-full text-left border-collapse min-w-[920px] resp-table">
+           have.
+
+           NO MIN-WIDTH — same fix as the company Requests table
+           (Company/ims/ImsTransport.jsx): `table-fixed` plus the colgroup
+           percentages make every column share whatever width the page has,
+           instead of forcing a horizontal scrollbar the moment the content area
+           drops under a hard-coded floor. overflow-x-auto stays as a safety net
+           for a genuinely tiny window. Below lg the resp-table CSS collapses
+           rows into cards regardless, so mobile is unaffected. */}
+        <div className="border border-stone-200 rounded-2xl shadow-sm bg-white overflow-x-auto">
+          <table className="w-full text-left border-collapse table-fixed resp-table">
+            <colgroup>
+              <col style={{ width: '16%' }} />{/* Product */}
+              <col style={{ width: '6%' }} />{/* Qty */}
+              <col style={{ width: '14%' }} />{/* From (source) */}
+              <col style={{ width: '16%' }} />{/* For (requester) */}
+              <col style={{ width: '12%' }} />{/* Transfer Ref. */}
+              <col style={{ width: '10%' }} />{/* Status */}
+              <col style={{ width: '10%' }} />{/* Requested */}
+              <col style={{ width: '16%' }} />{/* Actions */}
+            </colgroup>
             <thead>
-              <tr className="text-[10px] uppercase text-stone-400 bg-stone-50">
+              <tr className="text-[10px] uppercase text-stone-400 bg-stone-50 border-b border-stone-200">
                 <Th>Product</Th>
                 <Th right>Qty</Th>
                 <Th>From (source)</Th>
@@ -1284,7 +1429,7 @@ const ShipmentsTab = ({ shipments, requests, canWrite, canActOn, onLabel, onRece
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-100">
-              {visibleRequests.map((r) => {
+              {pagedRequests.map((r) => {
                 const isPull = r.mode === 'pull';
                 const canDecide = canActOn(deciderWh(r));
                 return (
@@ -1364,6 +1509,19 @@ const ShipmentsTab = ({ shipments, requests, canWrite, canActOn, onLabel, onRece
             </tbody>
           </table>
         </div>
+        {/* Pagination — 10 requests per page, the same control as All Transfers. */}
+        {visibleRequests.length > 0 && reqTotalPages > 1 && (
+          <Pagination
+            currentPage={reqCurrentPage}
+            totalPages={reqTotalPages}
+            onPage={setReqPage}
+            rangeStart={reqRangeStart}
+            rangeEnd={reqRangeEnd}
+            total={visibleRequests.length}
+            noun="requests"
+          />
+        )}
+        </>
       )}
     </div>
   );

@@ -223,9 +223,6 @@ const validateProductPayload = (body, { existing = {}, requireUnitValue = false,
     // Identification & Traceability.
     const hsn = String(pick("hsnCode") ?? "").trim();
     if (!hsn) return "HSN Code is required";
-    if (!new RegExp(`^\\d{${HSN_LENGTH}}$`).test(hsn)) {
-      return `HSN Code must be exactly ${HSN_LENGTH} digits`;
-    }
 
     if (!filled("manufactureLicenseNo")) return "Manufacturer License No. is required";
 
