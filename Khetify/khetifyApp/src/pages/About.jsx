@@ -317,7 +317,9 @@ const About = () => {
                             <span className="text-sm">Avoid middlemen risks</span>
                         </div>
                     </div>
-                    <button className="mt-4 w-full py-3 rounded-lg border border-primary text-primary font-bold hover:bg-primary hover:text-white transition-all text-sm">
+                    <button
+                        onClick={() => navigate('/customer-shop')}
+                        className="mt-4 w-full py-3 rounded-lg border border-primary text-primary font-bold hover:bg-primary hover:text-white transition-all text-sm">
                         Explore Customer Platform
                     </button>
                 </div>
