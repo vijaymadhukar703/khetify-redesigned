@@ -6,6 +6,7 @@ const shipmentService = require("../../services/shipmentService");
 const shipmentBoxService = require("../../services/shipmentBoxService");
 const Shipment = require("../../model/Transport/Shipment");
 const { assertSellerWarehouse } = require("../../services/warehouseOwnershipService");
+const { warehouseScope, inScope } = require("../../services/warehouseScope");
 const { notify } = require("../../services/notificationService");
 
 /**
@@ -86,10 +87,23 @@ exports.createSellerSupplyOrder = async (req, res) => {
   }
 };
 
-/** GET /api/seller/supply-orders — the seller's own supply orders. */
+/**
+ * GET /api/seller/supply-orders — the seller's own supply orders.
+ *
+ * WAREHOUSE-SCOPED, exactly like GET /api/seller/shipments. `warehouseId` on
+ * the request IS the destination the seller chose when raising it, so it is the
+ * only thing that decides who may see the inbound supply: a user assigned to
+ * warehouse(s) sees ONLY the requests destined for those warehouses, and never
+ * another warehouse's inbound. An unscoped principal (seller_admin, "*") keeps
+ * seeing everything for oversight — its Operations view has no Receive tab.
+ */
 exports.getSellerSupplyOrders = async (req, res) => {
   try {
-    const rows = await SupplyOrder.find({ sellerId: req.user.sellerId })
+    const scope = await warehouseScope(req.user); // null = unscoped (seller_admin)
+    const filter = { sellerId: req.user.sellerId };
+    if (scope) filter.warehouseId = { $in: scope };
+
+    const rows = await SupplyOrder.find(filter)
       .sort({ createdAt: -1 })
       .populate({ path: "items.productId", select: "productName skuNumber unit" })
       .populate({ path: "warehouseId", select: "name code" })
@@ -126,6 +140,18 @@ exports.scanReceiveBox = async (req, res) => {
   try {
     const order = await SupplyOrder.findOne({ _id: req.params.id, sellerId: req.user.sellerId });
     if (!order) return res.status(404).json({ success: false, message: "Supply order not found" });
+    // RECEIVING IS WAREHOUSE WORK. Only a user assigned to the destination the
+    // seller chose on the request may act on it. Two rejections, one rule:
+    //   • no warehouse assignment at all (the seller account / seller_admin — head
+    //     office, holds no stock) → it may TRACK the request but never receive it
+    //   • assigned elsewhere → another warehouse's inbound is none of its business
+    const scope = await warehouseScope(req.user);
+    if (!scope) {
+      return res.status(403).json({ success: false, message: "Receiving is done by the destination warehouse — sign in as that warehouse's user." });
+    }
+    if (!inScope(scope, order.warehouseId)) {
+      return res.status(403).json({ success: false, message: "This inbound supply belongs to another warehouse" });
+    }
     if (!order.shipmentId) return res.status(409).json({ success: false, message: "This supply has no shipment to receive yet" });
 
     const shipment = await Shipment.findOne({ _id: order.shipmentId, companyId: order.companyId });
@@ -145,6 +171,16 @@ exports.receiveSupply = async (req, res) => {
   try {
     const order = await SupplyOrder.findOne({ _id: req.params.id, sellerId: req.user.sellerId });
     if (!order) return res.status(404).json({ success: false, message: "Supply order not found" });
+    // Same gate as the scan above: only the destination warehouse chosen on the
+    // original request may receive against it, and an unassigned principal (the
+    // seller account itself) may not receive at all.
+    const scope = await warehouseScope(req.user);
+    if (!scope) {
+      return res.status(403).json({ success: false, message: "Receiving is done by the destination warehouse — sign in as that warehouse's user." });
+    }
+    if (!inScope(scope, order.warehouseId)) {
+      return res.status(403).json({ success: false, message: "This inbound supply belongs to another warehouse" });
+    }
     if (!order.shipmentId) return res.status(409).json({ success: false, message: "This supply has no shipment to receive yet" });
     // Receive is SCAN-ONLY. Two ways to prove the goods are physically here,
     // and BOTH are a scan of a printed label:

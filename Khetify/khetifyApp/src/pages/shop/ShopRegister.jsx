@@ -9,6 +9,11 @@ import { Icon, TextField, PasswordField, PrimaryButton, ErrorNote, AuthShell } f
    register({ name, email, phone, password }) → email-OTP step
    (shopVerifyOtp / shopResendOtp / skip) or a direct redirect. */
 
+// The SAME shapes the backend checks (services/shopAuthService.js, which in
+// turn matches validators/customerValidators.js).
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PHONE_RE = /^[0-9]{10}$/;
+
 export default function ShopRegister() {
   const navigate = useNavigate();
   const { register } = useShopAuth();
@@ -32,9 +37,14 @@ export default function ShopRegister() {
   const submit = async (e) => {
     e.preventDefault();
     if (!agree) { setError("Please accept the Terms & Conditions to continue."); return; }
-    // ⚡ CORRECTION: Check phone validation explicitly since it's mandatory now
-    if (!form.name || !form.email || !form.phone) { setError("All fields (Name, Email, and Phone) are required."); return; }
-    if (form.phone.length !== 10) { setError("Please enter a valid 10-digit phone number."); return; }
+    // PHONE IS THE REQUIRED IDENTIFIER, EMAIL IS OPTIONAL. The same shapes the
+    // backend enforces (services/shopAuthService.js), so anything accepted here
+    // is never rejected on submit.
+    if (!form.name.trim()) { setError("Please enter your full name."); return; }
+    if (!form.phone.trim()) { setError("Phone number is required."); return; }
+    if (!PHONE_RE.test(form.phone.trim())) { setError("Please enter a valid 10-digit phone number."); return; }
+    // Only validated when something was actually typed — an empty box is fine.
+    if (form.email.trim() && !EMAIL_RE.test(form.email.trim())) { setError("Please enter a valid email address."); return; }
     setError(""); setBusy(true);
     try {
       const res = await register({ name: form.name, email: form.email, phone: form.phone, password: form.password });
@@ -129,21 +139,23 @@ export default function ShopRegister() {
           placeholder="Enter your name" autoComplete="name"
         />
 
-        {/* Email + phone: each on its own line. */}
-        <TextField
-          label="Email" icon={Icon.Mail} type="email" required
-          value={form.email} onChange={set("email")}
-          placeholder="Enter your email" autoComplete="email"
-        />
+        {/* Phone + email: each on its own line. Phone leads because it is the
+            required identifier; `required` is dropped from Email so the browser
+            stops blocking submit on an empty box. */}
         <TextField
           label="Phone" icon={Icon.Phone} type="tel" required
           value={form.phone} onChange={onPhone}
           placeholder="Enter your phone number" autoComplete="tel"
           inputMode="numeric" maxLength={10}
         />
+        <TextField
+          label="Email (optional)" icon={Icon.Mail} type="email"
+          value={form.email} onChange={set("email")}
+          placeholder="Enter your email" autoComplete="email"
+        />
 
         <p className="-mt-2 flex items-center gap-1.5 text-[13px] text-[#9B9A92]">
-          <Icon.Info className="h-[13px] w-[13px] shrink-0" /> Please provide both a valid email and phone number.
+          <Icon.Info className="h-[13px] w-[13px] shrink-0" /> A 10-digit phone number is required. Email is optional — add one to verify your account and receive order updates.
         </p>
 
         <PasswordField

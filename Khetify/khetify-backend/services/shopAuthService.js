@@ -18,6 +18,11 @@ const { sendMail, smtpConfigured } = require("./mailerService");
 const OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const OTP_MAX_ATTEMPTS = 5;
 
+// The SAME shapes validators/customerValidators.js uses, so a phone or email
+// that is accepted here is accepted everywhere else in the system too.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PHONE_RE = /^[0-9]{10}$/;
+
 function httpErr(message, status = 400) {
   const err = new Error(message);
   err.status = status;
@@ -72,13 +77,28 @@ async function issueEmailOtp(consumer) {
   return { delivered: result.delivered, smtp: smtpConfigured() };
 }
 
-/** Register a new shopper. Duplicate email/phone → 409. */
+/**
+ * Register a new shopper. Duplicate email/phone → 409.
+ *
+ * PHONE IS THE REQUIRED IDENTIFIER; EMAIL IS OPTIONAL. Every shopper therefore
+ * has one guaranteed way to log in (login() already accepts either), while the
+ * email — and with it the OTP step below — is opt-in. Spaces and hyphens are
+ * stripped before the check so "98765 43210" is accepted as typed.
+ *
+ * The Consumer schema already indexes both as `unique + sparse`, so an account
+ * carrying only a phone stores no email key at all and cannot collide with
+ * another email-less account. No model change was needed.
+ */
 async function register({ name, email, phone, password }) {
   name = (name || "").trim();
   email = (email || "").trim().toLowerCase() || undefined;
-  phone = (phone || "").trim() || undefined;
+  phone = (phone || "").trim().replace(/[\s-]/g, "") || undefined;
   if (!name) throw httpErr("Name is required");
-  if (!email && !phone) throw httpErr("Email or phone is required");
+  if (!phone) throw httpErr("Phone number is required");
+  if (!PHONE_RE.test(phone)) throw httpErr("Enter a valid 10-digit phone number");
+  // Optional — but a supplied address must still be a real one, because it
+  // becomes a login identifier and the OTP destination.
+  if (email && !EMAIL_RE.test(email)) throw httpErr("Enter a valid email address");
   if (!password || String(password).length < 6) throw httpErr("Password must be at least 6 characters");
 
   const or = [];

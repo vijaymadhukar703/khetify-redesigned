@@ -32,6 +32,9 @@ const byNewestFirst = (a, b) => {
   return ka.id < kb.id ? 1 : -1;
 };
 
+// Pagination page-size (rows per page).
+const ITEMS_PER_PAGE = 10;
+
 const SellerProductCatalog = () => {
   const navigate = useNavigate();
   const [approved, setApproved] = useState(null); // null = loading
@@ -56,6 +59,9 @@ const SellerProductCatalog = () => {
   const [publishingId, setPublishingId] = useState(null); // productId of in-flight publish (for the row button)
   const [publishError, setPublishError] = useState(null);
   const [unpublishingId, setUnpublishingId] = useState(null); // listingId of in-flight unpublish
+
+  // Pagination state — current 1-indexed page of the table.
+  const [currentPage, setCurrentPage] = useState(1);
 
   // setState only in async callbacks (not synchronously in the effect body) to
   // satisfy react-hooks/set-state-in-effect.
@@ -107,6 +113,51 @@ const SellerProductCatalog = () => {
   // Display order only — the fetched `products` state is left untouched so search,
   // category filtering and every existing handler keep working exactly as before.
   const orderedProducts = useMemo(() => [...products].sort(byNewestFirst), [products]);
+
+  // Reset to page 1 whenever the search term or category filter changes, so the
+  // user doesn't land on a stale/out-of-range page after the result set changes.
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, categoryFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(orderedProducts.length / ITEMS_PER_PAGE));
+
+  // Clamp the current page if the result set shrinks (e.g. fewer products than
+  // before leave currentPage pointing past the last page).
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(totalPages);
+  }, [currentPage, totalPages]);
+
+  // Slice of orderedProducts for the current page only — the underlying data
+  // (products/orderedProducts) is untouched, so all existing logic keeps working.
+  const paginatedProducts = useMemo(() => {
+    const start = (currentPage - 1) * ITEMS_PER_PAGE;
+    return orderedProducts.slice(start, start + ITEMS_PER_PAGE);
+  }, [orderedProducts, currentPage]);
+
+  const goToPage = (page) => {
+    const clamped = Math.min(Math.max(1, page), totalPages);
+    setCurrentPage(clamped);
+  };
+
+  // Builds a compact page-number list with ellipses for large page counts,
+  // e.g. [1, '…', 4, 5, 6, '…', 12].
+  const getPageNumbers = () => {
+    const pages = [];
+    const windowSize = 1; // pages shown on each side of currentPage
+    const add = (p) => pages.push(p);
+
+    add(1);
+    const start = Math.max(2, currentPage - windowSize);
+    const end = Math.min(totalPages - 1, currentPage + windowSize);
+
+    if (start > 2) add('ellipsis-start');
+    for (let p = start; p <= end; p++) add(p);
+    if (end < totalPages - 1) add('ellipsis-end');
+    if (totalPages > 1) add(totalPages);
+
+    return pages;
+  };
 
   const openPublish = (p) => {
     setPublishTarget(p);
@@ -226,7 +277,7 @@ const SellerProductCatalog = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-stone-100">
-                {!loading && orderedProducts.map((p) => (
+                {!loading && paginatedProducts.map((p) => (
                   <tr key={p._id} className="hover:bg-stone-50/30 transition-colors">
                     <td data-label="Product Details" className="px-6 py-4">
                       <div className="flex items-center gap-4">
@@ -334,6 +385,62 @@ const SellerProductCatalog = () => {
               </tbody>
             </table>
           </div>
+
+          {/* Pagination controls */}
+          {!loading && orderedProducts.length > 0 && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-6 py-4 border-t border-stone-200 bg-stone-50/50">
+              <p className="text-xs text-stone-500">
+                Showing{' '}
+                <span className="font-semibold text-stone-700">
+                  {(currentPage - 1) * ITEMS_PER_PAGE + 1}
+                  {'–'}
+                  {Math.min(currentPage * ITEMS_PER_PAGE, orderedProducts.length)}
+                </span>{' '}
+                of <span className="font-semibold text-stone-700">{orderedProducts.length}</span> products
+              </p>
+
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => goToPage(currentPage - 1)}
+                  disabled={currentPage === 1}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold text-stone-600 border border-stone-200 hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <span className="material-symbols-outlined text-sm">chevron_left</span>
+                  Previous
+                </button>
+
+                <div className="flex items-center gap-1 mx-1">
+                  {getPageNumbers().map((p, idx) =>
+                    typeof p === 'number' ? (
+                      <button
+                        key={p}
+                        onClick={() => goToPage(p)}
+                        aria-current={p === currentPage ? 'page' : undefined}
+                        className={`min-w-[32px] h-8 px-2 rounded-lg text-xs font-semibold transition-colors ${
+                          p === currentPage
+                            ? 'bg-stone-900 text-white'
+                            : 'text-stone-600 hover:bg-white border border-transparent hover:border-stone-200'
+                        }`}
+                      >
+                        {p}
+                      </button>
+                    ) : (
+                      <span key={`${p}-${idx}`} className="px-1 text-stone-400 text-xs select-none">…</span>
+                    )
+                  )}
+                </div>
+
+                <button
+                  onClick={() => goToPage(currentPage + 1)}
+                  disabled={currentPage === totalPages}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold text-stone-600 border border-stone-200 hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Next
+                  <span className="material-symbols-outlined text-sm">chevron_right</span>
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

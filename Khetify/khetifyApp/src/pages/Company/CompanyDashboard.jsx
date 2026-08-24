@@ -221,9 +221,12 @@ const CompanyDashboard = () => {
            chart alone; at the top it reads as what it is: the period for the
            entire dashboard. Only its POSITION changed, not its behaviour.
 
-           Sales-visible roles only — an operations manager sees shipments
-           rather than revenue and has nothing here to filter. */}
-        {canSeeSales && (
+           SHOWN FOR EVERY ROLE, including a warehouse-scoped operations
+           manager. It used to be hidden for them, but the numbers it drives —
+           Sales to sellers, and the headline cards — apply to a warehouse just
+           as much as to the company; the server simply scopes them to that
+           warehouse. Only the revenue/orders read-out on the right stays
+           sales-only, since an ops role cannot see order revenue. */}
         <div className="flex flex-wrap items-center gap-2 justify-between">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-[11px] font-bold uppercase tracking-wider text-stone-400">Period</span>
@@ -262,17 +265,20 @@ const CompanyDashboard = () => {
               </div>
             )}
           </div>
-          {summary && (
+          {/* Order revenue stays sales-only — an ops role cannot see it. The
+              filter itself is available to everyone. */}
+          {canSeeSales && summary && (
             <div className="flex items-center gap-4 text-sm">
               <span className="text-stone-500">Revenue <b className="text-stone-900">{formatINR(summary.rangeSales ?? summary.todaySales ?? 0)}</b></span>
               <span className="text-stone-500">Orders <b className="text-stone-900">{summary.rangeOrders ?? summary.todayOrders ?? 0}</b></span>
             </div>
           )}
         </div>
-        )}
 
-        {/* 🔥 IMS headline numbers */}
-        <SummaryCards />
+        {/* 🔥 IMS headline numbers — now period-aware. The window is the one
+            selected above, so the Sales tile reports the chosen range and the
+            server scopes it to this user's warehouse when they have one. */}
+        <SummaryCards params={rangeWindow} periodLabel={PERIOD_LABEL[range]} />
 
         {/* {isAdmin && canCost && pnl && (
           <div className="bg-white border border-stone-200 rounded-2xl p-5 shadow-sm mb-2">
@@ -307,7 +313,7 @@ const CompanyDashboard = () => {
             {(pnl.totalLoss || 0) > 0 && (
               <p className="mt-3 text-[11px] text-stone-500">
                 <span className="material-symbols-outlined text-xs align-middle text-[#EA2831]">trending_down</span>{' '}
-                Loss-making products account for <b className="text-[#EA2831]">{formatINR(pnl.totalLoss)}</b> — see Stock Valuation for the breakdown.
+                Loss-making products account for <b className="text-[#EA2831]">{formatINR(pnl.totalLoss)}</b> — see Analytics for the breakdown.
               </p>
             )}
           </div>
