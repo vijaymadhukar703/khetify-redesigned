@@ -59,13 +59,13 @@ export default function ShopLogin() {
         {error && <ErrorNote>{error}</ErrorNote>}
 
         <TextField
-          label="Email"
+          label="Email or phone number"
           icon={Icon.Mail}
           type="text"
           required
           value={form.identifier}
           onChange={set("identifier")}
-          placeholder="Enter your email"
+          placeholder="Enter your email or phone number"
           autoComplete="username"
         />
 

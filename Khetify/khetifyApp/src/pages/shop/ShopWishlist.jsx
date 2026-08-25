@@ -39,8 +39,14 @@ const Icon = {
 };
 
 function WishlistCard({ product, inCart, onAddToCart, onRemove }) {
-  const img = getProductImage(product.images?.[0]);
-  const href = `/customer-shop/product/${product.listingId}`;
+  /* THE SAVED VARIANT WINS. The shopper saved Red, so the card must show Red's
+     picture and Red's price — the product's defaults would be a different item
+     from the one they saved. All three fall back to the product when nothing
+     variant-specific was stored, which is every pre-existing entry. */
+  const img = getProductImage(product.variantImage || product.images?.[0]);
+  const price = product.variantPrice != null ? product.variantPrice : product.price;
+  // The link carries the variant, so opening it reopens the saved option.
+  const href = `/customer-shop/product/${product.listingId}${product.variantId ? `?variant=${product.variantId}` : ""}`;
   const seller = product.seller?.name || product.sellerName;
   const inStock = product.inStock;
 
@@ -60,7 +66,7 @@ function WishlistCard({ product, inCart, onAddToCart, onRemove }) {
           type="button"
           aria-label="Remove from wishlist"
           title="Remove from wishlist"
-          onClick={() => onRemove(product.listingId)}
+          onClick={() => onRemove(product.wishId || product.listingId)}
           className="absolute right-3 top-3 inline-flex h-[38px] w-[38px] items-center justify-center rounded-full bg-white/95 text-[#EA2831] shadow-[0_4px_12px_rgba(20,32,26,0.14)] transition-all hover:scale-110 hover:bg-[#FFF1F2]"
         >
           <Icon.Heart filled className="h-[17px] w-[17px]" />
@@ -79,8 +85,13 @@ function WishlistCard({ product, inCart, onAddToCart, onRemove }) {
             {product.name}
           </h3>
         </Link>
+        {product.variantLabel && (
+          <span className="w-fit rounded bg-stone-100 px-2 py-0.5 text-[11px] font-semibold text-stone-600">
+            {product.variantLabel}
+          </span>
+        )}
         <div className="flex items-baseline gap-2">
-          <span className="font-heading text-[21px] font-extrabold text-[#14201A]">{rupee(product.price)}</span>
+          <span className="font-heading text-[21px] font-extrabold text-[#14201A]">{rupee(price)}</span>
           {product.unit && <span className="text-[13px] text-[#9B9A92]">/ {product.unit}</span>}
         </div>
         <p className="flex items-center gap-1.5 text-[13px] font-semibold">
@@ -140,10 +151,19 @@ export default function ShopWishlist() {
   const { addItem, items: cartItems } = useCart();
   const navigate = useNavigate();
 
-  const inCart = (listingId) => cartItems.some((c) => c.listingId === listingId);
-  const addToCart = (product) => addItem(product, 1);
+  /* A wishlist entry maps to ONE cart line — the same variant, at the same key
+     the cart uses. Saving Red must not report "already in cart" because Green
+     happens to be in there. */
+  const lineIdOf = (p) => (p.variantId ? `${p.listingId}::${p.variantId}` : String(p.listingId));
+  const inCart = (p) => cartItems.some((c) => (c.lineId || c.listingId) === lineIdOf(p));
+  // Rebuild the variant from the snapshot stored on the entry, so the cart line
+  // gets its price, image and attributes — not the product's defaults.
+  const variantOf = (p) => (p.variantId
+    ? { id: p.variantId, label: p.variantLabel, attributes: p.variantAttributes, image: p.variantImage, mrp: p.variantPrice }
+    : null);
+  const addToCart = (product) => addItem(product, 1, variantOf(product));
   const addAllToCart = () => {
-    items.forEach((p) => { if (p.inStock && !inCart(p.listingId)) addItem(p, 1); });
+    items.forEach((p) => { if (p.inStock && !inCart(p)) addItem(p, 1, variantOf(p)); });
     navigate("/customer-shop/cart");
   };
 
@@ -214,9 +234,9 @@ export default function ShopWishlist() {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 lg:gap-[22px] xl:grid-cols-4">
             {items.map((product) => (
               <WishlistCard
-                key={product.listingId}
+                key={product.wishId || product.listingId}
                 product={product}
-                inCart={inCart(product.listingId)}
+                inCart={inCart(product)}
                 onAddToCart={addToCart}
                 onRemove={removeItem}
               />

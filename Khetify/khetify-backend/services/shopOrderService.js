@@ -92,7 +92,22 @@ function buildLines(cartItems, resolved) {
     // Only published + in-stock products may be ordered.
     if (!(r.availableStock > 0)) throw httpErr(`"${r.name}" is out of stock`, 409);
     if (qty > r.availableStock) throw httpErr(`Only ${r.availableStock} unit(s) of "${r.name}" are available`, 409);
-    const price = r.price;
+
+    /* VARIANT, IF ONE WAS CHOSEN. The client sends only an id; the price, the
+       image and the attributes are read from the SERVER'S copy of the product,
+       so a tampered cart cannot buy Green at Red's price. An id that no longer
+       matches any variant (the company edited the product mid-session) is
+       rejected rather than silently falling back to the base price — the
+       shopper would otherwise be charged for something they did not choose. */
+    const variant = ci.variantId
+      ? (r.variants || []).find((v) => String(v.id) === String(ci.variantId))
+      : null;
+    if (ci.variantId && !variant) {
+      throw httpErr(`The selected option for "${r.name}" is no longer available`, 409);
+    }
+    // The variant's own price when it carries one; otherwise the listing price
+    // still applies, exactly as before.
+    const price = variant && variant.mrp != null ? Number(variant.mrp) : r.price;
     // The customer total is price × qty ONLY — the marketplace price (MRP) is
     // treated as tax-inclusive, so no GST is ADDED on top. This keeps cart,
     // checkout, order-success and order-history totals identical. We record the
@@ -107,8 +122,14 @@ function buildLines(cartItems, resolved) {
       //    purchasable listing later (a product may be sold by many sellers).
       listingId: r.listingId,
       name: r.name,
-      // 🖼️ what the shopper actually saw when they bought it
-      image: r.image || null,
+      // 🖼️ what the shopper actually saw when they bought it — the variant's
+      //    own picture when they picked one.
+      image: variant?.image || r.image || null,
+      // 🎨 Snapshot of the chosen variant, so the order, the invoice and the
+      //    seller's pick list all say WHICH one was sold.
+      variantId: variant?.id || undefined,
+      variantLabel: variant?.label || undefined,
+      variantAttributes: variant?.attributes || undefined,
       qty,
       price,
       taxes: { hsnCode: r.hsnCode, gstRate: r.gstPercentage || 0, taxable, cgst: 0, sgst: 0, igst: 0 },

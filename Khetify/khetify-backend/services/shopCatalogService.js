@@ -48,6 +48,41 @@ async function stockMap(pairs) {
   return map;
 }
 
+/**
+ * The product's variants, READ-ONLY, exactly as the Company upload form stored
+ * them (model/Company/productModel.js → variantSchema). Nothing is computed or
+ * invented here — the storefront simply could not see this data before.
+ *
+ * GATED ON THE ARRAY, NOT ON `variantType`. The Company upload form appends
+ * `variants` but never appends `variantType`, so a product saved WITH variants
+ * still carries the schema default "single" — checking that field returned []
+ * for every real product. The rows themselves are the honest signal, so a
+ * product with no variants still yields [] and shows no variant UI.
+ *
+ * `attributes` is a Mongoose Map. Through .lean() it arrives as a plain object,
+ * but a hydrated document would hand back a real Map — which JSON.stringify
+ * flattens to {}. Both are normalised so the shape the client receives is the
+ * same either way.
+ */
+function toShopVariants(product) {
+  const list = Array.isArray(product?.variants) ? product.variants : [];
+  return list
+    .filter((v) => v && (v.label || v.image || v.mrp != null))
+    .map((v) => ({
+      id: String(v._id),
+      label: v.label || "",
+      attributes: v.attributes instanceof Map
+        ? Object.fromEntries(v.attributes)
+        : { ...(v.attributes || {}) },
+      sku: v.sku || null,
+      // The variant's own price as entered on upload. Null when it was left
+      // blank, and the page then falls back to the product price.
+      mrp: v.mrp ?? null,
+      stock: v.stock ?? null,
+      image: v.image || null,
+    }));
+}
+
 /** Shape one listing+product+seller into the card/detail payload sent to the UI. */
 function toShopProduct(listing, product, seller, company, availableStock) {
   const price = listingPrice(listing, product);
@@ -75,6 +110,11 @@ function toShopProduct(listing, product, seller, company, availableStock) {
     availableStock: stock,
     inStock: stock > 0,
     minimumOrderQuantity: product.minimumOrderQuantity || 1,
+    // ADDITIVE. "single" for every product uploaded without variants, and
+    // variants: [] alongside it — so nothing that reads this payload today sees
+    // a changed field, only two new ones.
+    variantType: product.variantType || "single",
+    variants: toShopVariants(product),
     seller: seller
       ? {
           id: String(seller._id),
@@ -578,6 +618,10 @@ async function resolveForCheckout(listingIds = []) {
       //    store it. An order should show what the shopper actually bought, even
       //    if the seller changes the product photo (or delists it) years later.
       image: product.productImages?.[0] || null,
+      // The product's variants, so buildLines() can price and snapshot the ONE
+      // the shopper picked. Trusted server data — the client sends only a
+      // variantId, never a price or an image.
+      variants: toShopVariants(product),
       availableStock: Number.isFinite(stock) ? stock : (product.availableStock ?? 0),
     });
   }

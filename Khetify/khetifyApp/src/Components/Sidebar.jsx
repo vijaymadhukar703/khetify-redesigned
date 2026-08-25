@@ -58,7 +58,17 @@ const Sidebar = ({ collapsed, onToggle, mobileOpen, onMobileClose, entries = [],
                 collapsed ? 'md:justify-center' : ''
               }`}
             >
-              <span className="material-symbols-outlined text-[22px] shrink-0">{e.icon}</span>
+              {/* Icon wraps its lock badge in a relative box so the badge can
+                  sit in the icon's corner when collapsed, instead of as a
+                  full-size icon squeezed into the same row (cramped/ugly in
+                  the narrow 64px rail — the earlier layout). Expanded is
+                  untouched: label + a normal-size lock icon on the right. */}
+              <span className="relative shrink-0">
+                <span className="material-symbols-outlined text-[22px] block">{e.icon}</span>
+                <span className={`material-symbols-outlined absolute -bottom-1 -right-1.5 text-[11px] leading-none text-stone-400 bg-white rounded-full border border-stone-100 p-[1px] ${collapsed ? 'hidden md:inline-flex' : 'hidden'}`}>
+                  {e.lockIcon || 'lock'}
+                </span>
+              </span>
               <span className={`truncate ${collapsed ? 'md:hidden' : ''}`}>{e.title}</span>
               <span className={`material-symbols-outlined text-[16px] ml-auto text-stone-300 ${collapsed ? 'md:hidden' : ''}`}>{e.lockIcon || 'lock'}</span>
             </button>

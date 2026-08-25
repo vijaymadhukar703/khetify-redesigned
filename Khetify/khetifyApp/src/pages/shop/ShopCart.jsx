@@ -21,14 +21,14 @@ const QtyStepper = memo(function QtyStepper({ item, setQty }) {
   return (
     <div className="inline-flex items-center rounded border border-stone-300 bg-white">
       <button
-        onClick={() => setQty(item.listingId, item.qty - 1)}
+        onClick={() => setQty(item.lineId || item.listingId, item.qty - 1)}
         className="flex size-7 items-center justify-center font-bold text-stone-600 hover:bg-stone-50"
       >
         <span className="material-symbols-outlined text-sm">remove</span>
       </button>
       <span className="w-8 text-center text-xs font-bold text-stone-900">{item.qty}</span>
       <button
-        onClick={() => setQty(item.listingId, item.qty + 1)}
+        onClick={() => setQty(item.lineId || item.listingId, item.qty + 1)}
         disabled={atMax}
         className="flex size-7 items-center justify-center font-bold text-stone-600 hover:bg-stone-50 disabled:opacity-30"
       >
@@ -41,7 +41,9 @@ const QtyStepper = memo(function QtyStepper({ item, setQty }) {
 /* ── INDIVIDUAL ITEM CARD (Separated Boxes Style) ── */
 const CartLine = memo(function CartLine({ item, setQty, removeItem }) {
   const img = getProductImage(item.image);
-  const href = `/customer-shop/product/${item.listingId}`;
+  // Carry the variant into the link, so clicking the name reopens the option
+  // that is IN THE CART rather than the product's default.
+  const href = `/customer-shop/product/${item.listingId}${item.variantId ? `?variant=${item.variantId}` : ""}`;
   const hasDiscount = item.mrp && item.mrp > item.price;
   const offPercentage = hasDiscount ? Math.round(((item.mrp - item.price) / item.mrp) * 100) : 0;
 
@@ -65,6 +67,14 @@ const CartLine = memo(function CartLine({ item, setQty, removeItem }) {
             <span className="text-xs text-stone-500 whitespace-nowrap mt-1 sm:mt-0">Delivery by {estimatedDeliveryLabel()}</span>
           </div>
 
+          {/* WHICH OPTION was bought. Without it two lines of the same product
+              at two prices look like a duplicate-row bug. */}
+          {item.variantLabel && (
+            <span className="mt-1 inline-block rounded bg-stone-100 px-2 py-0.5 text-[11px] font-semibold text-stone-600">
+              {item.variantLabel}
+            </span>
+          )}
+
           {item.sellerName && (
             <p className="text-xs text-stone-400 mt-1 flex items-center gap-1">
               Seller: <span className="text-stone-700">{item.sellerName}</span>
@@ -83,7 +93,7 @@ const CartLine = memo(function CartLine({ item, setQty, removeItem }) {
       {/* Footer Actions inside Card */}
       <div className="mt-4 pt-3 border-t border-stone-100 flex gap-6 items-center">
         <button className="text-xs font-bold text-stone-700 uppercase tracking-wide hover:text-[#EA2831]">SAVE FOR LATER</button>
-        <button onClick={() => removeItem(item.listingId)} className="text-xs font-bold text-stone-700 uppercase tracking-wide hover:text-[#EA2831]">REMOVE</button>
+        <button onClick={() => removeItem(item.lineId || item.listingId)} className="text-xs font-bold text-stone-700 uppercase tracking-wide hover:text-[#EA2831]">REMOVE</button>
       </div>
     </div>
   );
@@ -194,7 +204,7 @@ export default function ShopCart() {
             {/* PRODUCT BOXES WITH SEPARATED SPACING */}
             <div className="space-y-4">
               {items.map((it) => (
-                <CartLine key={it.listingId} item={it} setQty={setQty} removeItem={removeItem} />
+                <CartLine key={it.lineId || it.listingId} item={it} setQty={setQty} removeItem={removeItem} />
               ))}
               
               {/* PLACE ORDER Button Inside Left Section at the exact Bottom */}
