@@ -49,6 +49,15 @@ const orderItemSchema = new mongoose.Schema(
     //    shopper's order history was a wall of text. Snapshotted at checkout so
     //    it stays truthful even if the product is later edited or delisted.
     image: { type: String },
+    // 🎨 STOREFRONT VARIANT, AS SOLD. A product uploaded with variants (Colour,
+    //    Size, …) is bought as ONE of them, so the line records which — its id,
+    //    its label and the attribute map exactly as it was on the product. All
+    //    optional and additive: POS/company orders and every pre-existing order
+    //    simply leave them unset, and `price`/`image` above already carry the
+    //    variant's own values when one was chosen.
+    variantId: { type: mongoose.Schema.Types.ObjectId },
+    variantLabel: { type: String },
+    variantAttributes: { type: Map, of: String },
     qty: { type: Number, required: true },
     price: { type: Number, required: true }, // unit price at time of sale
     // 🏬 The warehouse assigned to fulfil THIS LINE, chosen by the seller when

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { useParams, useNavigate, Link } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams, Link } from "react-router-dom";
 import { getShopProduct, getShopProducts } from "../../lib/shopApi";
 import { getProductImage } from "../../lib/productImage";
 import { toBuyNowItem, setBuyNowItem } from "../../lib/buyNow";
@@ -14,6 +14,18 @@ import { HomeProductCard } from "./ShopHome";
    image gallery (activeImg); back button; wishlist toggle (useWishlist);
    related products via getShopProducts({ category }). No API/business logic
    changed, and nothing is fabricated — every field is guarded. */
+
+/**
+ * The heading above a variant strip, derived from the DATA rather than assumed.
+ * When every variant varies on one attribute the page says "Colour" or "Size";
+ * when they combine several (Size + Colour) it falls back to a neutral word.
+ * Nothing is hardcoded to colour — the Company form allows any attribute.
+ */
+const variantLabelFor = (list = []) => {
+  const keys = new Set();
+  list.forEach((v) => Object.keys(v.attributes || {}).forEach((k) => keys.add(k)));
+  return keys.size === 1 ? [...keys][0] : "Options";
+};
 
 const Stars = ({ value = 0, size = "text-lg" }) => (
   <span className="inline-flex items-center gap-0.5 text-[#F0B429]">
@@ -65,6 +77,7 @@ const TrustStrip = ({ className = "", variant = "grid" }) => {
 
 export default function ShopProductDetail() {
   const { listingId } = useParams();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { addItem, items } = useCart();
   const { isWishlisted, toggleItem } = useWishlist();
@@ -74,6 +87,12 @@ export default function ShopProductDetail() {
   const [error, setError] = useState("");
   const [qty, setQty] = useState(1);
   const [activeImg, setActiveImg] = useState(0);
+  // SELECTED VARIANT id, or null for "no variant chosen" — the page then looks
+  // exactly as it does today. Never pre-selected, so the main product image and
+  // the product price stay in charge until the customer picks something.
+  // Seeded from ?variant= so a link from the cart or the wishlist reopens the
+  // exact option that was saved, not the product's default.
+  const [variantId, setVariantId] = useState(() => searchParams.get("variant") || null);
   const [descOpen, setDescOpen] = useState(false); // mobile "read more" (UI)
   const [related, setRelated] = useState([]);
   const [justAdded, setJustAdded] = useState(false); // add-to-cart feedback (UI)
@@ -86,6 +105,8 @@ export default function ShopProductDetail() {
     let alive = true;
     setLoading(true);
     setActiveImg(0);
+    // A different product means the previous product's variant id is meaningless.
+    setVariantId(searchParams.get("variant") || null);
     setJustAdded(false);
     window.scrollTo({ top: 0, behavior: "auto" });
     (async () => {
@@ -101,7 +122,7 @@ export default function ShopProductDetail() {
       }
     })();
     return () => { alive = false; };
-  }, [listingId]);
+  }, [listingId, searchParams]);
 
   // Similar products by category (existing API; additive, never blocks the page).
   useEffect(() => {
@@ -142,17 +163,42 @@ export default function ShopProductDetail() {
   );
 
   const images = (product.images || []).map(getProductImage).filter(Boolean);
-  const off = product.mrp && product.mrp > product.price
+
+  /* ── VARIANTS (read-only, straight from the Company upload) ───────────────
+     The ROWS decide, not `variantType`: the upload form appends `variants` but
+     never appends `variantType`, so a product saved with variants still carries
+     the schema default "single". A product with no rows gets an empty array and
+     renders precisely as before — no empty selector, no extra markup. */
+  const variants = Array.isArray(product.variants) ? product.variants : [];
+  const hasVariants = variants.length > 0;
+  const selectedVariant = hasVariants ? variants.find((v) => v.id === variantId) || null : null;
+  // Variants that carry their own picture become thumbnails; ones that do not
+  // (a size or a weight, say) become labelled chips. Same data, two affordances.
+  const variantThumbs = variants.filter((v) => v.image);
+  const variantChips = variants.filter((v) => !v.image);
+  const selectedVariantImg = selectedVariant?.image ? getProductImage(selectedVariant.image) : null;
+  const attrEntries = Object.entries(selectedVariant?.attributes || {}).filter(([, val]) => val);
+
+  // The variant's own price when it has one; otherwise the product price is
+  // still what applies. NOTE: this is display only — cart, checkout and order
+  // totals are untouched and keep using the listing price.
+  const shownPrice = selectedVariant?.mrp != null ? Number(selectedVariant.mrp) : Number(product.price);
+  // The strike-through/discount only makes sense against the product's own MRP,
+  // so it is suppressed while a variant sets its own price.
+  const off = !selectedVariant && product.mrp && product.mrp > product.price
     ? Math.round(((product.mrp - product.price) / product.mrp) * 100) : 0;
   const save = off > 0 ? Number(product.mrp) - Number(product.price) : 0;
   const inStock = product.inStock;
   const maxQty = inStock ? product.availableStock : 0;
   const lowStock = inStock && product.availableStock > 0 && product.availableStock <= 5;
-  const wished = isWishlisted(product.listingId);
+  // Per VARIANT, not per product: saving Red must not light up the heart on Green.
+  const wished = isWishlisted(product.listingId, variantId);
 
   // Cart membership is read from the existing cart state (keyed by listingId).
-  const inCart = items.some((i) => i.listingId === product.listingId);
-  const cartQty = items.find((i) => i.listingId === product.listingId)?.qty || 0;
+  // Per LINE, not per product: Red in the cart must not make Green look added.
+  const cartLineId = variantId ? `${product.listingId}::${variantId}` : String(product.listingId);
+  const inCart = items.some((i) => (i.lineId || i.listingId) === cartLineId);
+  const cartQty = items.find((i) => (i.lineId || i.listingId) === cartLineId)?.qty || 0;
 
   const rating = typeof product.rating === "number" ? product.rating
     : typeof product.averageRating === "number" ? product.averageRating : null;
@@ -163,12 +209,28 @@ export default function ShopProductDetail() {
   const features = [product.features, product.keyFeatures, product.highlights].find(Array.isArray) || [];
   const usage = product.usage || product.usageInstructions || product.howToUse || "";
 
+  /* THE SELECTED VARIANT BELONGS IN SPECIFICATIONS, not in a separate card
+     above the price. Its attributes are product details like any other, so they
+     are prepended to the existing spec rows and inherit that table's layout for
+     free. `variantSpecs` is empty when nothing is selected, so the table looks
+     exactly as it does today. */
+  const variantSpecs = selectedVariant
+    ? [
+        [variantLabelFor(variants), selectedVariant.label],
+        ...attrEntries.filter(([key]) => key !== variantLabelFor(variants)),
+        ...(selectedVariant.sku ? [["Variant SKU", selectedVariant.sku]] : []),
+      ]
+    : [];
+
   const specs = [
+    ...variantSpecs,
     ["Category", product.category],
     ["Brand", product.brand],
     ["Brand owner", product.companyName],
     ["Unit", product.unit],
-    ["SKU", product.sku],
+    // The variant carries its own SKU (shown above), so the product-level one
+    // would read as a contradiction next to it.
+    ["SKU", selectedVariant ? null : product.sku],
     ["Available stock", inStock && product.availableStock ? `${product.availableStock} ${product.unit || "units"}` : null],
     ["GST", product.gstPercentage ? `${product.gstPercentage}%` : null],
     ["Sold by", product.seller?.name],
@@ -177,7 +239,9 @@ export default function ShopProductDetail() {
 
   // Same cart calls as before — only visual feedback is added around them.
   const addToCart = () => {
-    addItem(product, qty);
+    // The SELECTED variant goes into the cart — its price, its image, its
+    // attributes. Null when none is chosen, which is the original behaviour.
+    addItem(product, qty, selectedVariant);
     setJustAdded(true);
     clearTimeout(addedTimer.current);
     addedTimer.current = setTimeout(() => setJustAdded(false), 1800);
@@ -186,13 +250,13 @@ export default function ShopProductDetail() {
   //    product to checkout, so a shopper who wanted one item is charged for one
   //    item — and their existing cart is left completely untouched.
   const buyNow = () => {
-    const stored = setBuyNowItem(toBuyNowItem(product, qty));
+    const stored = setBuyNowItem(toBuyNowItem(product, qty, selectedVariant));
     if (stored) {
       navigate("/customer-shop/checkout?mode=buynow");
     } else {
       // sessionStorage unavailable (private mode) — fall back to the old
       // cart-based flow rather than dead-ending the shopper.
-      addItem(product, qty);
+      addItem(product, qty, selectedVariant);
       navigate("/customer-shop/checkout");
     }
   };
@@ -260,7 +324,11 @@ export default function ShopProductDetail() {
         {/* Gallery */}
         <div className="lg:sticky lg:top-24 lg:self-start">
           <div className="relative flex aspect-square items-center justify-center overflow-hidden rounded-3xl bg-transparent ring-0 sm:bg-stone-50 sm:ring-1 sm:ring-stone-200/70">
-            {images.length ? (
+            {/* The MAIN IMAGE is unchanged until a variant with a picture is
+                chosen; picking one swaps this frame, deselecting restores it. */}
+            {selectedVariantImg ? (
+              <img src={selectedVariantImg} alt={`${product.name} — ${selectedVariant.label}`} className="h-full w-full object-contain p-6 sm:p-8" />
+            ) : images.length ? (
               <img src={images[activeImg]} alt={product.name} className="h-full w-full object-contain p-6 sm:p-8" />
             ) : (
               <span className="material-symbols-outlined text-7xl font-light text-stone-300">inventory_2</span>
@@ -269,7 +337,7 @@ export default function ShopProductDetail() {
               <span className="absolute left-4 top-4 rounded-full bg-[#EA2831] px-3 py-1 text-xs font-extrabold uppercase tracking-wide text-white shadow-sm">{off}% off</span>
             )}
             <button
-              onClick={() => toggleItem(product)}
+              onClick={() => toggleItem(product, selectedVariant)}
               aria-label={wished ? "Remove from wishlist" : "Add to wishlist"}
               className="absolute right-4 top-4 flex size-11 items-center justify-center rounded-full bg-white/90 shadow-sm ring-1 ring-stone-200/70 backdrop-blur transition-all hover:scale-110 active:scale-95"
             >
@@ -281,12 +349,51 @@ export default function ShopProductDetail() {
               {images.map((src, i) => (
                 <button
                   key={i}
-                  onClick={() => setActiveImg(i)}
-                  className={`size-16 shrink-0 overflow-hidden rounded-xl bg-stone-50 ring-2 transition-all sm:size-[72px] ${i === activeImg ? "ring-[#EA2831]" : "ring-stone-200 hover:ring-stone-300"}`}
+                  // Going back to a product photo drops the variant image, so
+                  // the two thumbnail rows can never both look selected.
+                  onClick={() => { setActiveImg(i); setVariantId(null); }}
+                  className={`size-16 shrink-0 overflow-hidden rounded-xl bg-stone-50 ring-2 transition-all sm:size-[72px] ${!selectedVariantImg && i === activeImg ? "ring-[#EA2831]" : "ring-stone-200 hover:ring-stone-300"}`}
                 >
                   <img src={src} alt="" className="h-full w-full object-contain p-1.5" />
                 </button>
               ))}
+            </div>
+          )}
+
+          {/* VARIANT THUMBNAILS — their own row, below the product photos, so
+              the main gallery keeps its meaning and a variant picture is never
+              mistaken for another angle of the same item. */}
+          {variantThumbs.length > 0 && (
+            <div className="mt-4">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-stone-400">
+                {variantLabelFor(variants)}
+              </p>
+              <div className="mt-2 flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {variantThumbs.map((v) => {
+                  const on = v.id === variantId;
+                  return (
+                    <button
+                      key={v.id}
+                      onClick={() => setVariantId(on ? null : v.id)}
+                      title={v.label}
+                      aria-pressed={on}
+                      className={`group relative size-16 shrink-0 overflow-hidden rounded-xl bg-stone-50 ring-2 transition-all sm:size-[72px] ${on ? "ring-[#EA2831]" : "ring-stone-200 hover:ring-stone-300"}`}
+                    >
+                      <img src={getProductImage(v.image)} alt={v.label} className="h-full w-full object-contain p-1.5" />
+                      {on && (
+                        <span className="absolute bottom-0 left-0 right-0 bg-[#EA2831] py-0.5 text-center text-[9px] font-bold uppercase tracking-wide text-white">
+                          Selected
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+              {/* The label sits under the strip rather than on each tile, where
+                  "Red / 500g" would be clipped at 72px. */}
+              {selectedVariant?.label && (
+                <p className="mt-1.5 text-xs font-semibold text-stone-700">{selectedVariant.label}</p>
+              )}
             </div>
           )}
         </div>
@@ -332,10 +439,37 @@ export default function ShopProductDetail() {
             </div>
           )}
 
+          {/* VARIANTS WITHOUT AN IMAGE — size, weight, grade and so on. Chips
+              rather than thumbnails, because there is nothing to show. */}
+          {variantChips.length > 0 && (
+            <div className="mt-5">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-stone-400">
+                {variantLabelFor(variantChips)}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {variantChips.map((v) => {
+                  const on = v.id === variantId;
+                  return (
+                    <button
+                      key={v.id}
+                      onClick={() => setVariantId(on ? null : v.id)}
+                      aria-pressed={on}
+                      className={`rounded-xl px-3.5 py-2 text-sm font-semibold ring-1 transition-all ${on
+                        ? "bg-[#EA2831] text-white ring-[#EA2831]"
+                        : "bg-white text-stone-700 ring-stone-200 hover:ring-stone-300"}`}
+                    >
+                      {v.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Price */}
           <div className="mt-5 rounded-2xl bg-stone-50 p-4 ring-1 ring-stone-200/60 sm:p-5">
             <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-              <span className="font-heading text-3xl font-extrabold text-stone-900 sm:text-4xl">{rupee(product.price)}</span>
+              <span className="font-heading text-3xl font-extrabold text-stone-900 sm:text-4xl">{rupee(shownPrice)}</span>
               {off > 0 && <span className="text-lg text-stone-400 line-through">{rupee(product.mrp)}</span>}
               {off > 0 && <span className="rounded-md bg-red-100 px-2 py-0.5 text-sm font-bold text-[#EA2831]">{off}% off</span>}
               {product.unit && <span className="text-sm text-stone-400">/ {product.unit}</span>}

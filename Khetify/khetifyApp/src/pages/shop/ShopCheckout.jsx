@@ -269,7 +269,7 @@ function SummaryItem({ i, onQty, onRemove, flagged }) {
 
   return (
     <div className={`flex gap-3 py-3 ${flagged ? "-mx-2 rounded-xl bg-red-50/60 px-2 ring-1 ring-red-200" : ""}`}>
-      <Link to={`/customer-shop/product/${i.listingId}`} className="size-14 shrink-0 overflow-hidden rounded-xl border border-stone-200 bg-stone-50">
+      <Link to={`/customer-shop/product/${i.listingId}${i.variantId ? `?variant=${i.variantId}` : ""}`} className="size-14 shrink-0 overflow-hidden rounded-xl border border-stone-200 bg-stone-50">
         {img ? (
           <img src={img} alt={i.name} className="size-full object-contain" loading="lazy" />
         ) : (
@@ -281,11 +281,16 @@ function SummaryItem({ i, onQty, onRemove, flagged }) {
 
       <div className="min-w-0 flex-1">
         <Link
-          to={`/customer-shop/product/${i.listingId}`}
+          to={`/customer-shop/product/${i.listingId}${i.variantId ? `?variant=${i.variantId}` : ""}`}
           className="line-clamp-2 text-[13px] font-semibold leading-snug text-stone-800 hover:text-[#EA2831]"
         >
           {i.name}
         </Link>
+        {i.variantLabel && (
+          <span className="mt-0.5 inline-block rounded bg-stone-100 px-1.5 py-0.5 text-[10px] font-semibold text-stone-600">
+            {i.variantLabel}
+          </span>
+        )}
         {i.unit && <p className="mt-0.5 text-[11px] text-stone-400">{i.unit}</p>}
 
         <div className="mt-1.5 flex items-center gap-2">
@@ -364,8 +369,8 @@ export default function ShopCheckout() {
     : cart.subtotal;
   const count = isBuyNow ? (buyNowItem?.qty || 0) : cart.count;
 
-  const setQty = (listingId, qty) => {
-    if (!isBuyNow) return cart.setQty(listingId, qty);
+  const setQty = (lineId, qty) => {
+    if (!isBuyNow) return cart.setQty(lineId, qty);
     setBuyNowItem((it) => {
       if (!it) return it;
       const cap = Number.isFinite(it.availableStock) && it.availableStock > 0 ? it.availableStock : Infinity;
@@ -373,8 +378,8 @@ export default function ShopCheckout() {
     });
   };
 
-  const removeItem = (listingId) => {
-    if (!isBuyNow) return cart.removeItem(listingId);
+  const removeItem = (lineId) => {
+    if (!isBuyNow) return cart.removeItem(lineId);
     // Removing the only buy-now item = abandoning the flow.
     clearBuyNowItem();
     navigate("/customer-shop/products");
@@ -465,7 +470,10 @@ export default function ShopCheckout() {
     setPlacing(true);
     try {
       const res = await shopCheckout({
-        items: items.map((i) => ({ listingId: i.listingId, qty: i.qty })),
+        // variantId travels with the line so the server prices and snapshots
+        // the option the shopper actually chose. Undefined for a product with
+        // no variants, which is the exact payload sent before.
+        items: items.map((i) => ({ listingId: i.listingId, qty: i.qty, variantId: i.variantId || undefined })),
         shippingAddressId: selectedId,
       });
       // Buy-now never touched the cart, so it must not clear it either — the
@@ -701,11 +709,11 @@ export default function ShopCheckout() {
                     <div className="divide-y divide-stone-100">
                       {g.items.map((i) => (
                         <SummaryItem
-                          key={i.listingId}
+                          key={i.lineId || i.listingId}
                           i={i}
                           flagged={!!flaggedName && i.name === flaggedName}
-                          onQty={(q) => setQty(i.listingId, q)}
-                          onRemove={() => removeItem(i.listingId)}
+                          onQty={(q) => setQty(i.lineId || i.listingId, q)}
+                          onRemove={() => removeItem(i.lineId || i.listingId)}
                         />
                       ))}
                     </div>

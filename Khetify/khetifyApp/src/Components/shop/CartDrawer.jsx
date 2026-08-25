@@ -78,11 +78,11 @@ export default function CartDrawer({ open, onClose }) {
             <div className="flex-1 divide-y divide-stone-100 overflow-y-auto px-4 sm:px-5">
               {items.map((it) => {
                 const img = getProductImage(it.image);
-                const href = `/customer-shop/product/${it.listingId}`;
+                const href = `/customer-shop/product/${it.listingId}${it.variantId ? `?variant=${it.variantId}` : ""}`;
                 const off = it.mrp && it.mrp > it.price ? Math.round(((it.mrp - it.price) / it.mrp) * 100) : 0;
                 const atMax = Number.isFinite(it.availableStock) && it.availableStock > 0 && it.qty >= it.availableStock;
                 return (
-                  <div key={it.listingId} className="flex gap-3 py-4">
+                  <div key={it.lineId || it.listingId} className="flex gap-3 py-4">
                     <button onClick={() => go(href)} className="flex size-20 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br from-emerald-50/40 via-stone-50 to-stone-100/70 ring-1 ring-stone-100">
                       {img ? <img src={img} alt={it.name} className="h-full w-full object-contain p-1.5" /> : <span className="material-symbols-outlined text-3xl font-light text-stone-300">eco</span>}
                     </button>
@@ -92,10 +92,16 @@ export default function CartDrawer({ open, onClose }) {
                         <button onClick={() => go(href)} className="text-left font-heading text-sm font-bold leading-snug text-stone-900 line-clamp-2 hover:text-[#EA2831]">
                           {it.name}
                         </button>
-                        <button onClick={() => removeItem(it.listingId)} aria-label="Remove" className="flex size-7 shrink-0 items-center justify-center rounded-md text-stone-300 transition-colors hover:bg-red-50 hover:text-[#EA2831]">
+                        <button onClick={() => removeItem(it.lineId || it.listingId)} aria-label="Remove" className="flex size-7 shrink-0 items-center justify-center rounded-md text-stone-300 transition-colors hover:bg-red-50 hover:text-[#EA2831]">
                           <span className="material-symbols-outlined text-lg">close</span>
                         </button>
                       </div>
+
+                      {it.variantLabel && (
+                        <span className="mt-1 inline-block w-fit rounded bg-stone-100 px-2 py-0.5 text-[10px] font-semibold text-stone-600">
+                          {it.variantLabel}
+                        </span>
+                      )}
 
                       <div className="mt-1 flex flex-wrap items-baseline gap-x-2">
                         <span className="text-sm font-bold text-stone-900">{rupee(it.price * it.qty)}</span>
@@ -105,11 +111,11 @@ export default function CartDrawer({ open, onClose }) {
 
                       <div className="mt-auto pt-2">
                         <div className="inline-flex items-center overflow-hidden rounded-lg border border-stone-200 bg-white">
-                          <button onClick={() => setQty(it.listingId, it.qty - 1)} aria-label="Decrease" className="flex size-7 items-center justify-center text-stone-600 transition-colors hover:bg-stone-100 hover:text-[#EA2831]">
+                          <button onClick={() => setQty(it.lineId || it.listingId, it.qty - 1)} aria-label="Decrease" className="flex size-7 items-center justify-center text-stone-600 transition-colors hover:bg-stone-100 hover:text-[#EA2831]">
                             <span className="material-symbols-outlined text-base">remove</span>
                           </button>
                           <span className="w-8 text-center text-xs font-bold text-stone-900">{it.qty}</span>
-                          <button onClick={() => setQty(it.listingId, it.qty + 1)} disabled={atMax} aria-label="Increase" className="flex size-7 items-center justify-center text-stone-600 transition-colors hover:bg-stone-100 hover:text-[#EA2831] disabled:text-stone-300">
+                          <button onClick={() => setQty(it.lineId || it.listingId, it.qty + 1)} disabled={atMax} aria-label="Increase" className="flex size-7 items-center justify-center text-stone-600 transition-colors hover:bg-stone-100 hover:text-[#EA2831] disabled:text-stone-300">
                             <span className="material-symbols-outlined text-base">add</span>
                           </button>
                         </div>
