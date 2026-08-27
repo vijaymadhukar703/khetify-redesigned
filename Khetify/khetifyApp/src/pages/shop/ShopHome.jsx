@@ -3,6 +3,7 @@ import { Link, useNavigate, useOutletContext } from "react-router-dom";
 import { getShopProducts, getShopCategories } from "../../lib/shopApi";
 import { getProductImage } from "../../lib/productImage";
 import { useCart } from "../../context/CartContext";
+import { useT, useShopLanguage } from "../../context/ShopLanguageContext";
 import { useWishlist } from "../../context/WishlistContext";
 
 /* ────────────────────────────────────────────────────────────────
@@ -40,6 +41,7 @@ export const catIcon = (name = "") => {
    already-in-cart (disabled); plus sold-out. Smooth colour/scale transition. ── */
 const AddToCartButton = memo(function AddToCartButton({ product, size = "md", className = "" }) {
   const { addItem, items } = useCart();
+  const t = useT();
   const [justAdded, setJustAdded] = useState(false);
   const timerRef = useRef(null);
 
@@ -62,11 +64,13 @@ const AddToCartButton = memo(function AddToCartButton({ product, size = "md", cl
     incart: "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200",
     sold: "bg-stone-100 text-stone-400",
   };
+  // The label is looked up per render, so switching language re-labels the
+  // button immediately rather than on the next state change.
   const content = {
-    add: ["add_shopping_cart", "Add to cart"],
-    added: ["check_circle", "Added to cart"],
-    incart: ["check_circle", "Already in cart"],
-    sold: ["block", "Sold out"],
+    add: ["add_shopping_cart", t("home.addToCart")],
+    added: ["check_circle", t("home.addedToCart")],
+    incart: ["check_circle", t("home.alreadyInCart")],
+    sold: ["block", t("home.soldOut")],
   }[state];
   const pad = size === "lg" ? "px-6 py-3" : "py-2.5";
 
@@ -87,6 +91,7 @@ const AddToCartButton = memo(function AddToCartButton({ product, size = "md", cl
 
 /* ── Home-only product tile (premium look, same cart behaviour) ── */
 export const HomeProductCard = memo(function HomeProductCard({ product }) {
+  const t = useT();
   const img = getProductImage(product.images?.[0]);
   const off =
     product.mrp && product.mrp > product.price
@@ -126,7 +131,7 @@ export const HomeProductCard = memo(function HomeProductCard({ product }) {
           type="button"
           onClick={handleWishlistClick}
           className="absolute right-3 top-3 z-10 flex size-8 items-center justify-center rounded-full bg-white/80 shadow-sm backdrop-blur transition-all hover:scale-110 active:scale-90"
-          aria-label="Add to wishlist"
+          aria-label={t("home.addToWishlist")}
         >
           <span 
             className={`material-symbols-outlined text-xl transition-colors ${
@@ -141,17 +146,17 @@ export const HomeProductCard = memo(function HomeProductCard({ product }) {
         </button>
         {off > 0 && (
           <span className="absolute left-3 top-3 rounded-full bg-[#EA2831] px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wide text-white shadow-sm">
-            {off}% off
+            {t("common.percentOff", { percent: off })}
           </span>
         )}
         {!inStock && (
           <span className="absolute right-3 top-3 rounded-full bg-[#14201A]/85 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white backdrop-blur">
-            Sold out
+            {t("common.soldOut")}
           </span>
         )}
         {/* Quick view — navigates to the real product page */}
         <span className="pointer-events-none absolute inset-x-3 bottom-3 flex translate-y-2 items-center justify-center gap-1.5 rounded-xl bg-white/95 py-2 text-xs font-bold text-stone-800 opacity-0 shadow-md backdrop-blur transition-all duration-300 group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:opacity-100">
-          <span className="material-symbols-outlined text-base">visibility</span> Quick view
+          <span className="material-symbols-outlined text-base">visibility</span> {t("home.quickView")}
         </span>
       </Link>
 
@@ -159,7 +164,9 @@ export const HomeProductCard = memo(function HomeProductCard({ product }) {
         {(product.category || product.seller?.name) && (
           <p className="mb-1.5 inline-flex items-center gap-1 truncate text-[11px] font-bold uppercase tracking-wider text-[#EA2831]/80">
             <span className="material-symbols-outlined text-[13px]">eco</span>
-            <span className="truncate">{product.category || product.seller?.name}</span>
+            {/* The category is enumerable, the seller NAME is not — a name is never
+                translated. */}
+            <span className="truncate">{product.category ? product.category : product.seller?.name}</span>
           </p>
         )}
         <Link to={href} className="block">
@@ -173,16 +180,16 @@ export const HomeProductCard = memo(function HomeProductCard({ product }) {
           {product.unit && <span className="text-[11px] font-medium text-stone-400">/ {product.unit}</span>}
           {off > 0 && <span className="text-xs text-stone-400 line-through">{rupee(product.mrp)}</span>}
         </div>
-        {save > 0 && <p className="mt-0.5 text-[11px] font-bold text-emerald-700">You save {rupee(save)}</p>}
+        {save > 0 && <p className="mt-0.5 text-[11px] font-bold text-emerald-700">{t("common.youSave", { amount: rupee(save) })}</p>}
 
         <div className="mt-2 flex items-center gap-2 text-[11px] font-semibold">
           {inStock ? (
             <span className="inline-flex items-center gap-1 text-emerald-700">
-              <span className="material-symbols-outlined text-sm">check_circle</span>In stock
+              <span className="material-symbols-outlined text-sm">check_circle</span>{t("home.inStock")}
             </span>
           ) : (
             <span className="inline-flex items-center gap-1 text-stone-400">
-              <span className="material-symbols-outlined text-sm">block</span>Unavailable
+              <span className="material-symbols-outlined text-sm">block</span>{t("home.unavailable")}
             </span>
           )}
           {product.seller?.name && (
@@ -201,6 +208,7 @@ export const HomeProductCard = memo(function HomeProductCard({ product }) {
 
 /* ── Featured spotlight (newest product) ── */
 const FeaturedProduct = memo(function FeaturedProduct({ product }) {
+  const t = useT();
   const img = getProductImage(product.images?.[0]);
   const off =
     product.mrp && product.mrp > product.price
@@ -221,14 +229,14 @@ const FeaturedProduct = memo(function FeaturedProduct({ product }) {
         </div>
         {off > 0 && (
           <span className="absolute left-5 top-5 rounded-full bg-[#EA2831] px-3 py-1 text-xs font-extrabold uppercase tracking-wide text-white">
-            {off}% off
+            {t("common.percentOff", { percent: off })}
           </span>
         )}
       </Link>
 
       <div className="flex flex-col justify-center gap-4 p-7 sm:p-10">
         <span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-red-50 px-3 py-1 text-xs font-bold text-[#EA2831]">
-          <span className="material-symbols-outlined text-sm">bolt</span> Just listed
+          <span className="material-symbols-outlined text-sm">bolt</span> {t("home.justListed")}
         </span>
         {product.category && (
           <p className="text-xs font-bold uppercase tracking-widest text-stone-400">{product.category}</p>
@@ -247,17 +255,17 @@ const FeaturedProduct = memo(function FeaturedProduct({ product }) {
           {inStock ? (
             <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-700">
               <span className="material-symbols-outlined text-lg">check_circle</span>
-              In stock
+              {t("common.inStock")}
             </span>
           ) : (
             <span className="inline-flex items-center gap-1.5 font-semibold text-stone-400">
-              <span className="material-symbols-outlined text-lg">block</span>Currently unavailable
+              <span className="material-symbols-outlined text-lg">block</span>{t("home.currentlyUnavailable")}
             </span>
           )}
           {product.seller?.name && (
             <span className="inline-flex items-center gap-1 text-stone-400">
               <span className="material-symbols-outlined text-base text-emerald-600">verified</span>
-              Sold by {product.seller.name}
+              {t("common.soldBy", { seller: product.seller.name })}
             </span>
           )}
         </div>
@@ -268,7 +276,7 @@ const FeaturedProduct = memo(function FeaturedProduct({ product }) {
             to={href}
             className="inline-flex items-center justify-center gap-2 rounded-xl bg-stone-100 px-6 py-3 text-sm font-bold text-stone-700 transition-colors hover:bg-stone-200"
           >
-            View details <span className="material-symbols-outlined text-lg">arrow_forward</span>
+            {t("home.viewDetails")} <span className="material-symbols-outlined text-lg">arrow_forward</span>
           </Link>
         </div>
       </div>
@@ -303,11 +311,13 @@ export const SectionHead = ({ eyebrow, title, action }) => (
   </div>
 );
 
+// Module scope has no t(), so the copy lives here as KEYS and is resolved at
+// render. Same data shape, same order, same icons.
 const PROMISES = [
-  { icon: "verified_user", title: "Verified sellers", sub: "Vetted before they can list" },
-  { icon: "local_shipping", title: "Delivered pan-India", sub: "Shipped to your doorstep" },
-  { icon: "eco", title: "Farm-grade quality", sub: "Sourced for Indian farms" },
-  { icon: "support_agent", title: "Buyer support", sub: "Help through every order" },
+  { icon: "verified_user", titleKey: "promise.verifiedSellers", subKey: "promise.verifiedSellersSub" },
+  { icon: "local_shipping", titleKey: "promise.panIndia", subKey: "promise.panIndiaSub" },
+  { icon: "eco", titleKey: "promise.quality", subKey: "promise.qualitySub" },
+  { icon: "support_agent", titleKey: "promise.support", subKey: "promise.supportSub" },
 ];
 
 /* Explore Products is a FIXED, newest-first feed — not a paginated one:
@@ -318,6 +328,11 @@ const FEED_SIZE = 13;
 const GRID_SIZE = FEED_SIZE - 1; // 12 below the featured tile
 
 export default function ShopHome() {
+  const t = useT();
+  // The API returns catalogue text already localised, so the fetch effects
+  // below depend on `lang` — a language switch must refetch, not just re-render.
+  const { lang } = useShopLanguage();
+
   // ShopLayout shares its header search state via <Outlet context={{ setQ }} />.
   const { setQ } = useOutletContext() || {};
   const navigate = useNavigate();
@@ -370,7 +385,7 @@ export default function ShopHome() {
     })();
     loadFeed();
     return () => { alive = false; };
-  }, [loadFeed]);
+  }, [loadFeed, lang]);
 
 
   const categoryPreview = categories.slice(0, CATEGORY_PREVIEW);
@@ -395,29 +410,28 @@ export default function ShopHome() {
 
           <div className="relative px-5 py-10 sm:px-10 sm:py-14 lg:px-14">
             <span className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-white/85 ring-1 ring-white/15 backdrop-blur">
-              <span className="material-symbols-outlined text-sm text-[#EA2831]">agriculture</span> India's farming marketplace
+              <span className="material-symbols-outlined text-sm text-[#EA2831]">agriculture</span> {t("home.heroBadge")}
             </span>
             <h1 className="mt-4 font-heading text-2xl font-extrabold leading-[1.1] tracking-tight text-white sm:text-4xl lg:text-5xl">
-              Everything your <span className="text-[#EA2831]">farm needs to grow.</span>
+              {t("home.heroTitlePre")} <span className="text-[#EA2831]">{t("home.heroTitleAccent")}</span>
             </h1>
             <p className="mt-3 max-w-xl text-sm leading-relaxed text-white/75 sm:text-base">
-              Seeds, fertilisers, tools and more — from verified Khetify sellers across India.
-              Browse freely and build your cart; sign in only when you check out.
+              {t("home.heroSub")}
             </p>
 
             <div className="mt-6 flex flex-wrap items-center gap-3 sm:mt-7">
               <a href="#products" className="inline-flex items-center gap-2 rounded-xl bg-[#EA2831] px-6 py-3 text-sm font-bold text-white shadow-lg shadow-black/20 transition-colors hover:bg-[#c91e26] sm:px-7 sm:py-3.5">
-                Shop all products <span className="material-symbols-outlined text-lg">arrow_forward</span>
+                {t("home.heroCta")} <span className="material-symbols-outlined text-lg">arrow_forward</span>
               </a>
               <Link to="/customer-shop/categories" className="inline-flex items-center gap-2 rounded-xl bg-white/10 px-6 py-3 text-sm font-bold text-white ring-1 ring-white/25 backdrop-blur transition-colors hover:bg-white/20 sm:px-7 sm:py-3.5">
-                <span className="material-symbols-outlined text-lg">grid_view</span> Browse categories
+                <span className="material-symbols-outlined text-lg">grid_view</span> {t("home.browseCategories")}
               </Link>
             </div>
 
             {/* Popular category chips */}
             {categoryPreview.length > 0 && (
               <div className="mt-6 flex flex-wrap items-center gap-2 sm:mt-8">
-                <span className="text-[11px] font-semibold uppercase tracking-widest text-white/40">Popular</span>
+                <span className="text-[11px] font-semibold uppercase tracking-widest text-white/40">{t("home.popular")}</span>
                 {categoryPreview.map((c) => (
                   <button
                     key={c}
@@ -436,13 +450,13 @@ export default function ShopHome() {
         <section className="mt-5 sm:mt-6">
           <div className="grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-4 lg:gap-4">
             {PROMISES.map((p) => (
-              <div key={p.title} className="flex items-center gap-3 rounded-2xl bg-white p-3 ring-1 ring-stone-200/70 sm:p-4">
+              <div key={p.titleKey} className="flex items-center gap-3 rounded-2xl bg-white p-3 ring-1 ring-stone-200/70 sm:p-4">
                 <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-red-50 text-[#EA2831] sm:size-11">
                   <span className="material-symbols-outlined text-xl sm:text-2xl">{p.icon}</span>
                 </span>
                 <span className="min-w-0">
-                  <span className="block font-heading text-[13px] font-bold text-stone-900 sm:text-sm">{p.title}</span>
-                  <span className="hidden truncate text-xs text-stone-500 sm:block">{p.sub}</span>
+                  <span className="block font-heading text-[13px] font-bold text-stone-900 sm:text-sm">{t(p.titleKey)}</span>
+                  <span className="hidden truncate text-xs text-stone-500 sm:block">{t(p.subKey)}</span>
                 </span>
               </div>
             ))}
@@ -453,11 +467,11 @@ export default function ShopHome() {
         {categories.length > 0 && (
           <section id="categories" className="scroll-mt-24 pt-12 sm:pt-16">
             <SectionHead
-              eyebrow="Shop by category"
-              title="Find what your farm needs"
+              eyebrow={t("home.sectionCategoriesEyebrow")}
+              title={t("home.sectionCategoriesTitle")}
               action={
                 <Link to="/customer-shop/categories" className="hidden shrink-0 items-center gap-1 self-center text-sm font-bold text-[#EA2831] hover:underline sm:inline-flex">
-                  View all <span className="material-symbols-outlined text-base">arrow_forward</span>
+                  {t("home.viewAll")} <span className="material-symbols-outlined text-base">arrow_forward</span>
                 </Link>
               }
             />
@@ -478,7 +492,7 @@ export default function ShopHome() {
                   <div>
                     <p className="font-heading text-sm font-bold capitalize leading-tight sm:text-base">{c}</p>
                     <span className={`mt-1 inline-flex items-center gap-1 text-xs font-semibold ${i % 3 === 0 ? "text-white/60" : "text-[#EA2831]"}`}>
-                      Shop now <span className="material-symbols-outlined text-sm transition-transform group-hover:translate-x-0.5">arrow_forward</span>
+                      {t("home.shopNow")} <span className="material-symbols-outlined text-sm transition-transform group-hover:translate-x-0.5">arrow_forward</span>
                     </span>
                   </div>
                 </button>
@@ -487,7 +501,7 @@ export default function ShopHome() {
 
             <div className="mt-4 sm:hidden">
               <Link to="/customer-shop/categories" className="flex items-center justify-center gap-1.5 rounded-xl border border-stone-200 bg-white py-2.5 text-sm font-bold text-stone-700">
-                View all categories <span className="material-symbols-outlined text-base">arrow_forward</span>
+                {t("home.viewAllCategories")} <span className="material-symbols-outlined text-base">arrow_forward</span>
               </Link>
             </div>
           </section>
@@ -496,11 +510,11 @@ export default function ShopHome() {
         {/* ── Product feed (featured + infinite scroll) ── */}
         <section id="products" className="scroll-mt-24 pb-14 pt-12 sm:pt-16">
           <SectionHead
-            eyebrow="Fresh on the marketplace"
-            title="Explore products"
+            eyebrow={t("home.sectionProductsEyebrow")}
+            title={t("home.sectionProductsTitle")}
             action={
               <Link to="/customer-shop/products" className="inline-flex shrink-0 items-center gap-1 self-center text-sm font-bold text-[#EA2831] hover:underline">
-                View all <span className="material-symbols-outlined text-base">arrow_forward</span>
+                {t("home.viewAll")} <span className="material-symbols-outlined text-base">arrow_forward</span>
               </Link>
             }
           />
@@ -517,14 +531,14 @@ export default function ShopHome() {
               <span className="material-symbols-outlined text-5xl font-light text-[#EA2831]">wifi_off</span>
               <h3 className="mt-3 font-heading text-lg font-bold text-stone-900">{error}</h3>
               <button onClick={loadFeed} className="mt-4 rounded-xl bg-[#EA2831] px-5 py-2.5 text-sm font-bold text-white transition-colors hover:bg-[#c91e26]">
-                Try again
+                {t("common.tryAgain")}
               </button>
             </div>
           ) : products.length === 0 ? (
             <div className="rounded-3xl bg-white p-12 text-center ring-1 ring-stone-200/70 sm:p-14">
               <span className="material-symbols-outlined text-5xl font-light text-stone-300">storefront</span>
-              <h3 className="mt-3 font-heading text-lg font-bold text-stone-900">No products yet</h3>
-              <p className="mt-1 text-sm text-stone-500">Listings appear here as soon as sellers publish them.</p>
+              <h3 className="mt-3 font-heading text-lg font-bold text-stone-900">{t("home.noProducts")}</h3>
+              <p className="mt-1 text-sm text-stone-500">{t("home.noProductsSub")}</p>
             </div>
           ) : (
             <div className="space-y-6">
@@ -548,12 +562,12 @@ export default function ShopHome() {
             <div className="pointer-events-none absolute -right-16 -top-16 size-56 rounded-full bg-white/10" />
             <div className="pointer-events-none absolute -bottom-20 -left-16 size-64 rounded-full bg-black/10" />
             <div className="relative">
-              <h2 className="font-heading text-xl font-extrabold text-white sm:text-3xl">Ready to fill your cart?</h2>
+              <h2 className="font-heading text-xl font-extrabold text-white sm:text-3xl">{t("home.ctaTitle")}</h2>
               <p className="mx-auto mt-3 max-w-lg text-sm text-white/85 sm:text-base">
-                Browse the full catalog of agri products from verified Khetify sellers. No account needed until you check out.
+                {t("home.ctaSub")}
               </p>
               <Link to="/customer-shop/products" className="mt-6 inline-flex items-center gap-2 rounded-xl bg-white px-7 py-3.5 text-sm font-bold text-[#EA2831] shadow-lg shadow-black/10 transition-colors hover:bg-stone-100 sm:mt-7">
-                Start shopping <span className="material-symbols-outlined text-lg">arrow_forward</span>
+                {t("home.ctaButton")} <span className="material-symbols-outlined text-lg">arrow_forward</span>
               </Link>
             </div>
           </div>

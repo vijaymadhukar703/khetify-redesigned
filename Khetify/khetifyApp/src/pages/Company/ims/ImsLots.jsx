@@ -10,7 +10,7 @@ import {
   sortableKeyboardCoordinates, useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical } from 'lucide-react';
+import { GripVertical, ChevronDown } from 'lucide-react';
 import {
   getLots, receiveLot, createTmsShipment, dispatchShipment, getWarehouses, getWarehouseDirectory, getProducts,
   generateUnits, getUnits, markUnitsPrinted,
@@ -118,6 +118,78 @@ const PAGE_SIZE = 10; // Company Lots pagination — lots per page
  *                     every other role, so the Company Warehouse view keeps
  *                     showing live balances exactly as before.
  */
+
+
+
+
+const STOCK_STATUS_OPTIONS = [
+  { value: 'all', label: 'All Stock Status' },
+  { value: STATUS.IN, label: 'In Stock', dot: 'bg-green-500' },
+  { value: STATUS.LOW, label: 'Low Stock', dot: 'bg-orange-500' },
+  { value: STATUS.OUT, label: 'Out of Stock', dot: 'bg-red-500' },
+  { value: STOCK_ZERO, label: 'Zero quantity (moved out)', dot: 'bg-stone-400' },
+];
+
+const StockStatusDropdown = ({ value, onChange }) => {
+  const [open, setOpen] = useState(false);
+  const ref = React.useRef(null);
+
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const current = STOCK_STATUS_OPTIONS.find((o) => o.value === value) || STOCK_STATUS_OPTIONS[0];
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className={`inline-flex items-center gap-2 text-xs font-bold px-4 py-2 rounded-full border transition-colors cursor-pointer ${
+          open ? 'border-[#EA2831] text-[#EA2831] bg-[#EA2831]/5' : 'border-stone-200 text-stone-600 hover:bg-stone-50'
+        }`}
+      >
+        {current.label}
+        <ChevronDown className={`size-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <ul
+          role="listbox"
+          className="absolute z-20 mt-1.5 min-w-[210px] rounded-xl border border-stone-200 bg-white py-1.5 shadow-lg shadow-stone-900/10"
+        >
+          {STOCK_STATUS_OPTIONS.map((opt) => {
+            const selected = opt.value === value;
+            return (
+              <li key={opt.value} role="option" aria-selected={selected}>
+                <button
+                  type="button"
+                  onClick={() => { onChange(opt.value); setOpen(false); }}
+                  className={`flex w-full items-center gap-2 px-3.5 py-2 text-left text-xs font-bold transition-colors ${
+                    selected ? 'text-[#EA2831] bg-[#EA2831]/5' : 'text-stone-600 hover:bg-stone-50'
+                  }`}
+                >
+                  {opt.dot && <span className={`size-1.5 rounded-full shrink-0 ${opt.dot}`} />}
+                  {opt.label}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+};
+
+
+
+
+
+
 const ImsLots = ({
   showSummary = false, showStockStatus = false, hideReceive = false,
   paginate = false, showBatchNo = false, fluid = false, requireWarehouse = false,
@@ -282,23 +354,12 @@ const ImsLots = ({
             ))}
             {/* Stock-status filter (Company) — operates on the SAME lot dataset and
                 the SAME statusOf rule as the cards, so "Low/Out" here == the card. */}
-            {showStockStatus && (
-              <select
-                value={stockFilter}
-                onChange={(e) => { setStockFilter(e.target.value); setPage(1); }}
-                className="text-xs font-bold border border-stone-200 rounded-full px-4 py-2 bg-white text-stone-600 focus:ring-[#EA2831]"
-                aria-label="Filter by stock status"
-              >
-                <option value="all">All Stock Status</option>
-                <option value={STATUS.IN}>In Stock</option>
-                <option value={STATUS.LOW}>Low Stock</option>
-                <option value={STATUS.OUT}>Out of Stock</option>
-                {/* The lots hidden from every other view — nothing left at this
-                    warehouse. The records still exist; this is how you reach
-                    them. */}
-                <option value={STOCK_ZERO}>Zero quantity (moved out)</option>
-              </select>
-            )}
+       {showStockStatus && (
+  <StockStatusDropdown
+    value={stockFilter}
+    onChange={(v) => { setStockFilter(v); setPage(1); }}
+  />
+)}
           </div>
           {/* Create + Receive — both available to admin AND operations manager
               (anyone holding lot:receive). Create = manual lot; Receive = scan.

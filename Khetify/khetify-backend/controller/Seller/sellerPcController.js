@@ -1,7 +1,10 @@
+const mongoose = require("mongoose");
 const PCApplication = require("../../model/PC/PCApplication");
 const SellerAgreement = require("../../model/PC/SellerAgreement");
 const PrincipalCertificate = require("../../model/PC/PrincipalCertificate");
 const SellerListing = require("../../model/PC/SellerListing");
+// Live sellable stock for the listings table — same source the storefront reads.
+const Inventory = require("../../model/Inventory/Inventory");
 const pcService = require("../../services/pcService");
 const fileService = require("../../services/fileService");
 
@@ -144,9 +147,59 @@ exports.unpublishListing = async (req, res) => {
   } catch (err) { fail(res, err); }
 };
 
+/**
+ * GET /api/seller/listings — the seller's marketplace listings.
+ *
+ * Returns two things the listing row itself does not hold:
+ *
+ *   productImages — pulled in via the existing populate. A marketplace page
+ *                   showing grey placeholder boxes is a page the seller cannot
+ *                   scan; the image IS how you recognise your own product.
+ *
+ *   availableStock — summed from Inventory with the SAME aggregate the
+ *                   storefront uses (services/shopCatalogService.js). That
+ *                   matters more than it looks: the number the seller sees here
+ *                   and the number that decides "in stock?" for a shopper are
+ *                   now literally the same figure, so they cannot disagree.
+ *                   A seller reading "12 in stock" while the storefront quietly
+ *                   says out-of-stock would be worse than showing nothing.
+ *
+ * One extra aggregate for the whole page, not one query per row.
+ */
 exports.listListings = async (req, res) => {
   try {
-    const rows = await SellerListing.find({ sellerId: req.user.sellerId }).sort({ createdAt: -1 }).populate({ path: "productId", select: "productName skuNumber" });
-    res.json({ success: true, count: rows.length, data: rows });
+    const rows = await SellerListing.find({ sellerId: req.user.sellerId })
+      .sort({ createdAt: -1 })
+      .populate({ path: "productId", select: "productName skuNumber productImages" })
+      .lean();
+
+    // Sum availableStock per product across every warehouse/batch this seller
+    // holds. availableStock is already onlineStock + offlineStock - reserved,
+    // so it is the sellable number, not the shelf count.
+    const productIds = rows
+      .map((r) => (r.productId && typeof r.productId === "object" ? r.productId._id : r.productId))
+      .filter(Boolean);
+
+    const stockMap = new Map();
+    if (productIds.length) {
+      /* ObjectId cast is NOT optional here. An aggregate $match does no schema
+         casting (unlike find()), and req.user.sellerId arrives from the JWT as a
+         STRING — so matching it raw would quietly match nothing and every row
+         would read "0 in stock" with no error anywhere. Same cast
+         services/shopCatalogService.js does for the same reason. */
+      const sellerObjectId = new mongoose.Types.ObjectId(String(req.user.sellerId));
+      const inv = await Inventory.aggregate([
+        { $match: { ownerType: "seller", ownerId: sellerObjectId, productId: { $in: productIds } } },
+        { $group: { _id: "$productId", avail: { $sum: "$availableStock" } } },
+      ]);
+      for (const r of inv) stockMap.set(String(r._id), r.avail);
+    }
+
+    const data = rows.map((r) => {
+      const pid = r.productId && typeof r.productId === "object" ? r.productId._id : r.productId;
+      return { ...r, availableStock: stockMap.get(String(pid)) || 0 };
+    });
+
+    res.json({ success: true, count: data.length, data });
   } catch (err) { fail(res, err); }
 };

@@ -32,9 +32,27 @@ const paramsSerializer = (params) => {
 
 const api = axios.create({ baseURL: `${config.BASE_URL}shop/`, paramsSerializer });
 
+/* The storefront language, read from the SAME localStorage key the language
+   context owns (context/ShopLanguageContext.jsx). Read here rather than passed
+   in by every caller: it is a device preference, not an argument, and putting
+   it in the interceptor means no call site can forget it. */
+const SHOP_LANG_KEY = "khetify:shopLang";
+const currentLang = () => {
+  try { return localStorage.getItem(SHOP_LANG_KEY) || "en"; } catch { return "en"; }
+};
+
 api.interceptors.request.use((req) => {
   const token = getShopToken();
   if (token) req.headers.Authorization = `Bearer ${token}`;
+
+  /* Tell the API which language to return DATABASE text in. Sent on every GET;
+     the server ignores it for anything untranslatable and falls back to English
+     for anything it has no translation for, so this can never break a call.
+     Never sent on writes — a POST body must not depend on the UI language. */
+  const lang = currentLang();
+  if (lang && lang !== "en" && (req.method || "get").toLowerCase() === "get") {
+    req.params = { ...(req.params || {}), lang };
+  }
   return req;
 });
 
@@ -75,6 +93,11 @@ export const setDefaultShopAddress = (id) => data(api.patch(`addresses/${id}/def
 export const deleteShopAddress = (id) => data(api.delete(`addresses/${id}`));
 
 /* ---- Checkout & orders ---- */
+// Prices the basket for the COD confirmation screen. Places NOTHING — the COD
+// twin of initiateShopPayment(). Same body as shopCheckout below, so the review
+// and the real order are priced by identical server code.
+export const reviewShopCheckout = (body) => data(api.post("checkout/review", body));
+
 export const shopCheckout = (body) => data(api.post("checkout", body));
 export const getShopOrders = () => data(api.get("orders"));
 export const getShopOrder = (id) => data(api.get(`orders/${id}`));
@@ -83,5 +106,49 @@ export const getShopOrder = (id) => data(api.get(`orders/${id}`));
 //    against it. The reason rides in the POST body.
 export const cancelShopOrder = (id, reason) =>
   data(api.post(`orders/${id}/cancel`, { reason }));
+
+/* ---- 💳 Online payment (mock gateway) ----
+   A SEPARATE lane from shopCheckout() above, on purpose. COD still posts to
+   /checkout and gets its orders back immediately; online payment opens a
+   payment session first and the orders are created by the server only after
+   the gateway confirms.
+
+   When a real gateway is integrated, `initiateShopPayment` stays exactly as it
+   is (the server swaps its adapter) and only `completeMockShopPayment` is
+   replaced by a call that hands the gateway's own { paymentId, signature }
+   back for verification. */
+
+// Prices the basket server-side and opens a payment session. Creates NO order.
+// Same body as shopCheckout: { items, shippingAddressId }.
+export const initiateShopPayment = (body) => data(api.post("payments/initiate", body));
+
+// The shopper's own payment session (amount, status, seller-wise quote).
+export const getShopPayment = (paymentId) => data(api.get(`payments/${paymentId}`));
+
+// Which gateway is live + its PUBLISHABLE key id: { provider, isMock, mode, keyId }.
+// Served by the API rather than a VITE_ env var so the key can never disagree
+// with the account the server verifies signatures against.
+export const getShopPaymentConfig = () => data(api.get("payments/config"));
+
+// The REAL return leg: hand back what Razorpay Checkout gave the browser.
+// Untrusted until the server verifies the signature AND re-reads the payment,
+// so this is a claim, not a confirmation. Returns { payment, orders }.
+export const verifyShopPayment = (paymentId, body) =>
+  data(api.post(`payments/${paymentId}/verify`, body));
+
+// Shopper closed the gateway window without paying. Reopens the session so the
+// retry button works. Nothing was charged and nothing was ordered.
+export const dismissShopPayment = (paymentId) =>
+  data(api.post(`payments/${paymentId}/dismiss`));
+
+// ⛔ MOCK GATEWAY ONLY — the server refuses this whenever Razorpay is active.
+//    outcome: "success" | "failure".  Returns { payment, orders } on success,
+//    where `orders` is the SAME array shape shopCheckout() returns.
+export const completeMockShopPayment = (paymentId, body) =>
+  data(api.post(`payments/${paymentId}/mock/complete`, body));
+
+// The shopper backed out of the payment screen. Nothing was ordered.
+export const cancelShopPayment = (paymentId) =>
+  data(api.post(`payments/${paymentId}/cancel`));
 
 export default api;

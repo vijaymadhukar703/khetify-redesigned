@@ -4,9 +4,10 @@ import { getShopOrder, cancelShopOrder, getShopProduct } from "../../lib/shopApi
 import { useCart } from "../../context/CartContext";
 import { rupee } from "../../Components/shop/ProductCard";
 import {
-  FLOW, STATUS_LABEL, STATUS_BLURB, STATUS_ICON,
+  FLOW, STATUS_LABEL_KEY, STATUS_BLURB_KEY, STATUS_ICON,
   isDead, statusTone, canCancel, fmtDateTime,
 } from "../../lib/orderStatus";
+import { useT } from "../../context/ShopLanguageContext";
 
 /* ─────────────────────────────────────────────────────────────────────────────
  * Khetify — Order detail  (/customer-shop/orders/:id)   ★ NEW PAGE
@@ -41,6 +42,7 @@ function Row({ label, value, mono }) {
 /* ── Vertical timeline. Terminal states (cancelled/returned) never render the
       pipeline — an order that died at step 1 must not look 40% shipped. ── */
 function Timeline({ order }) {
+  const t = useT();
   // HOOKS FIRST, ALWAYS. The cancelled/returned branch below returns early, and
   // an order can become cancelled WHILE this page is open (the Cancel button is
   // right there). If the hooks lived after that return, React would render
@@ -108,8 +110,8 @@ function Timeline({ order }) {
           <span className="material-symbols-outlined text-lg">{STATUS_ICON[order.status]}</span>
         </span>
         <div>
-          <p className="text-sm font-bold text-[#EA2831]">{STATUS_LABEL[order.status]}</p>
-          <p className="mt-0.5 text-[13px] text-stone-600">{STATUS_BLURB[order.status]}</p>
+          <p className="text-sm font-bold text-[#EA2831]">{t(STATUS_LABEL_KEY[order.status])}</p>
+          <p className="mt-0.5 text-[13px] text-stone-600">{t(STATUS_BLURB_KEY[order.status])}</p>
           {when && <p className="mt-1 text-xs text-stone-400">{fmtDateTime(when)}</p>}
         </div>
       </div>
@@ -202,10 +204,10 @@ function Timeline({ order }) {
                   transition only, so the text is present and readable from the
                   first frame and the row never changes size. */}
               <p className={`kh-step-text text-sm font-bold ${done ? "text-stone-900" : "text-stone-400"}`}>
-                {STATUS_LABEL[s]}
+                {t(STATUS_LABEL_KEY[s])}
               </p>
               <p className={`kh-step-text mt-0.5 text-[13px] leading-normal ${done ? "text-stone-600" : "text-stone-400"}`}>
-                {STATUS_BLURB[s]}
+                {t(STATUS_BLURB_KEY[s])}
               </p>
               {stamp && <p className="mt-1 text-xs text-stone-400">{fmtDateTime(stamp)}</p>}
             </div>
@@ -217,6 +219,7 @@ function Timeline({ order }) {
 }
 
 export default function ShopOrderDetail() {
+  const t = useT();
   const { id } = useParams();
   const navigate = useNavigate();
   const { addItem } = useCart();
@@ -266,29 +269,32 @@ export default function ShopOrderDetail() {
     } catch { /* clipboard blocked — it's still readable on screen */ }
   };
 
+  /* The reason is SENT TO THE SERVER and stored on the order, so the value must
+     stay stable in English while the label follows the UI language — a Hindi
+     shopper must not write a reason the seller's dashboard cannot read. */
   const CANCEL_REASONS = [
-    "Ordered by mistake",
-    "Found a better price elsewhere",
-    "Delivery taking too long",
-    "No longer need the item",
-    "Item not required anymore",
-    "Other",
+    { value: "Ordered by mistake", label: t("od.reasonMistake") },
+    { value: "Found a better price elsewhere", label: t("od.reasonBetterPrice") },
+    { value: "Delivery taking too long", label: t("od.reasonTooLong") },
+    { value: "No longer need the item", label: t("od.reasonNoLongerNeed") },
+    { value: "Item not required anymore", label: t("od.reasonNotRequired") },
+    { value: "Other", label: t("od.reasonOther") },
   ];
 
   const doCancel = async () => {
     // A reason is required; "Other" needs the free-text filled in.
     const reason = cancelReason === "Other" ? otherReason.trim() : cancelReason;
-    if (!cancelReason) { setActionError("Please pick a reason for cancelling."); return; }
-    if (cancelReason === "Other" && !reason) { setActionError("Please describe your reason."); return; }
+    if (!cancelReason) { setActionError(t("od.errPickReason")); return; }
+    if (cancelReason === "Other" && !reason) { setActionError(t("od.errDescribeReason")); return; }
 
     setActionError(""); setCancelling(true);
     try {
       const res = await cancelShopOrder(order._id, reason);
       setOrder(res.data);
       setConfirming(false);
-      setNotice("Your order has been cancelled.");
+      setNotice(t("od.cancelledNotice"));
     } catch (e) {
-      setActionError(e?.response?.data?.message || "Could not cancel this order.");
+      setActionError(e?.response?.data?.message || t("od.errCancelFailed"));
       setConfirming(false);
     } finally {
       setCancelling(false);
@@ -316,14 +322,14 @@ export default function ShopOrderDetail() {
 
       const skipped = items.length - reorderable.length;
       if (!added) {
-        setActionError("None of these items are available right now.");
+        setActionError(t("od.errNoneAvailable"));
       } else {
-        const bits = [`${added} item${added === 1 ? "" : "s"} added to your cart`];
-        if (gone) bits.push(`${gone} no longer available`);
-        if (skipped) bits.push(`${skipped} too old to re-add`);
+        const bits = [t(added === 1 ? "od.addedToCartNotice" : "od.addedToCartNoticePlural", { count: added })];
+        if (gone) bits.push(t("od.noLongerAvailable", { count: gone }));
+        if (skipped) bits.push(t("od.tooOld", { count: skipped }));
         setNotice(bits.join(" · ") + ".");
         // Fire the visible toast too.
-        setToast({ text: `${added} item${added === 1 ? "" : "s"} added to cart`, count: added });
+        setToast({ text: t(added === 1 ? "od.toastAdded" : "od.toastAddedPlural", { count: added }), count: added });
         setTimeout(() => setToast(null), 4000);
       }
     } finally {
@@ -351,7 +357,7 @@ export default function ShopOrderDetail() {
         <div className="mx-auto max-w-3xl px-4 sm:px-6">
           <div className="rounded-3xl border border-stone-200 bg-white p-12 text-center">
             <span className="material-symbols-outlined text-5xl font-light text-stone-300">search_off</span>
-            <h1 className="mt-3 font-heading text-lg font-bold text-stone-900">Order not found</h1>
+            <h1 className="mt-3 font-heading text-lg font-bold text-stone-900">{t("od.notFound")}</h1>
             <p className="mt-1 text-sm text-stone-500">{error || "We couldn't find this order on your account."}</p>
             <Link
               to="/customer-shop/orders"
@@ -381,7 +387,7 @@ export default function ShopOrderDetail() {
   <button
     type="button"
     onClick={() => navigate(-1)} // Smoothly goes to previous history entry
-    aria-label="Go back"
+    aria-label={t("od.goBack")}
     // Button ke andar se dynamic clash karne wali classes ko completely standard clean kar diya hai
     className="inline-flex h-[42px] items-center justify-center gap-2 rounded-full border-[1.5px] border-[#E2E0D6] bg-white px-4 text-sm font-bold text-[#14201A] transition-all duration-150 hover:border-stone-300 hover:bg-stone-50 hover:text-[#EA2831]"
   >
@@ -389,7 +395,7 @@ export default function ShopOrderDetail() {
     <span className="material-symbols-outlined text-[20px] flex items-center justify-center">
       arrow_back
     </span>
-    <span className="leading-none">Back</span>
+    <span className="leading-none">{t("od.back")}</span>
   </button>
 </div>
 
@@ -403,7 +409,7 @@ export default function ShopOrderDetail() {
                 </h1>
                 <button
                   onClick={copyNumber}
-                  title="Copy order number"
+                  title={t("od.copyOrderNumber")}
                   className="no-print rounded-lg p-1 text-stone-300 transition-colors hover:bg-stone-100 hover:text-stone-600"
                 >
                   <span className={`material-symbols-outlined text-[17px] ${copied ? "text-emerald-600" : ""}`}>
@@ -412,19 +418,19 @@ export default function ShopOrderDetail() {
                 </button>
               </div>
               <p className="mt-0.5 text-sm text-stone-500">
-                Placed {fmtDateTime(order.placedAt || order.createdAt)}
+                {t("od.placedAt", { when: fmtDateTime(order.placedAt || order.createdAt) })}
               </p>
               {order.sellerName && (
                 <p className="mt-1 flex items-center gap-1.5 text-sm text-stone-600">
                   <span className="material-symbols-outlined text-base text-stone-400">storefront</span>
-                  Sold by <strong className="font-semibold text-stone-800">{order.sellerName}</strong>
+                  {t("od.soldByPrefix")} <strong className="font-semibold text-stone-800">{order.sellerName}</strong>
                 </p>
               )}
             </div>
 
             <div className="text-right">
               <span className={`inline-flex items-center rounded-full px-3 py-1 text-[11px] font-bold uppercase tracking-wide ${statusTone(order.status)}`}>
-                {STATUS_LABEL[order.status] || order.status}
+                {STATUS_LABEL_KEY[order.status] ? t(STATUS_LABEL_KEY[order.status]) : order.status}
               </span>
               <p className="mt-2 font-heading text-2xl font-black text-stone-900">
                 {rupee(order.totalAmount || 0)}
@@ -449,16 +455,16 @@ export default function ShopOrderDetail() {
 
         {/* ── Timeline ── */}
         <section className="mb-4 rounded-2xl border border-stone-200 bg-white p-5 print-flat sm:p-6">
-          <h2 className="mb-5 font-heading text-base font-extrabold text-stone-900">Order status</h2>
+          <h2 className="mb-5 font-heading text-base font-extrabold text-stone-900">{t("od.orderStatus")}</h2>
           <Timeline order={order} />
         </section>
 
         {/* ── Items ── */}
         <section className="mb-4 rounded-2xl border border-stone-200 bg-white p-5 print-flat sm:p-6">
           <h2 className="mb-1 font-heading text-base font-extrabold text-stone-900">
-            Items{" "}
+            {t("od.items")}{" "}
             <span className="text-sm font-semibold text-stone-400">
-              ({order.totalUnits} unit{order.totalUnits === 1 ? "" : "s"})
+              {t(order.totalUnits === 1 ? "od.unitCount" : "od.unitCountPlural", { count: order.totalUnits })}
             </span>
           </h2>
 
@@ -491,16 +497,16 @@ export default function ShopOrderDetail() {
           </div>
 
           <div className="mt-3 border-t border-stone-100 pt-3">
-            <Row label="Subtotal" value={rupee(subtotal)} />
-            <Row label="Delivery" value={<span className="text-emerald-700">Free</span>} />
+            <Row label={t("od.subtotal")} value={rupee(subtotal)} />
+            <Row label={t("od.delivery")} value={<span className="text-emerald-700">{t("od.free")}</span>} />
             <div className="mt-1.5 flex items-baseline justify-between border-t border-stone-100 pt-3">
-              <span className="font-heading text-base font-bold text-stone-900">Total</span>
+              <span className="font-heading text-base font-bold text-stone-900">{t("od.total")}</span>
               <span className="font-heading text-xl font-black text-stone-900">
                 {rupee(order.totalAmount || 0)}
               </span>
             </div>
             <p className="mt-1 text-[11px] text-stone-400">
-              Inclusive of all taxes. The GST breakdown appears on the seller's invoice.
+              {t("od.taxNote")}
             </p>
           </div>
         </section>
@@ -510,7 +516,7 @@ export default function ShopOrderDetail() {
           <div className="rounded-2xl border border-stone-200 bg-white p-5 print-flat">
             <h2 className="mb-2.5 flex items-center gap-2 font-heading text-[15px] font-extrabold text-stone-900">
               <span className="material-symbols-outlined text-[19px] text-[#EA2831]">location_on</span>
-              Delivery address
+              {t("od.deliveryAddress")}
             </h2>
             <p className="text-[14px] font-bold text-stone-900">
               {ship.name}
@@ -536,19 +542,19 @@ export default function ShopOrderDetail() {
           <div className="rounded-2xl border border-stone-200 bg-white p-5 print-flat">
             <h2 className="mb-2.5 flex items-center gap-2 font-heading text-[15px] font-extrabold text-stone-900">
               <span className="material-symbols-outlined text-[19px] text-emerald-700">payments</span>
-              Payment
+              {t("od.payment")}
             </h2>
             <p className="text-[14px] font-bold text-stone-900">
-              {order.payment?.mode === "cod" ? "Cash on Delivery" : order.payment?.mode}
+              {order.payment?.mode === "cod" ? t("od.cod") : order.payment?.mode}
             </p>
             <p className="mt-1 text-[13px] leading-relaxed text-stone-600">
               {order.payment?.status === "paid"
-                ? `Paid — ${rupee(order.totalAmount || 0)}.`
+                ? t("od.paid", { amount: rupee(order.totalAmount || 0) })
                 : order.status === "delivered"
-                  ? `${rupee(order.totalAmount || 0)} was collected on delivery.`
+                  ? t("od.collectedOnDelivery", { amount: rupee(order.totalAmount || 0) })
                   : isDead(order.status)
-                    ? "Nothing was charged for this order."
-                    : `Keep ${rupee(order.totalAmount || 0)} ready when your package arrives.`}
+                    ? t("od.nothingCharged")
+                    : t("od.keepReady", { amount: rupee(order.totalAmount || 0) })}
             </p>
           </div>
         </section>
@@ -562,7 +568,7 @@ export default function ShopOrderDetail() {
               className="flex h-[50px] w-full items-center justify-center gap-2 rounded-full bg-[#EA2831] text-sm font-bold text-white shadow-[0_8px_20px_rgba(234,40,49,0.22)] transition-colors hover:bg-[#c91e26] disabled:cursor-not-allowed disabled:opacity-60 sm:flex-1"
             >
               <span className="material-symbols-outlined text-[19px]">refresh</span>
-              {reordering ? "Adding to cart…" : "Buy it again"}
+              {reordering ? t("od.addingToCart") : t("od.buyAgain")}
             </button>
           )}
 
@@ -570,7 +576,7 @@ export default function ShopOrderDetail() {
             onClick={() => window.print()}
             className="flex h-[50px] w-full items-center justify-center gap-2 rounded-full border-[1.5px] border-stone-200 bg-white px-6 text-sm font-bold text-stone-700 transition-colors hover:border-stone-300 hover:bg-stone-50 sm:w-auto"
           >
-            <span className="material-symbols-outlined text-[19px]">print</span> Save a copy
+            <span className="material-symbols-outlined text-[19px]">print</span> {t("od.saveCopy")}
           </button>
 
           {cancellable && !confirming && (
@@ -578,7 +584,7 @@ export default function ShopOrderDetail() {
               onClick={() => setConfirming(true)}
               className="flex h-[50px] w-full items-center justify-center gap-2 rounded-full border-[1.5px] border-red-100 bg-white px-6 text-sm font-bold text-[#EA2831] transition-colors hover:bg-red-50 sm:w-auto"
             >
-              <span className="material-symbols-outlined text-[19px]">close</span> Cancel order
+              <span className="material-symbols-outlined text-[19px]">close</span> {t("od.cancelOrder")}
             </button>
           )}
         </div>
@@ -586,7 +592,7 @@ export default function ShopOrderDetail() {
         {/* ── Cancel confirmation ── */}
         {confirming && (
           <div className="no-print mt-3 rounded-2xl border border-red-200 bg-red-50 p-5">
-            <p className="font-heading text-sm font-bold text-stone-900">Cancel this order?</p>
+            <p className="font-heading text-sm font-bold text-stone-900">{t("od.cancelTitle")}</p>
             <p className="mt-1 text-[13px] leading-relaxed text-stone-600">
               {order.orderNumber} will be cancelled and the seller notified. Nothing has been
               charged, so there's nothing to refund. This can't be undone.
@@ -594,14 +600,16 @@ export default function ShopOrderDetail() {
 
             {/* Reason picker — required. Helps the seller and keeps a record. */}
             <p className="mt-4 text-xs font-bold uppercase tracking-wide text-stone-500">
-              Why are you cancelling?
+              {t("od.cancelWhy")}
             </p>
             <div className="mt-2 space-y-1.5">
+              {/* `r.value` is what gets STORED and shown to the seller (always
+                  English); `r.label` is what the shopper reads. */}
               {CANCEL_REASONS.map((r) => (
                 <label
-                  key={r}
+                  key={r.value}
                   className={`flex cursor-pointer items-center gap-2.5 rounded-xl border px-3 py-2.5 text-sm transition-colors ${
-                    cancelReason === r
+                    cancelReason === r.value
                       ? "border-[#EA2831] bg-white font-semibold text-stone-900"
                       : "border-stone-200 bg-white/60 text-stone-600 hover:border-stone-300"
                   }`}
@@ -609,12 +617,12 @@ export default function ShopOrderDetail() {
                   <input
                     type="radio"
                     name="cancelReason"
-                    value={r}
-                    checked={cancelReason === r}
-                    onChange={() => { setCancelReason(r); setActionError(""); }}
+                    value={r.value}
+                    checked={cancelReason === r.value}
+                    onChange={() => { setCancelReason(r.value); setActionError(""); }}
                     className="size-4 accent-[#EA2831]"
                   />
-                  {r}
+                  {r.label}
                 </label>
               ))}
             </div>
@@ -636,14 +644,14 @@ export default function ShopOrderDetail() {
                 disabled={cancelling}
                 className="rounded-full bg-[#EA2831] px-5 py-2.5 text-xs font-bold uppercase tracking-wider text-white transition-colors hover:bg-[#c91e26] disabled:opacity-60"
               >
-                {cancelling ? "Cancelling…" : "Yes, cancel it"}
+                {cancelling ? t("od.cancelling") : t("od.yesCancel")}
               </button>
               <button
                 onClick={() => { setConfirming(false); setActionError(""); }}
                 disabled={cancelling}
                 className="rounded-full border border-stone-200 bg-white px-5 py-2.5 text-xs font-bold uppercase tracking-wider text-stone-600 transition-colors hover:bg-stone-50 disabled:opacity-60"
               >
-                Keep my order
+                {t("od.keepOrder")}
               </button>
             </div>
           </div>
@@ -654,8 +662,7 @@ export default function ShopOrderDetail() {
           <p className="no-print mt-4 flex items-start gap-1.5 text-center text-[12px] leading-normal text-stone-400 sm:text-left">
             <span className="material-symbols-outlined text-sm">info</span>
             <span>
-              This order is already {STATUS_LABEL[order.status].toLowerCase()} — the seller has
-              reserved your stock, so it can't be cancelled online. Please contact the seller.
+              {t("od.notCancellable", { status: t(STATUS_LABEL_KEY[order.status]).toLowerCase() })}
             </span>
           </p>
         )}
@@ -673,7 +680,7 @@ export default function ShopOrderDetail() {
               to="/customer-shop/cart"
               className="shrink-0 rounded-full bg-white px-3.5 py-1.5 text-xs font-bold text-stone-900 transition-colors hover:bg-stone-100"
             >
-              View cart
+              {t("od.viewCart")}
             </Link>
           </div>
         </div>

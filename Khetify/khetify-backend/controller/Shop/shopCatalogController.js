@@ -13,7 +13,8 @@ exports.listProducts = async (req, res) => {
 /** GET /api/shop/categories — public category list for the shop nav. */
 exports.listCategories = async (req, res) => {
   try {
-    const categories = await catalog.listCategories();
+    // ?lang=hi → localised labels; anything else → English, unchanged.
+    const categories = await catalog.listCategories(req.query.lang);
     res.json({ success: true, data: categories });
   } catch (err) {
     res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
@@ -23,7 +24,7 @@ exports.listCategories = async (req, res) => {
 /** GET /api/shop/products/:listingId — public product detail. */
 exports.getProduct = async (req, res) => {
   try {
-    const product = await catalog.getProduct(req.params.listingId);
+    const product = await catalog.getProduct(req.params.listingId, req.query.lang);
     res.json({ success: true, data: product });
   } catch (err) {
     res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });

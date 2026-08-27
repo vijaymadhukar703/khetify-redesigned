@@ -7,6 +7,8 @@ import {
 } from '../../lib/sellerApi';
 import { Modal, PrimaryBtn, GhostBtn, NoWarehouseNotice } from '../Company/ims/ImsUi';
 import ScanBox from '../../Components/ims/ScanBox';
+// Receiving is a warehouse action, not a head-office one — see the gate below.
+import { useSellerPermission } from '../../context/SellerPermissionContext';
 
 const toast = (icon, title) => Swal.fire({ icon, title, toast: true, position: 'top-end', timer: 2200, showConfirmButton: false });
 const apiError = (err) => toast('error', err?.response?.data?.message || err.message || 'Something went wrong');
@@ -165,6 +167,21 @@ const SellerSupply = () => {
   const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
   const [receiving, setReceiving] = useState(null); // supply order being scan-received
+
+  /* WHO MAY RECEIVE.
+     supply:receive is held by seller_manager (via "supply:*") and explicitly
+     DENIED to seller_admin in the backend's config/permissions.js — receiving is
+     a physical act performed by the warehouse that is actually holding the
+     boxes, so head office does not get a "Scan to receive" button for goods it
+     cannot see.
+
+     The seller_admin still SEES every supply order and its live status on this
+     page; only the receive action is withheld. Mirrors how transfer:create is
+     already gated for the same role.
+
+     This is UI convenience only. The real enforcement is authorize("supply:receive")
+     on POST /seller/supply-orders/:id/scan-box and /receive. */
+  const canReceiveSupply = useSellerPermission('supply:receive');
 
   const companyName = companies.find((c) => String(c._id) === String(companyId))?.businessName || '';
 
@@ -346,11 +363,18 @@ const SellerSupply = () => {
                     </td>
                     <td data-label="Requested" className="px-5 py-3 text-sm text-stone-500">{fmtDate(o.createdAt)}</td>
                     <td className="px-5 py-3 cell-actions text-right">
-                      {RECEIVABLE.includes(o.status) && (
+                      {RECEIVABLE.includes(o.status) && (canReceiveSupply ? (
                         <button onClick={() => setReceiving(o)} className="inline-flex items-center gap-1 text-xs font-bold px-3 py-1.5 rounded-lg bg-[#EA2831] text-white hover:bg-red-600">
                           <span className="material-symbols-outlined text-sm">qr_code_scanner</span> Scan to receive
                         </button>
-                      )}
+                      ) : (
+                        /* Not a dead cell: a seller_admin watching an inbound
+                           shipment should know it is waiting on the warehouse,
+                           not wonder why their button vanished. */
+                        <span className="inline-flex items-center gap-1 text-xs font-medium text-stone-400" title="Receiving is done by the destination warehouse">
+                          <span className="material-symbols-outlined text-sm">schedule</span> Awaiting warehouse
+                        </span>
+                      ))}
                     </td>
                   </tr>
                 ))}

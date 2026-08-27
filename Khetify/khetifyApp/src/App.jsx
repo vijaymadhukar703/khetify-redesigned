@@ -133,6 +133,13 @@ import ShopWishlist from './pages/shop/ShopWishlist';
 import ShopDashboard from './pages/shop/ShopDashboard';
 import ShopCheckout from './pages/shop/ShopCheckout';
 import ShopOrderSuccess from './pages/shop/ShopOrderSuccess';
+// 💳 Payment screen (online payment lane). Renders whichever gateway the
+//    server has live — Razorpay, or the built-in mock when no keys are set.
+//    Chrome-less like order-success: nothing to wander off to mid-transaction.
+import ShopPayment from './pages/shop/ShopPayment';
+// 🧾 COD confirmation screen — the COD twin of the payment screen, so both
+//    payment lanes get a final look before anything is committed.
+import ShopConfirmOrder from './pages/shop/ShopConfirmOrder';
 import ShopOrders from './pages/shop/ShopOrders';
 import ShopOrderDetail from './pages/shop/ShopOrderDetail';
 import ShopProfile from './pages/shop/ShopProfile';
@@ -387,6 +394,13 @@ function App() {
           <Route path="orders/:id" element={<RequireConsumer><ShopOrderDetail /></RequireConsumer>} />
           <Route path="profile" element={<RequireConsumer><ShopProfile /></RequireConsumer>} />
           <Route path="checkout" element={<RequireConsumer><ShopCheckout /></RequireConsumer>} />
+          {/* 💳 Online payment. Sits OUTSIDE ShopLayout for the same reason
+              order-success does. No order exists yet at this point — the
+              server creates it only once the payment succeeds. */}
+          <Route path="payment/:paymentId" element={<RequireConsumer><ShopPayment /></RequireConsumer>} />
+          {/* 🧾 COD confirmation. Outside ShopLayout for the same reason as the
+              payment screen: nothing to wander off to mid-commit. */}
+          <Route path="confirm" element={<RequireConsumer><ShopConfirmOrder /></RequireConsumer>} />
           <Route path="login" element={<ShopLogin />} />
           <Route path="register" element={<ShopRegister />} />
             

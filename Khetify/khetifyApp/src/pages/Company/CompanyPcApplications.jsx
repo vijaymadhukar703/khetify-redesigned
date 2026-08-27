@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Swal from 'sweetalert2';
 import config from '../../../config/config';
+import { ChevronDown } from 'lucide-react';
 import {
   getCompanyPcApplications, getCompanyPcApplication, reviewPcApplication, requestPcDocs,
   rejectPcApplication, approvePcApplication, issuePc,
@@ -50,6 +51,71 @@ const statusLabel = (s) => STATUS_LABEL[s] || (s || '').replace(/_/g, ' ');
 // company still needs to act on; the rest are terminal-ish buckets.
 const FILTERS = [['all', 'All'], ['pending', 'Pending action'], ['active', 'Active'], ['rejected', 'Rejected']];
 const PENDING_ACTION = ['applied', 'under_review', 'need_more_docs', 'agreement_pending', 'agreement_signed'];
+
+
+
+
+// Custom dropdown replacing the native filter <select> — matches the
+// "Application form" button's height/border, themed open menu instead of the
+// browser default.
+const PcFilterSelect = ({ value, onChange }) => {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const currentLabel = FILTERS.find(([k]) => k === value)?.[1] || FILTERS[0][1];
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className={`h-10 pl-3.5 pr-9 rounded-lg border text-sm bg-white text-left flex items-center transition-colors ${
+          open ? 'border-[#EA2831] ring-2 ring-[#EA2831]/20' : 'border-stone-300 hover:bg-stone-50'
+        }`}
+      >
+        {currentLabel}
+      </button>
+      <ChevronDown className={`size-4 absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 pointer-events-none transition-transform ${open ? 'rotate-180' : ''}`} />
+
+      {open && (
+        <ul
+          role="listbox"
+          className="absolute right-0 z-20 mt-1.5 w-44 rounded-xl border border-stone-200 bg-white py-1.5 shadow-lg shadow-stone-900/10"
+        >
+          {FILTERS.map(([k, label]) => {
+            const selected = k === value;
+            return (
+              <li key={k} role="option" aria-selected={selected}>
+                <button
+                  type="button"
+                  onClick={() => { onChange(k); setOpen(false); }}
+                  className={`flex w-full items-center px-3.5 py-2 text-left text-sm font-medium transition-colors ${
+                    selected ? 'text-[#EA2831] bg-[#EA2831]/5 font-bold' : 'text-stone-600 hover:bg-stone-50'
+                  }`}
+                >
+                  {label}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+};
+
+
+
+
+
 const matchesFilter = (status, filter) => (
   filter === 'all' ? true
     : filter === 'pending' ? PENDING_ACTION.includes(status)
@@ -83,13 +149,7 @@ const CompanyPcApplications = () => {
           <button onClick={() => setShowForm((v) => !v)} className="h-10 px-3.5 rounded-lg border border-stone-300 text-sm font-bold text-stone-600 hover:bg-stone-50">
             <span className="material-symbols-outlined text-base align-middle mr-1">tune</span>{showForm ? 'Hide form builder' : 'Application form'}
           </button>
-          <select
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            className="h-10 px-3 rounded-lg border border-stone-300 text-sm bg-white outline-none focus:border-[#EA2831]"
-          >
-            {FILTERS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
-          </select>
+          <PcFilterSelect value={filter} onChange={setFilter} />
         </div>
       </div>
 

@@ -4,6 +4,7 @@ import axios from 'axios';
 import Swal from 'sweetalert2';
 import { usePermission } from '../../context/PermissionContext';
 import { getProductImage } from '../../lib/productImage';
+import { ChevronDown } from 'lucide-react';
 
 // Catalog pagination. Client-side on purpose: /api/product/all already returns
 // the company's full (search + category filtered) list, and the Status filter
@@ -36,7 +37,68 @@ const fieldCls = 'w-full h-11 border border-stone-200 rounded-lg text-sm bg-whit
 // `appearance-none` drops the native arrow (a Material chevron is drawn over
 // it, so the control looks identical in every browser); `truncate` keeps a long
 // option like "Growth Promoters" from running under that chevron.
+
+
 const selectCls = `${fieldCls} pl-3.5 pr-9 min-w-0 appearance-none truncate cursor-pointer`;
+
+// Custom dropdown replacing native <select> — same fieldCls look, but the open
+// menu is styled to match the theme (red accent) instead of the browser default.
+const CustomFilterSelect = ({ value, options, onChange, placeholder }) => {
+  const [open, setOpen] = useState(false);
+  const ref = React.useRef(null);
+
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const currentLabel = options.find((o) => o.value === value)?.label || placeholder;
+
+  return (
+    <div className="relative min-w-0" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className={`${fieldCls} pl-3.5 pr-9 min-w-0 flex items-center text-left transition-colors ${
+          open ? 'ring-2 ring-[#EA2831]/30 border-[#EA2831]' : ''
+        } ${value !== placeholder ? 'text-stone-700' : 'text-stone-500'}`}
+      >
+        <span className="truncate">{currentLabel}</span>
+      </button>
+      <span className={`material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-stone-400 text-[20px] pointer-events-none transition-transform ${open ? 'rotate-180' : ''}`}>
+        expand_more
+      </span>
+
+      {open && (
+        <ul
+          role="listbox"
+          className="absolute z-20 mt-1.5 w-full min-w-[160px] rounded-xl border border-stone-200 bg-white py-1.5 shadow-lg shadow-stone-900/10 max-h-64 overflow-y-auto"
+        >
+          {options.map((opt) => {
+            const selected = opt.value === value;
+            return (
+              <li key={opt.value} role="option" aria-selected={selected}>
+                <button
+                  type="button"
+                  onClick={() => { onChange(opt.value); setOpen(false); }}
+                  className={`flex w-full items-center px-3.5 py-2 text-left text-sm font-medium transition-colors ${
+                    selected ? 'text-[#EA2831] bg-[#EA2831]/5 font-bold' : 'text-stone-600 hover:bg-stone-50'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+};
+
 
 const CompanyProductCatalog = () => {
   const navigate = useNavigate();
@@ -220,25 +282,29 @@ const CompanyProductCatalog = () => {
                   weight in every browser, so it is hidden (appearance-none) and
                   a Material chevron is drawn in its place — matching the search
                   icon and the pagination chevrons. `pr-9` reserves its room. */}
-              <div className="relative min-w-0">
-                <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} className={selectCls}>
-                  <option value="Category">Category</option>
-                  <option value="fertilizers">Fertilizers</option>
-                  <option value="pesticides">Pesticides</option>
-                  <option value="seeds">Seeds</option>
-                  <option value="tools">Tools</option>
-                  <option value="growth_promoters">Growth Promoters</option>
-                </select>
-                <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-stone-400 text-[20px] pointer-events-none">expand_more</span>
-              </div>
-              <div className="relative min-w-0">
-                <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className={selectCls}>
-                  <option value="Status">Status</option>
-                  <option value="Active">Active</option>
-                  <option value="Inactive">Inactive</option>
-                </select>
-                <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-stone-400 text-[20px] pointer-events-none">expand_more</span>
-              </div>
+             <CustomFilterSelect
+  value={categoryFilter}
+  onChange={setCategoryFilter}
+  placeholder="Category"
+  options={[
+    { value: 'Category', label: 'Category' },
+    { value: 'fertilizers', label: 'Fertilizers' },
+    { value: 'pesticides', label: 'Pesticides' },
+    { value: 'seeds', label: 'Seeds' },
+    { value: 'tools', label: 'Tools' },
+    { value: 'growth_promoters', label: 'Growth Promoters' },
+  ]}
+/>
+             <CustomFilterSelect
+  value={statusFilter}
+  onChange={setStatusFilter}
+  placeholder="Status"
+  options={[
+    { value: 'Status', label: 'Status' },
+    { value: 'Active', label: 'Active' },
+    { value: 'Inactive', label: 'Inactive' },
+  ]}
+/>
             </div>
           </div>
 

@@ -1,6 +1,7 @@
 import React, { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useCart } from "../../context/CartContext";
+import { useT } from "../../context/ShopLanguageContext";
 import { getProductImage } from "../../lib/productImage";
 import { rupee } from "./ProductCard";
 
@@ -12,6 +13,7 @@ import { rupee } from "./ProductCard";
    animate; controlled via `open` / `onClose`. */
 export default function CartDrawer({ open, onClose }) {
   const { items, setQty, removeItem, subtotal, count } = useCart();
+  const t = useT();
   const navigate = useNavigate();
 
   // Guarded savings — only from real line mrp (never fabricated).
@@ -52,11 +54,11 @@ export default function CartDrawer({ open, onClose }) {
       >
         {/* Header */}
         <div className="flex shrink-0 items-center gap-3 border-b border-stone-200 px-4 py-3.5 sm:px-5">
-          <button onClick={onClose} aria-label="Close cart" className="flex size-9 items-center justify-center rounded-full text-stone-500 transition-colors hover:bg-stone-100">
+          <button onClick={onClose} aria-label={t("cartDrawer.close")} className="flex size-9 items-center justify-center rounded-full text-stone-500 transition-colors hover:bg-stone-100">
             <span className="material-symbols-outlined text-2xl">close</span>
           </button>
           <h2 className="font-heading text-lg font-extrabold tracking-tight text-stone-900">
-            Cart <span className="ml-1 text-sm font-semibold text-stone-400">{count} {count === 1 ? "item" : "items"}</span>
+            {t("cartDrawer.title")} <span className="ml-1 text-sm font-semibold text-stone-400">{t(count === 1 ? "cartDrawer.itemCount" : "cartDrawer.itemCountPlural", { count })}</span>
           </h2>
         </div>
 
@@ -66,10 +68,10 @@ export default function CartDrawer({ open, onClose }) {
             <span className="flex size-16 items-center justify-center rounded-full bg-stone-50 text-stone-300">
               <span className="material-symbols-outlined text-4xl font-light">shopping_cart</span>
             </span>
-            <p className="mt-4 font-heading text-base font-bold text-stone-900">Your cart is empty</p>
-            <p className="mt-1 text-sm text-stone-500">Add products to see them here.</p>
+            <p className="mt-4 font-heading text-base font-bold text-stone-900">{t("cartDrawer.empty")}</p>
+            <p className="mt-1 text-sm text-stone-500">{t("cartDrawer.emptySub")}</p>
             <button onClick={() => go("/customer-shop/products")} className="mt-5 inline-flex items-center gap-2 rounded-xl bg-[#EA2831] px-6 py-3 text-sm font-bold text-white transition-colors hover:bg-[#c91e26]">
-              <span className="material-symbols-outlined text-lg">storefront</span> Browse products
+              <span className="material-symbols-outlined text-lg">storefront</span> {t("cartDrawer.browse")}
             </button>
           </div>
         ) : (
@@ -92,7 +94,7 @@ export default function CartDrawer({ open, onClose }) {
                         <button onClick={() => go(href)} className="text-left font-heading text-sm font-bold leading-snug text-stone-900 line-clamp-2 hover:text-[#EA2831]">
                           {it.name}
                         </button>
-                        <button onClick={() => removeItem(it.lineId || it.listingId)} aria-label="Remove" className="flex size-7 shrink-0 items-center justify-center rounded-md text-stone-300 transition-colors hover:bg-red-50 hover:text-[#EA2831]">
+                        <button onClick={() => removeItem(it.lineId || it.listingId)} aria-label={t("cartDrawer.remove")} className="flex size-7 shrink-0 items-center justify-center rounded-md text-stone-300 transition-colors hover:bg-red-50 hover:text-[#EA2831]">
                           <span className="material-symbols-outlined text-lg">close</span>
                         </button>
                       </div>
@@ -106,16 +108,16 @@ export default function CartDrawer({ open, onClose }) {
                       <div className="mt-1 flex flex-wrap items-baseline gap-x-2">
                         <span className="text-sm font-bold text-stone-900">{rupee(it.price * it.qty)}</span>
                         {off > 0 && <span className="text-[11px] text-stone-400 line-through">{rupee(it.mrp * it.qty)}</span>}
-                        {off > 0 && <span className="text-[11px] font-bold text-emerald-600">{off}% off</span>}
+                        {off > 0 && <span className="text-[11px] font-bold text-emerald-600">{t("common.percentOff", { percent: off })}</span>}
                       </div>
 
                       <div className="mt-auto pt-2">
                         <div className="inline-flex items-center overflow-hidden rounded-lg border border-stone-200 bg-white">
-                          <button onClick={() => setQty(it.lineId || it.listingId, it.qty - 1)} aria-label="Decrease" className="flex size-7 items-center justify-center text-stone-600 transition-colors hover:bg-stone-100 hover:text-[#EA2831]">
+                          <button onClick={() => setQty(it.lineId || it.listingId, it.qty - 1)} aria-label={t("cartDrawer.decrease")} className="flex size-7 items-center justify-center text-stone-600 transition-colors hover:bg-stone-100 hover:text-[#EA2831]">
                             <span className="material-symbols-outlined text-base">remove</span>
                           </button>
                           <span className="w-8 text-center text-xs font-bold text-stone-900">{it.qty}</span>
-                          <button onClick={() => setQty(it.lineId || it.listingId, it.qty + 1)} disabled={atMax} aria-label="Increase" className="flex size-7 items-center justify-center text-stone-600 transition-colors hover:bg-stone-100 hover:text-[#EA2831] disabled:text-stone-300">
+                          <button onClick={() => setQty(it.lineId || it.listingId, it.qty + 1)} disabled={atMax} aria-label={t("cartDrawer.increase")} className="flex size-7 items-center justify-center text-stone-600 transition-colors hover:bg-stone-100 hover:text-[#EA2831] disabled:text-stone-300">
                             <span className="material-symbols-outlined text-base">add</span>
                           </button>
                         </div>
@@ -131,24 +133,24 @@ export default function CartDrawer({ open, onClose }) {
               {savings > 0 && (
                 <p className="mb-3 flex items-center gap-1.5 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">
                   <span className="material-symbols-outlined text-base">check_circle</span>
-                  You saved {rupee(savings)} on this order
+                  {t("common.youSavedOnOrder", { amount: rupee(savings) })}
                 </p>
               )}
               <div className="mb-3 flex items-baseline justify-between">
-                <span className="font-heading text-sm font-bold text-stone-900">You pay</span>
+                <span className="font-heading text-sm font-bold text-stone-900">{t("cartDrawer.youPay")}</span>
                 <span className="font-heading text-xl font-extrabold text-stone-900">{rupee(subtotal)}</span>
               </div>
               <button
                 onClick={() => go("/customer-shop/checkout")}
                 className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#EA2831] py-3.5 text-sm font-bold text-white shadow-lg shadow-[#EA2831]/20 transition-all hover:bg-[#c91e26] active:scale-[0.99]"
               >
-                <span className="material-symbols-outlined text-lg">lock</span> Proceed to checkout
+                <span className="material-symbols-outlined text-lg">lock</span> {t("cartDrawer.checkout")}
               </button>
               <button
                 onClick={() => go("/customer-shop/cart")}
                 className="mt-2.5 flex w-full items-center justify-center gap-2 rounded-xl border border-stone-200 py-3 text-sm font-bold text-stone-700 transition-colors hover:border-[#EA2831] hover:text-[#EA2831]"
               >
-                View cart
+                {t("cartDrawer.viewCart")}
                 <span className="material-symbols-outlined text-lg">arrow_forward</span>
               </button>
             </div>
