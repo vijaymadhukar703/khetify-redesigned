@@ -94,7 +94,24 @@ const corsAllow = env.corsOrigins;
 app.use(cors({
   origin: corsAllow.includes("*") ? true : corsAllow,
 }));
-app.use(express.json({ limit: "2mb" }));
+/* 🔔 RAW BODY FOR THE RAZORPAY WEBHOOK — the only reason this line is not a
+   plain express.json({ limit }).
+
+   Razorpay signs the EXACT BYTES it sent. Once express.json() has parsed the
+   body those bytes are gone: JSON.stringify(req.body) re-orders keys and drops
+   whitespace, so the HMAC would never match and every webhook would be
+   rejected as a forgery.
+
+   The verify callback runs before parsing and hands us the original buffer. It
+   is stored for the ONE webhook path only — keeping it for every request would
+   double the memory of every upload on the server for no reason. */
+const RAZORPAY_WEBHOOK_PATH = "/api/shop/payments/webhook";
+app.use(express.json({
+  limit: "2mb",
+  verify: (req, res, buf) => {
+    if (req.originalUrl === RAZORPAY_WEBHOOK_PATH) req.rawBody = buf;
+  },
+}));
 app.use(requestId);
 app.use(pinoHttp({ logger, customProps: (req) => ({ reqId: req.id }), autoLogging: { ignore: (req) => req.url === "/healthz" } }));
 

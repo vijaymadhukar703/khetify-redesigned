@@ -4,6 +4,7 @@ import { getOrderHistory, getWarehouses, formatINR } from '../../lib/imsApi';
 import { StatCard, inputCls } from './ims/ImsUi';
 import { movementKind } from '../../lib/movementLabel';
 import { usePermission } from '../../context/PermissionContext';
+import { ChevronDown } from 'lucide-react';
 
 // ORDER HISTORY — a dedicated, searchable history across seller orders,
 // warehouse transfers and shipments. Filters by date, seller, warehouse,
@@ -91,6 +92,68 @@ const STATUS_STYLE = (s) => {
 const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
 
 const PAGE_SIZE = 10; // Company Transfer History pagination
+
+
+
+
+// Custom dropdown replacing native <select> for Status / Warehouse filters —
+// same inputCls sizing/border, but the open menu is theme-styled instead of
+// the browser's default list.
+const HistoryFilterSelect = ({ value, options, onChange, placeholder }) => {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const currentLabel = options.find((o) => o.value === value)?.label || placeholder;
+
+  return (
+    <div className="relative min-w-0" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className={`${inputCls} flex items-center justify-between text-left pr-9 relative ${
+          open ? 'ring-2 ring-[#EA2831]/30 border-[#EA2831]' : ''
+        } ${value ? 'text-stone-700' : 'text-stone-500'}`}
+      >
+        <span className="truncate">{currentLabel}</span>
+      </button>
+      <ChevronDown className={`size-4 absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 pointer-events-none transition-transform ${open ? 'rotate-180' : ''}`} />
+
+      {open && (
+        <ul
+          role="listbox"
+          className="absolute z-20 mt-1.5 w-full min-w-[160px] rounded-xl border border-stone-200 bg-white py-1.5 shadow-lg shadow-stone-900/10 max-h-64 overflow-y-auto"
+        >
+          {options.map((opt) => {
+            const selected = opt.value === value;
+            return (
+              <li key={opt.value} role="option" aria-selected={selected}>
+                <button
+                  type="button"
+                  onClick={() => { onChange(opt.value); setOpen(false); }}
+                  className={`flex w-full items-center px-3.5 py-2 text-left text-sm font-medium capitalize transition-colors ${
+                    selected ? 'text-[#EA2831] bg-[#EA2831]/5 font-bold' : 'text-stone-600 hover:bg-stone-50'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+};
+
+
 
 // Company Transfer History applies its filters as they change — no Apply step.
 // Typing is the only one that needs holding back, so a search term costs one
@@ -312,25 +375,29 @@ const OrderHistory = () => {
             <option value="shipment">Shipments</option>
           </select>
         )}
-        <select className={inputCls} value={filters.status} onChange={set('status')}>
-          <option value="">All statuses</option>
-          {/* Company: the two summary buckets, explicitly labelled. Every other
-              role keeps the original raw order statuses, unchanged. */}
-          {isMainCompany
-            ? MAIN_COMPANY_STATUS_FILTERS.map(([value, label]) => (
-                <option key={value} value={value}>{label}</option>
-              ))
-            : ORDER_STATUSES.map((s) => (
-                <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>
-              ))}
-        </select>
-        <select className={inputCls} value={filters.warehouseId} onChange={set('warehouseId')}>
-          <option value="">All warehouses</option>
-          {warehouses.map((w) => <option key={w._id} value={w._id}>{w.name}</option>)}
-        </select>
+        <HistoryFilterSelect
+  value={filters.status}
+  placeholder="All statuses"
+  onChange={(v) => { setFilters((f) => ({ ...f, status: v })); setPage(1); }}
+  options={[
+    { value: '', label: 'All statuses' },
+    ...(isMainCompany
+      ? MAIN_COMPANY_STATUS_FILTERS.map(([value, label]) => ({ value, label }))
+      : ORDER_STATUSES.map((s) => ({ value: s, label: s.replace(/_/g, ' ') }))),
+  ]}
+/>
+        <HistoryFilterSelect
+  value={filters.warehouseId}
+  placeholder="All warehouses"
+  onChange={(v) => { setFilters((f) => ({ ...f, warehouseId: v })); setPage(1); }}
+  options={[
+    { value: '', label: 'All warehouses' },
+    ...warehouses.map((w) => ({ value: w._id, label: w.name })),
+  ]}
+/>
         <input type="date" className={inputCls} value={filters.from} onChange={set('from')} title="From" />
         <input type="date" className={inputCls} value={filters.to} onChange={set('to')} title="To" />
-        <input className={inputCls} placeholder={isMainCompany ? 'Search ref / item / lot / warehouse…' : 'Search ref / party…'} value={filters.q} onChange={set('q')} />
+        <input className={inputCls} placeholder={isMainCompany ? 'Search ref / item / lot ' : 'Search ref / party…'} value={filters.q} onChange={set('q')} />
       </div>
       {dateError && (
         <p className="text-xs font-semibold text-[#EA2831] mb-2" role="alert">{dateError}</p>

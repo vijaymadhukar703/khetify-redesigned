@@ -310,7 +310,7 @@ const ShipmentsTab = () => {
             <input
               value={q}
               onChange={(e) => { setQ(e.target.value); setPage(1); }}
-              placeholder="Search ref (SH-…), warehouse or vehicle…"
+              placeholder="Search ref (SH-…)"
               className="w-56 sm:w-72 h-9 border border-stone-200 rounded-lg text-sm pl-9 pr-3 bg-white outline-none transition-colors focus:bg-white focus:border-[#EA2831] focus:ring-2 focus:ring-[#EA2831]/10"
             />
           </div>
@@ -1463,7 +1463,7 @@ const RequestsTab = () => {
             <input
               value={q}
               onChange={(e) => { setQ(e.target.value); setPage(1); }}
-              placeholder="Search ref (SH-…), product or warehouse…"
+              placeholder="Search ref (SH-…)"
               className="w-56 sm:w-72 h-9 border border-stone-200 rounded-lg text-sm pl-9 pr-3 bg-white outline-none transition-colors focus:border-[#EA2831] focus:ring-2 focus:ring-[#EA2831]/10"
             />
           </div>

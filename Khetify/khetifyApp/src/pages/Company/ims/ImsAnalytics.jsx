@@ -4,6 +4,7 @@ import Swal from 'sweetalert2';
 import { runReport, downloadReportCsv, getWarehouses } from '../../../lib/imsApi';
 import { PrimaryBtn, GhostBtn } from './ImsUi';
 import { usePermission } from '../../../context/PermissionContext';
+import { ChevronDown } from 'lucide-react';
 
 const apiError = (err) => Swal.fire({ icon: 'error', title: err?.response?.data?.message || err.message || 'Error', toast: true, position: 'top-end', timer: 2600, showConfirmButton: false });
 const listOf = (r) => (Array.isArray(r) ? r : r?.data || []);
@@ -23,6 +24,80 @@ const PAGE_SIZE = 10; // Main Company report pagination — rows per page
 const HIDDEN_COLS = ['sku', 'batch', 'abcClass', 'costPrice'];
 // Header overrides — rename column headers without touching the data keys.
 const COL_LABELS = { lot: 'Lot/Batch', value: 'MRP' };
+
+
+
+
+
+// Custom dropdown replacing the native Warehouse <select> — same border/size
+// as the date inputs beside it, but the open menu is theme-styled.
+const WarehouseFilterSelect = ({ value, warehouses, onChange }) => {
+  const [open, setOpen] = useState(false);
+  const ref = React.useRef(null);
+
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const currentLabel = warehouses.find((w) => w._id === value)?.name || 'All';
+
+  return (
+    <div className="relative min-w-[140px]" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className={`flex items-center justify-between gap-2 w-full border rounded-lg text-sm px-3 py-2 mt-1 bg-white text-left transition-all cursor-pointer ${
+          open ? 'border-[#EA2831] ring-2 ring-[#EA2831]/20' : 'border-stone-200 hover:border-stone-300'
+        }`}
+      >
+        <span className="truncate text-stone-700">{currentLabel}</span>
+        <ChevronDown className={`size-4 shrink-0 text-stone-400 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <ul
+          role="listbox"
+          className="absolute z-20 mt-1.5 w-full min-w-[160px] rounded-xl border border-stone-200 bg-white py-1.5 shadow-lg shadow-stone-900/10 max-h-64 overflow-y-auto"
+        >
+          <li role="option" aria-selected={value === ''}>
+            <button
+              type="button"
+              onClick={() => { onChange(''); setOpen(false); }}
+              className={`flex w-full items-center px-3.5 py-2 text-left text-sm font-medium transition-colors ${
+                value === '' ? 'text-[#EA2831] bg-[#EA2831]/5 font-bold' : 'text-stone-600 hover:bg-stone-50'
+              }`}
+            >
+              All
+            </button>
+          </li>
+          {warehouses.map((w) => {
+            const selected = w._id === value;
+            return (
+              <li key={w._id} role="option" aria-selected={selected}>
+                <button
+                  type="button"
+                  onClick={() => { onChange(w._id); setOpen(false); }}
+                  className={`flex w-full items-center px-3.5 py-2 text-left text-sm font-medium transition-colors ${
+                    selected ? 'text-[#EA2831] bg-[#EA2831]/5 font-bold' : 'text-stone-600 hover:bg-stone-50'
+                  }`}
+                >
+                  {w.name}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+};
+
+
+
 
 /**
  * Reports explorer — pick a report, filter, view a table, export CSV.
@@ -45,12 +120,14 @@ const ImsAnalytics = () => {
     getWarehouses().then((r) => setWarehouses(listOf(r))).catch(() => {});
   }, []);
 
-  const run = () => {
-    setLoading(true);
-    setPage(1); // a fresh result set always starts at page 1
-    const params = Object.fromEntries(Object.entries(filters).filter(([, v]) => v));
-    runReport(REPORT_NAME, params).then((r) => setRows(listOf(r))).catch((e) => { apiError(e); setRows([]); }).finally(() => setLoading(false));
-  };
+  const run = (overrides) => {
+  setLoading(true);
+  setPage(1);
+  const merged = { ...filters, ...(overrides || {}) };
+  const params = Object.fromEntries(Object.entries(merged).filter(([, v]) => v));
+  runReport(REPORT_NAME, params).then((r) => setRows(listOf(r))).catch((e) => { apiError(e); setRows([]); }).finally(() => setLoading(false));
+};
+
   // Auto-load Stock on Hand on mount — no report selection is required.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { run(); }, []);
@@ -105,19 +182,23 @@ const ImsAnalytics = () => {
               (REPORT_NAME) and auto-loads it on mount. */}
           <div>
             <label className="text-[10px] font-bold uppercase text-stone-400">From</label>
-            <input type="date" value={filters.from} onChange={setFilter('from')} className="block border border-stone-200 rounded-lg text-sm px-3 py-2 mt-1" />
+            <input type="date" value={filters.from} onChange={setFilter('from')} className="block border border-stone-200 rounded-lg text-sm px-3 py-2 mt-1 outline-none transition-all focus:border-[#EA2831] focus:ring-2 focus:ring-[#EA2831]/20 hover:border-stone-300" />
           </div>
           <div>
             <label className="text-[10px] font-bold uppercase text-stone-400">To</label>
-            <input type="date" value={filters.to} onChange={setFilter('to')} className="block border border-stone-200 rounded-lg text-sm px-3 py-2 mt-1" />
+            <input type="date" value={filters.to} onChange={setFilter('to')} className="block border border-stone-200 rounded-lg text-sm px-3 py-2 mt-1 outline-none transition-all focus:border-[#EA2831] focus:ring-2 focus:ring-[#EA2831]/20 hover:border-stone-300" />
           </div>
           <div>
-            <label className="text-[10px] font-bold uppercase text-stone-400">Warehouse</label>
-            <select value={filters.warehouseId} onChange={setFilter('warehouseId')} className="block border border-stone-200 rounded-lg text-sm px-3 py-2 bg-white mt-1">
-              <option value="">All</option>
-              {warehouses.map((w) => <option key={w._id} value={w._id}>{w.name}</option>)}
-            </select>
-          </div>
+  <label className="text-[10px] font-bold uppercase text-stone-400">Warehouse</label>
+  <WarehouseFilterSelect
+  value={filters.warehouseId}
+  warehouses={warehouses}
+  onChange={(v) => {
+    setFilters((f) => ({ ...f, warehouseId: v }));
+    run({ warehouseId: v }); // fetch immediately with the new value, don't wait for state to update
+  }}
+/>
+</div>
           <PrimaryBtn onClick={run}>Run</PrimaryBtn>
           <GhostBtn onClick={download} disabled={rows.length === 0}><span className="material-symbols-outlined text-sm">download</span> CSV</GhostBtn>
         </div>

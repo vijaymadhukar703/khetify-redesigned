@@ -4,6 +4,7 @@ const Product = require("../model/Company/productModel");
 const Seller = require("../model/Seller/Seller");
 const Company = require("../model/Company/Company");
 const Inventory = require("../model/Inventory/Inventory");
+const i18n = require("./translationService");
 
 /**
  * Public storefront catalog (customer-shop). Surfaces every seller's PUBLISHED
@@ -180,8 +181,17 @@ const many = (v) => {
 let categoryCache = { at: 0, list: [] };
 const CATEGORY_TTL_MS = 5 * 60 * 1000;
 
-async function listCategories() {
-  if (Date.now() - categoryCache.at < CATEGORY_TTL_MS) return categoryCache.list;
+/**
+ * The catalogue's category list.
+ *
+ * The CACHE stays English — one shared list, no per-language duplication — and
+ * localisation happens on the way out, so adding a language never multiplies
+ * the cache.
+ */
+async function listCategories(lang = "en") {
+  if (Date.now() - categoryCache.at < CATEGORY_TTL_MS) {
+    return i18n.localizeStrings(categoryCache.list, i18n.pickLang(lang));
+  }
 
   const rows = await SellerListing.aggregate([
     { $match: { status: "published" } },
@@ -194,7 +204,7 @@ async function listCategories() {
   ]);
 
   categoryCache = { at: Date.now(), list: rows.map((r) => r._id) };
-  return categoryCache.list;
+  return i18n.localizeStrings(categoryCache.list, i18n.pickLang(lang));
 }
 
 /**
@@ -202,18 +212,31 @@ async function listCategories() {
  * collection per entity instead of scanning the whole join graph.
  * Returns null when there is no search (caller then skips the id filter).
  */
-async function searchToIds(search) {
-  const rx = new RegExp(escapeRx(search), "i");
+/**
+ * Resolve a search to ids, optionally widened with the ENGLISH the query stands
+ * for in another language (see translationService.expandSearch).
+ *
+ * PURELY ADDITIVE. `terms` always starts with the user's own string, so an
+ * English query matches exactly what it matched before; extra terms can only
+ * add rows, never remove them.
+ */
+async function searchToIds(search, extraTerms = []) {
+  const terms = [search, ...extraTerms];
+  const rxs = terms.map((tm) => new RegExp(escapeRx(tm), "i"));
+  // 4 fields × at most 4 terms — bounded by MAX_EXPANSIONS in the service.
+  const productOr = rxs.flatMap((rx) => [
+    { productName: rx }, { brandName: rx }, { category: rx }, { skuNumber: rx },
+  ]);
 
   const [products, sellers] = await Promise.all([
     Product.find({
       productStatus: "active",
-      $or: [{ productName: rx }, { brandName: rx }, { category: rx }, { skuNumber: rx }],
+      $or: productOr,
     })
       .select("_id")
       .limit(SEARCH_PRODUCT_CAP)
       .lean(),
-    Seller.find({ "sellerInfo.businessName": rx })
+    Seller.find({ $or: rxs.map((rx) => ({ "sellerInfo.businessName": rx })) })
       .select("_id")
       .limit(SEARCH_SELLER_CAP)
       .lean(),
@@ -232,16 +255,24 @@ async function listProducts(q = {}) {
 
   const match = { status: "published" };
 
+  // Requested storefront language. Unknown / absent → "en", which short-circuits
+  // every i18n call below, so the English path is unchanged.
+  const lang = i18n.pickLang(q.lang);
+
   // 1. Search → ids, from indexed single-collection queries.
   const search = (q.search || "").trim();
   if (search) {
-    const { productIds, sellerIds } = await searchToIds(search);
+    /* A Hindi query cannot regex-match English product data, so ask the
+       translation cache what English the query stands for and search BOTH.
+       Additive: the user's own string is always term #1. */
+    const extra = await i18n.expandSearch(search, lang);
+    const { productIds, sellerIds } = await searchToIds(search, extra);
     if (!productIds.length && !sellerIds.length) {
       return {
         items: [], total: 0, page, limit, pages: 1, sort: q.sort || "relevance",
         priceRange: { min: 0, max: 0 },
         facets: { categories: [], brands: [], sellers: [], discounts: [] },
-        categories: await listCategories(),
+        categories: await listCategories(lang),
       };
     }
     const or = [];
@@ -500,7 +531,9 @@ async function listProducts(q = {}) {
   const range = res?.priceRange?.[0];
 
   return {
-    items,
+    // Localised in ONE batched cache lookup for the whole page of results.
+    // Anything without a translation keeps its English original.
+    items: await i18n.localize(items, lang),
     total,
     page,
     limit,
@@ -512,14 +545,21 @@ async function listProducts(q = {}) {
 
     // 🔍 The refinement sidebar — describes THESE RESULTS, not the catalogue.
     facets: {
-      categories: res?.categories || [],
+      /* Facet VALUES stay English — they are what the filter posts back and
+         what the URL carries. Only the LABEL the customer reads is localised,
+         in one batched lookup rather than a query per row. */
+      categories: await (async () => {
+        const rows = res?.categories || [];
+        const labels = await i18n.localizeStrings(rows.map((c) => c.label ?? c.value), lang);
+        return rows.map((c, i) => ({ ...c, label: labels[i] }));
+      })(),
       brands: res?.brands || [],
       sellers: sellerFacet,
       discounts: discountFacetOut,
     },
 
     // Full catalogue category list — for the BROWSE page's nav, not for search.
-    categories: await listCategories(),
+    categories: await listCategories(lang),
   };
 }
 
@@ -531,15 +571,21 @@ async function listProducts(q = {}) {
  * business joining sellers, companies or running a stock aggregation. Two small
  * indexed queries, no aggregation, ~8 rows.
  */
-async function suggest(term, limit = 8) {
+async function suggest(term, limit = 8, lang = "en") {
   const q = String(term || "").trim();
   if (q.length < 2) return []; // one letter matches half the shop — not useful
 
   const cap = Math.min(12, Math.max(1, Number(limit) || 8));
-  const rx = new RegExp(escapeRx(q), "i");
+  /* Same additive widening as the full search: the dropdown must not go empty
+     just because the customer typed the query in Hindi. */
+  const extra = await i18n.expandSearch(q, i18n.pickLang(lang));
+  const rxs = [q, ...extra].map((tm) => new RegExp(escapeRx(tm), "i"));
 
   // Match on the product name only — that is what people actually type.
-  const products = await Product.find({ productStatus: "active", productName: rx })
+  const products = await Product.find({
+    productStatus: "active",
+    $or: rxs.flatMap((rx) => [{ productName: rx }, { category: rx }]),
+  })
     .select("productName")
     .limit(50)
     .lean();
@@ -570,7 +616,7 @@ async function suggest(term, limit = 8) {
   return out;
 }
 
-async function getProduct(listingId) {
+async function getProduct(listingId, lang = "en") {
   if (!mongoose.isValidObjectId(listingId)) throw httpErr("Product not found", 404);
   const listing = await SellerListing.findOne({ _id: listingId, status: "published" }).lean();
   if (!listing) throw httpErr("Product not found", 404);
@@ -582,7 +628,8 @@ async function getProduct(listingId) {
   ]);
   if (!product) throw httpErr("Product not found", 404);
   const stock = stocks.get(`${listing.sellerId}:${listing.productId}`);
-  return toShopProduct(listing, product, seller, company, stock);
+  // Localised on the way out; untranslated strings stay English.
+  return i18n.localize(toShopProduct(listing, product, seller, company, stock), i18n.pickLang(lang));
 }
 
 /**

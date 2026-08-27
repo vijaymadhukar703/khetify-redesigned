@@ -10,6 +10,7 @@
 
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import { useT } from "../../context/ShopLanguageContext";
 
 /* ---------- Icons (inline SVG) ---------- */
 export const Icon = {
@@ -126,12 +127,14 @@ export function TextField({ label, icon: IconCmp, labelRight, className = "", in
   );
 }
 
-export function PasswordField({ label = "Password", labelRight, ...inputProps }) {
+export function PasswordField({ label, labelRight, ...inputProps }) {
+  const t = useT();
   const [show, setShow] = useState(false);
   return (
     <label className="flex flex-col gap-2">
       <span className="flex items-center justify-between">
-        <span className="text-sm font-semibold text-[#14201A]">{label}</span>
+        {/* The default used to live in the signature, where t() cannot run. */}
+        <span className="text-sm font-semibold text-[#14201A]">{label ?? t("auth.passwordLabel")}</span>
         {labelRight}
       </span>
       <span className="relative block">
@@ -139,7 +142,7 @@ export function PasswordField({ label = "Password", labelRight, ...inputProps })
         <input type={show ? "text" : "password"} className={`${inputBase} pr-12`} {...inputProps} />
         <button
           type="button"
-          aria-label={show ? "Hide password" : "Show password"}
+          aria-label={show ? t("auth.hidePassword") : t("auth.showPassword")}
           onClick={() => setShow((s) => !s)}
           className="absolute right-2 top-1/2 inline-flex h-[38px] w-[38px] -translate-y-1/2 items-center justify-center rounded-[10px] text-[#6B6A62] transition-colors hover:bg-[#F0EFE8]"
         >
@@ -171,12 +174,14 @@ export function PrimaryButton({ children, className = "", ...props }) {
    Hairline rules either side of a small caps label. Sits between the primary
    form and the social button on both Login and Register so the two pages read
    as one flow. Presentational only. */
-export function AuthDivider({ label = "or continue with", className = "" }) {
+export function AuthDivider({ label, className = "" }) {
+  const t = useT();
+  const text = label ?? t("auth.orContinueWith");
   return (
-    <div className={`flex items-center gap-3.5 ${className}`} role="separator" aria-label={label}>
+    <div className={`flex items-center gap-3.5 ${className}`} role="separator" aria-label={text}>
       <span className="h-px flex-1 bg-gradient-to-r from-transparent to-[#E2E0D6]" />
       <span className="whitespace-nowrap text-[11px] font-bold uppercase tracking-[0.14em] text-[#9B9A92]">
-        {label}
+        {text}
       </span>
       <span className="h-px flex-1 bg-gradient-to-l from-transparent to-[#E2E0D6]" />
     </div>
@@ -201,13 +206,11 @@ export function ErrorNote({ children }) {
 const HERO_IMG =
   "https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=1200&q=80";
 
-const TRUST_POINTS = [
-  "Verified sellers — vetted before they can list",
-  "Farm-grade quality, sourced for Indian farms",
-  "Delivered pan-India, with buyer support on every order",
-];
+// Module scope has no t(): KEYS here, resolved inside <AuthShell>.
+const TRUST_POINTS = ["auth.trust1", "auth.trust2", "auth.trust3"];
 
 export function AuthShell({ children }) {
+  const t = useT();
   return (
 <div className="grid min-h-screen w-full bg-[#F5F4EF] lg:grid-cols-2">
         {/* Professional orchestrated entrance — soft fade, cinematic hero zoom,
@@ -223,12 +226,12 @@ export function AuthShell({ children }) {
 
         <div className="relative flex flex-col gap-8">
           <h2 className="max-w-[15ch] font-heading text-4xl font-extrabold leading-[1.12] tracking-tight xl:text-[42px]">
-            Everything your <span className="text-[#EA2831]">farm needs</span> to grow.
+            {t("auth.heroPre")} <span className="text-[#EA2831]">{t("auth.heroAccent")}</span> {t("auth.heroPost")}
           </h2>
           <div className="overflow-hidden rounded-[20px] shadow-[0_20px_50px_-20px_rgba(0,0,0,0.6)]">
             <img
               src={HERO_IMG}
-              alt="Indian farmland"
+              alt={t("auth.heroImgAlt")}
               className="h-[220px] w-full max-w-[480px] object-cover xl:h-[260px]"
             />
           </div>
@@ -238,13 +241,13 @@ export function AuthShell({ children }) {
                 <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#EA2831]/15">
                   <Icon.Check className="h-3.5 w-3.5 text-[#EA2831]" />
                 </span>
-                <span className="text-[15px] text-[#F5F4EF]/85">{point}</span>
+                <span className="text-[15px] text-[#F5F4EF]/85">{t(point)}</span>
               </li>
             ))}
           </ul>
         </div>
 
-        <p className="relative text-[13px] text-[#F5F4EF]/50">© {new Date().getFullYear()} Khetify — India's farming marketplace</p>
+        <p className="relative text-[13px] text-[#F5F4EF]/50">{t("auth.copyright", { year: new Date().getFullYear() })}</p>
       </aside>
 
       {/* Form column */}

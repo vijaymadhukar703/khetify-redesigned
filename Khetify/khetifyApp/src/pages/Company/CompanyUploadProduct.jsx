@@ -6,6 +6,7 @@ import 'animate.css';
 import config from "../../../config/config";
 import { useNavigate } from 'react-router-dom';
 import SelectWithOther from '../../Components/ims/SelectWithOther';
+import { ChevronDown } from 'lucide-react';
 
 /* ================= STATIC OPTION CATALOGUES =================
    Kept at MODULE scope on purpose: these arrays never change, so defining them
@@ -61,6 +62,72 @@ const cartesian = (arrays) => {
   const restCombos = cartesian(rest);
   return first.flatMap(v => restCombos.map(r => [v, ...r]));
 };
+
+
+
+
+// Custom dropdown replacing native <select> across this form — same inputClass
+// sizing/border, themed open menu (red accent) instead of the browser default.
+const ThemedSelect = ({ id, value, options, onChange, placeholder, className = '', compact = false }) => {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  // Accepts either ['a','b'] or [{value,label}]
+  const norm = options.map((o) => (typeof o === 'string' ? { value: o, label: o } : o));
+  const currentLabel = norm.find((o) => o.value === value)?.label || placeholder || 'Select…';
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        id={id}
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className={`${className} flex items-center justify-between gap-2 text-left transition-colors ${
+          open ? 'border-[#EA2831] ring-2 ring-[#EA2831]/20' : ''
+        } ${value ? 'text-stone-800' : 'text-stone-400'}`}
+      >
+        <span className={`truncate ${compact ? '' : ''}`}>{currentLabel}</span>
+        <ChevronDown className={`size-4 shrink-0 text-stone-400 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <ul
+          role="listbox"
+          className="absolute z-30 mt-1.5 w-full min-w-[140px] rounded-xl border border-stone-200 bg-white py-1.5 shadow-lg shadow-stone-900/10 max-h-64 overflow-y-auto"
+        >
+          {norm.map((opt) => {
+            const selected = opt.value === value;
+            return (
+              <li key={opt.value} role="option" aria-selected={selected}>
+                <button
+                  type="button"
+                  onClick={() => { onChange(opt.value); setOpen(false); }}
+                  className={`flex w-full items-center px-3.5 py-2 text-left text-sm font-medium transition-colors ${
+                    selected ? 'text-[#EA2831] bg-[#EA2831]/5 font-bold' : 'text-stone-600 hover:bg-stone-50'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+};
+
+
+
+
 
 // Auto-generate a SKU from product name + variant combination values.
 const autoSku = (productName, combo) => {
@@ -748,15 +815,21 @@ const CompanyUploadProduct = () => {
               </div>
               <div>
                 <label className={labelClass}>Category <span className="text-[#EA2831]">*</span></label>
-                <select id="category" className={inputClass} value={formData.category} onChange={handleInputChange} required>
-                  <option value="">Select Category</option>
-                  <option value="fertilizers">Fertilizers</option>
-                  <option value="pesticides">Pesticides</option>
-                  <option value="seeds">Seeds</option>
-                  <option value="tools">Equipment & Tools</option>
-                  <option value="growth_promoters">Growth Promoters</option>
-                  <option value="other">Other…</option>
-                </select>
+                <ThemedSelect
+  id="category"
+  className={inputClass}
+  value={formData.category}
+  placeholder="Select Category"
+  onChange={(v) => setFormData(prev => ({ ...prev, category: v }))}
+  options={[
+    { value: 'fertilizers', label: 'Fertilizers' },
+    { value: 'pesticides', label: 'Pesticides' },
+    { value: 'seeds', label: 'Seeds' },
+    { value: 'tools', label: 'Equipment & Tools' },
+    { value: 'growth_promoters', label: 'Growth Promoters' },
+    { value: 'other', label: 'Other…' },
+  ]}
+/>
                 {formData.category === 'other' && (
                   <input
                     id="categoryOther"
@@ -868,9 +941,13 @@ const CompanyUploadProduct = () => {
                     <input id="dim_length" type="number" min="0" step="0.01" className={inputClass} value={formData.dim_length} onChange={handleInputChange} placeholder="Length" />
                     <input id="dim_width" type="number" min="0" step="0.01" className={inputClass} value={formData.dim_width} onChange={handleInputChange} placeholder="Width" />
                     <input id="dim_height" type="number" min="0" step="0.01" className={inputClass} value={formData.dim_height} onChange={handleInputChange} placeholder="Height" />
-                    <select id="dimension_unit" className={inputClass} value={formData.dimension_unit} onChange={handleInputChange}>
-                      {DIMENSION_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
-                    </select>
+                    <ThemedSelect
+  id="dimension_unit"
+  className={inputClass}
+  value={formData.dimension_unit}
+  onChange={(v) => setFormData(prev => ({ ...prev, dimension_unit: v }))}
+  options={DIMENSION_UNITS}
+/>
                   </div>
                   
                 </div>
@@ -879,9 +956,14 @@ const CompanyUploadProduct = () => {
                   <label className={labelClass}>Shipping Weight (Gross) <span className="text-[#EA2831]">*</span></label>
                   <div className="flex gap-2">
                     <input id="gross_weight" type="number" min="0" step="0.01" className={inputClass} value={formData.gross_weight} onChange={handleInputChange} placeholder="e.g., 51" />
-                    <select id="weight_unit" className={`${inputClass} max-w-[100px]`} value={formData.weight_unit} onChange={handleInputChange}>
-                      {WEIGHT_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
-                    </select>
+                   <ThemedSelect
+  id="weight_unit"
+  className={`${inputClass} max-w-[100px]`}
+  value={formData.weight_unit}
+  onChange={(v) => setFormData(prev => ({ ...prev, weight_unit: v }))}
+  options={WEIGHT_UNITS}
+  compact
+/>
                   </div>
                   
                 </div>
@@ -1465,15 +1547,14 @@ const CompanyUploadProduct = () => {
               <div><label className={labelClass}>Monthly Production Capacity</label><input id="capacity" className={inputClass} value={formData.capacity} onChange={handleInputChange} placeholder="e.g., 20000 Units" /></div>
               <div>
                 <label className={labelClass}>Bulk Packaging Type</label>
-                <select id="bulk_type" className={inputClass} value={formData.bulk_type} onChange={handleInputChange}>
-                  <option value="">Select Bulk Packaging</option>
-                  <option value="Carton">Carton</option>
-                  <option value="Bag">Bag</option>
-                  <option value="Box">Box</option>
-                  <option value="Sack">Sack</option>
-                  <option value="Drum">Drum</option>
-                  <option value="Other">Other…</option>
-                </select>
+                <ThemedSelect
+  id="bulk_type"
+  className={inputClass}
+  value={formData.bulk_type}
+  placeholder="Select Bulk Packaging"
+  onChange={(v) => setFormData(prev => ({ ...prev, bulk_type: v }))}
+  options={['Carton', 'Bag', 'Box', 'Sack', 'Drum', 'Other']}
+/>
                 {formData.bulk_type === 'Other' && (
                   <input
                     id="bulk_custom_type"

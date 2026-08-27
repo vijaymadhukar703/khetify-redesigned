@@ -109,9 +109,25 @@ const orderSchema = new mongoose.Schema(
     channel: { type: String, enum: ["online", "offline"], default: "online" }, // legacy
     salesChannel: { type: String, enum: ["pos", "website", "shopify", "amazon", "flipkart", "manual", "b2b"], default: "manual" },
     payment: {
-      mode: { type: String }, // cash | upi | card | credit | ...
+      mode: { type: String }, // cash | upi | card | credit | cod | online | ...
       status: { type: String, enum: ["pending", "paid", "partial", "refunded"], default: "pending" },
-      txnRef: { type: String },
+      txnRef: { type: String }, // gateway payment id once one exists
+
+      /* 💳 STOREFRONT ONLINE PAYMENT — all three additive and optional.
+         Every pre-existing order (and every COD order) simply leaves
+         paidAt/paymentId unset and behaves exactly as before.
+
+         `provider` is deliberately generic ("cod" | "mock" | later
+         "razorpay" | "stripe" | "payu"), so integrating a real gateway
+         does not need a schema change here — only
+         services/shopPaymentGateway.js changes.
+
+         `paymentId` points at the ShopPayment attempt that produced this
+         order, which is what makes a payment reconcilable to an order
+         (and, later, refundable) without scanning txnRefs. */
+      provider: { type: String },
+      paidAt: { type: Date },
+      paymentId: { type: mongoose.Schema.Types.ObjectId, ref: "ShopPayment" },
     },
 
     status: {

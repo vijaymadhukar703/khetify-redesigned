@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { getShopCategories } from "../../lib/shopApi";
+import { useT, useShopLanguage } from "../../context/ShopLanguageContext";
 import { catIcon } from "./ShopHome";
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -9,6 +10,11 @@ import { catIcon } from "./ShopHome";
 
 export default function ShopCategories() {
   const navigate = useNavigate();
+  const t = useT();
+  // The API returns catalogue text already localised, so the fetch effects
+  // below depend on `lang` — a language switch must refetch, not just re-render.
+  const { lang } = useShopLanguage();
+
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -26,7 +32,8 @@ export default function ShopCategories() {
     }
   };
 
-  useEffect(() => { load(); }, []);
+  // Refetch on language change — the labels come from the server localised.
+  useEffect(() => { load(); }, [lang]);
 
   const openCategory = (c) =>
     navigate(`/customer-shop/products?category=${encodeURIComponent(String(c).trim())}`);
@@ -49,7 +56,7 @@ export default function ShopCategories() {
       <button
         type="button"
         onClick={() => navigate(-1)}
-        aria-label="Go back"
+        aria-label={t("categories.goBack")}
         className="no-print hidden sm:inline-flex absolute -left-9 shrink-0 items-center justify-center text-stone-900 transition-colors duration-150 hover:text-[#EA2831]"
       >
         <span className="material-symbols-outlined text-[26px] font-bold leading-none">
@@ -59,13 +66,15 @@ export default function ShopCategories() {
 
       {/* Main Title */}
       <h1 className="font-heading text-2xl font-black tracking-tight text-stone-900 sm:text-3xl leading-none">
-        Shop by category
+        {t("categories.title")}
       </h1>
     </div>
 
     {/* Subtitle Text: Ab ye 'Shop' ke 'S' ke 100% exact niche aligned aayega */}
     <p className="mt-1.5 text-xs text-stone-500 sm:text-sm">
-      {loading ? "Loading…" : `${categories.length} categor${categories.length === 1 ? "y" : "ies"} to explore`}
+      {loading
+        ? t("categories.loading")
+        : t(categories.length === 1 ? "categories.count" : "categories.countPlural", { count: categories.length })}
     </p>
 
   </div>
@@ -85,7 +94,7 @@ export default function ShopCategories() {
               onClick={load}
               className="mt-4 rounded-xl bg-[#EA2831] px-5 py-2.5 text-xs font-bold uppercase tracking-wider text-white transition-colors hover:bg-[#c91e26]"
             >
-              Try again
+              {t("categories.tryAgain")}
             </button>
           </div>
         )}
@@ -106,13 +115,13 @@ export default function ShopCategories() {
         {!loading && !error && categories.length === 0 && (
           <div className="rounded-3xl border border-stone-200 bg-white p-14 text-center">
             <span className="material-symbols-outlined text-5xl font-light text-stone-300">category</span>
-            <h3 className="mt-3 font-heading text-lg font-bold text-stone-900">No categories yet</h3>
-            <p className="mt-1 text-sm text-stone-500">Categories appear here as sellers publish products.</p>
+            <h3 className="mt-3 font-heading text-lg font-bold text-stone-900">{t("categories.empty")}</h3>
+            <p className="mt-1 text-sm text-stone-500">{t("categories.emptySub")}</p>
             <Link
               to="/customer-shop/products"
               className="mt-5 inline-flex items-center gap-2 rounded-xl bg-[#EA2831] px-6 py-3 text-sm font-bold text-white transition-colors hover:bg-[#c91e26]"
             >
-              Browse all products <span className="material-symbols-outlined text-sm">arrow_forward</span>
+              {t("categories.browseAll")} <span className="material-symbols-outlined text-sm">arrow_forward</span>
             </Link>
           </div>
         )}
@@ -134,9 +143,11 @@ export default function ShopCategories() {
                   <span className="material-symbols-outlined text-2xl">{catIcon(c)}</span>
                 </span>
                 <div>
+                  {/* `c` is the stored slug ("growth_promoters");  maps it, and an
+                      unmapped one still renders as-is. */}
                   <p className="font-heading text-sm font-bold capitalize leading-tight">{c}</p>
                   <span className={`mt-1 inline-flex items-center gap-1 text-xs font-semibold ${i % 2 === 0 ? "text-white/60" : "text-[#EA2831]"}`}>
-                    Shop now <span className="material-symbols-outlined text-sm transition-transform group-hover:translate-x-0.5">arrow_forward</span>
+                    {t("categories.shopNow")} <span className="material-symbols-outlined text-sm transition-transform group-hover:translate-x-0.5">arrow_forward</span>
                   </span>
                 </div>
               </button>
