@@ -24,7 +24,10 @@ const SellerProfile = () => {
     return r;
   };
 
-  return <ProfileView title="My Profile" model={model} loading={loading} error={error} onSave={onSave} />;
+  // `licences` switches on the five-row Other registration documents section
+  // (TAN, Gumasta, Udyam, Agriculture, Horticulture). The company profile
+  // renders the same component WITHOUT this prop and is unaffected.
+  return <ProfileView title="My Profile" model={model} loading={loading} error={error} onSave={onSave} licences />;
 };
 
 export default SellerProfile;

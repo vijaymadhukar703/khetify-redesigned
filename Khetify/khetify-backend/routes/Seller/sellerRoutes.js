@@ -70,6 +70,13 @@ router.patch(
     { name: "gstCertificate", maxCount: 1 },
     { name: "panFile", maxCount: 1 },
     { name: "otherDocs", maxCount: 10 },
+    // Other registration licences — one certificate each. multer.fields()
+    // refuses a field name it has not been given, so each has to be listed.
+    { name: "tanCertificate", maxCount: 1 },
+    { name: "gumastaCertificate", maxCount: 1 },
+    { name: "udyamCertificate", maxCount: 1 },
+    { name: "agricultureCertificate", maxCount: 1 },
+    { name: "horticultureCertificate", maxCount: 1 },
   ]),
   updateSellerProfile,
 ); // edit identity/compliance + replace KYC docs (multipart → S3 keys)

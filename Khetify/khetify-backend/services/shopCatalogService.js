@@ -34,7 +34,51 @@ function listingPrice(listing, product) {
   return product?.mrp ?? product?.price ?? 0;
 }
 
-/** Sum a seller's live availableStock for a set of (sellerId, productId) pairs.
+/* ── EXPIRED STOCK IS NOT SELLABLE ────────────────────────────────────────
+   A lot whose expiry has passed is still ON THE SHELF — it just cannot be
+   sold. Counting it made the storefront advertise stock a customer must never
+   be able to order: 200 good + 600 expired read as "800 available", and
+   checkout let all 800 through. For agricultural inputs that is not a
+   rounding error.
+
+   THE RULE: a row counts when it has NO expiry date, or its expiry is today
+   or later. A null expiry is VALID, deliberately — batch/expiry tracking is a
+   premium feature, so most company products carry no expiry at all, and
+   treating null as expired would zero the entire catalogue.
+
+   asOf is MIDNIGHT TODAY, so a lot expiring today stays sellable for the
+   whole day rather than vanishing at whatever instant the request runs.
+
+   Applied as a CONDITIONAL SUM rather than a $match filter, on purpose: both
+   call sites fall back to the product's own availableStock when a product has
+   NO inventory rows at all (that is how a company product with no seller
+   stock keeps showing). Filtering the rows out would make an ALL-EXPIRED
+   product look like a product with no rows and hit that fallback — reading as
+   in stock again, which is the very bug being fixed. Summing zero for expired
+   rows keeps the group present and correctly reports 0. */
+const startOfToday = () => {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d;
+};
+
+const sellableStockSum = (asOf) => ({
+  $sum: {
+    $cond: [
+      {
+        $or: [
+          { $eq: [{ $ifNull: ["$expiryDate", null] }, null] },
+          { $gte: ["$expiryDate", asOf] },
+        ],
+      },
+      "$availableStock",
+      0,
+    ],
+  },
+});
+
+/** Sum a seller's live SELLABLE availableStock for a set of (sellerId,
+ * productId) pairs — expired lots excluded, see sellableStockSum above.
  * Returns a Map keyed by `${sellerId}:${productId}` → number. */
 async function stockMap(pairs) {
   if (!pairs.length) return new Map();
@@ -42,11 +86,51 @@ async function stockMap(pairs) {
   const sellerIds = [...new Set(pairs.map((p) => String(p.sellerId)))].map((id) => new mongoose.Types.ObjectId(id));
   const rows = await Inventory.aggregate([
     { $match: { ownerType: "seller", ownerId: { $in: sellerIds }, productId: { $in: productIds } } },
-    { $group: { _id: { ownerId: "$ownerId", productId: "$productId" }, avail: { $sum: "$availableStock" } } },
+    { $group: { _id: { ownerId: "$ownerId", productId: "$productId" }, avail: sellableStockSum(startOfToday()) } },
   ]);
   const map = new Map();
   for (const r of rows) map.set(`${r._id.ownerId}:${r._id.productId}`, r.avail);
   return map;
+}
+
+/**
+ * Sellable stock PER VARIANT for one (seller, product) — the product detail
+ * page only, so picking Yellow shows Yellow's stock instead of the whole
+ * product's.
+ *
+ * A SEPARATE function rather than a change to stockMap(): that one feeds the
+ * catalogue grid, the search results and checkout, all of which want the
+ * product TOTAL. Grouping it by variant there would change every one of them.
+ *
+ * SELLER-OWN PRODUCTS ONLY, by construction. `variantSku` is written solely by
+ * the seller's Add Stock flow; a company product's Inventory rows have no such
+ * field, so `$ne: null` (which also excludes a missing field) matches nothing
+ * for them and this returns NULL — the signal the client uses to keep showing
+ * the product total exactly as before. Returning {} instead would read as
+ * "every variant has zero" and mark the whole company catalogue out of stock.
+ *
+ * Same expiry rule as everywhere else: a lot with no expiry, or one expiring
+ * today or later, counts.
+ */
+async function variantStockMap(sellerId, productId) {
+  const rows = await Inventory.aggregate([
+    {
+      $match: {
+        ownerType: "seller",
+        ownerId: new mongoose.Types.ObjectId(String(sellerId)),
+        productId: new mongoose.Types.ObjectId(String(productId)),
+        // Rows with no variant stay OUT of this map on purpose — they are
+        // already counted in the product total, which is what the page falls
+        // back to.
+        variantSku: { $ne: null },
+      },
+    },
+    { $group: { _id: "$variantSku", avail: sellableStockSum(startOfToday()) } },
+  ]);
+  if (!rows.length) return null;
+  const out = {};
+  for (const r of rows) out[String(r._id)] = r.avail;
+  return out;
 }
 
 /**
@@ -76,6 +160,11 @@ function toShopVariants(product) {
         ? Object.fromEntries(v.attributes)
         : { ...(v.attributes || {}) },
       sku: v.sku || null,
+      // ALL of this variant's photos, for the detail page's gallery. Empty for
+      // a company product and for any variant saved before multi-image was
+      // added — the page then falls back to the single `image` below, so
+      // nothing that worked before changes.
+      images: Array.isArray(v.images) ? v.images.filter(Boolean) : [],
       // The variant's own price as entered on upload. Null when it was left
       // blank, and the page then falls back to the product price.
       mrp: v.mrp ?? null,
@@ -85,13 +174,17 @@ function toShopVariants(product) {
 }
 
 /** Shape one listing+product+seller into the card/detail payload sent to the UI. */
-function toShopProduct(listing, product, seller, company, availableStock) {
+// `variantStock` is null for every caller but the detail page — see
+// variantStockMap. The catalogue grid passes nothing and is unaffected.
+function toShopProduct(listing, product, seller, company, availableStock, variantStock = null) {
   const price = listingPrice(listing, product);
   const stock = Number.isFinite(availableStock) ? availableStock : (product.availableStock ?? 0);
   return {
     listingId: String(listing._id),
     sellerId: String(listing.sellerId),
-    companyId: String(listing.companyId),
+    // NULL-SAFE: a seller-own listing has no company, and String(null) would
+    // ship the literal text "null" to the storefront as a company id.
+    companyId: listing.companyId ? String(listing.companyId) : null,
     productId: String(product._id),
     name: product.productName,
     brand: product.brandName,
@@ -116,6 +209,10 @@ function toShopProduct(listing, product, seller, company, availableStock) {
     // a changed field, only two new ones.
     variantType: product.variantType || "single",
     variants: toShopVariants(product),
+    // { "ABC-YELLO": 200, "ABC-RED": 50 } — per-variant sellable stock, or
+    // NULL when this product's stock is not tracked per variant. Null means
+    // "use availableStock", NOT "zero".
+    variantStock,
     seller: seller
       ? {
           id: String(seller._id),
@@ -331,6 +428,9 @@ async function listProducts(q = {}) {
 
   // 3. Live seller stock. This runs AFTER the search/category filters, so it
   //    only touches the survivors — not the whole catalogue like before.
+  //    ONE clock reading for the whole response, so two rows in one page can
+  //    never be judged expired against different "todays".
+  const asOf = startOfToday();
   pipeline.push(
     {
       $lookup: {
@@ -348,7 +448,7 @@ async function listProducts(q = {}) {
               },
             },
           },
-          { $group: { _id: null, avail: { $sum: "$availableStock" } } },
+          { $group: { _id: null, avail: sellableStockSum(asOf) } },
         ],
         as: "_inv",
       },
@@ -620,16 +720,18 @@ async function getProduct(listingId, lang = "en") {
   if (!mongoose.isValidObjectId(listingId)) throw httpErr("Product not found", 404);
   const listing = await SellerListing.findOne({ _id: listingId, status: "published" }).lean();
   if (!listing) throw httpErr("Product not found", 404);
-  const [product, seller, company, stocks] = await Promise.all([
+  const [product, seller, company, stocks, variantStock] = await Promise.all([
     Product.findOne({ _id: listing.productId, productStatus: "active" }).lean(),
     Seller.findById(listing.sellerId).select("sellerInfo contact").lean(),
     Company.findById(listing.companyId).select("companyInfo.companyName").lean(),
     stockMap([{ sellerId: listing.sellerId, productId: listing.productId }]),
+    // Per-variant breakdown. Null unless this seller's lots carry a variant.
+    variantStockMap(listing.sellerId, listing.productId),
   ]);
   if (!product) throw httpErr("Product not found", 404);
   const stock = stocks.get(`${listing.sellerId}:${listing.productId}`);
   // Localised on the way out; untranslated strings stay English.
-  return i18n.localize(toShopProduct(listing, product, seller, company, stock), i18n.pickLang(lang));
+  return i18n.localize(toShopProduct(listing, product, seller, company, stock, variantStock), i18n.pickLang(lang));
 }
 
 /**
@@ -655,7 +757,8 @@ async function resolveForCheckout(listingIds = []) {
     map.set(String(l._id), {
       listingId: String(l._id),
       sellerId: String(l.sellerId),
-      companyId: String(l.companyId),
+      // Null-safe for a seller-own listing — see toShopProduct.
+      companyId: l.companyId ? String(l.companyId) : null,
       productId: String(l.productId),
       name: product.productName,
       price: listingPrice(l, product),

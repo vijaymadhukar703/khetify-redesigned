@@ -2,12 +2,16 @@ const express = require("express");
 const router = express.Router();
 
 const auth = require("../../middlewares/authMiddlewares");
-const requireApprovedSeller = require("../../middlewares/requireApprovedSeller");
 const authorize = require("../../middlewares/authorize");
 const ctrl = require("../../controller/Seller/sellerOrderController");
 
-// Seller outbound sales. Approved sellers only; scoped to the seller.
-router.use(auth, requireApprovedSeller);
+// Seller outbound sales. Scoped to the seller in the controller.
+//
+// NO APPROVAL GATE: a seller selling their OWN products (My Products, which is
+// itself ungated) has nothing to be approved FOR — waiting on a supplying
+// company would block the one flow that does not involve one. The RBAC
+// capabilities below are unchanged.
+router.use(auth);
 router.post("/", authorize("order:create"), ctrl.createOrder);
 router.get("/", ctrl.getOrders);
 router.get("/:id", ctrl.getOrder);

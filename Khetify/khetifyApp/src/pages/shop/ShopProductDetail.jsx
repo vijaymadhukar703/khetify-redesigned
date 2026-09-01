@@ -96,6 +96,9 @@ export default function ShopProductDetail() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [qty, setQty] = useState(1);
+  // Which of the selected variant's photos is showing.
+  const [variantSlide, setVariantSlide] = useState(0);
+  const swipeRef = useRef(null);
   const [activeImg, setActiveImg] = useState(0);
   // SELECTED VARIANT id, or null for "no variant chosen" — the page then looks
   // exactly as it does today. Never pre-selected, so the main product image and
@@ -188,7 +191,63 @@ export default function ShopProductDetail() {
   // (a size or a weight, say) become labelled chips. Same data, two affordances.
   const variantThumbs = variants.filter((v) => v.image);
   const variantChips = variants.filter((v) => !v.image);
-  const selectedVariantImg = selectedVariant?.image ? getProductImage(selectedVariant.image) : null;
+  /* Picking a different variant resets the quantity to 1 AND rewinds its photo
+     gallery to the first image. Each variant has its own stock now, so a qty of
+     40 carried over from a well-stocked colour would sit above the next one's
+     maximum. Done in the click handler rather than an effect — it is a user
+     action, not a synchronisation. */
+  const chooseVariant = (id) => { setVariantId(id); setQty(1); setVariantSlide(0); };
+
+  const stepVariantSlide = (delta) =>
+    setVariantSlide((i) => {
+      const n = variantGallery.length;
+      if (n <= 1) return 0;
+      // Wraps, so the arrows never dead-end.
+      return (i + delta + n) % n;
+    });
+
+  /* Swipe, for touch. A horizontal drag past the threshold moves one photo;
+     anything shorter, or mostly vertical, is left alone so the page can still
+     be scrolled with a finger on the image. */
+  const onGalleryTouchStart = (e) => {
+    const t = e.touches[0];
+    swipeRef.current = { x: t.clientX, y: t.clientY };
+  };
+  const onGalleryTouchEnd = (e) => {
+    const start = swipeRef.current;
+    if (!start || variantGallery.length <= 1) return;
+    swipeRef.current = null;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy)) return;
+    stepVariantSlide(dx < 0 ? 1 : -1);
+  };
+  /* THE SELECTED VARIANT'S PHOTOS.
+
+     Three cases, in order, and the last two are what keep every existing
+     product working:
+       `images` has entries  → gallery, with arrows and thumbnails
+       only the single `image` → that one photo, no arrows, no thumbnails
+       no variant selected     → the product's own photos, untouched
+
+     A COMPANY product only ever has `image`, so it lands in the middle case
+     and looks exactly as it did before multi-image existed. Same for any
+     seller variant saved back when one photo was the limit. */
+  const variantGallery = selectedVariant
+    ? (selectedVariant.images?.length
+        ? selectedVariant.images
+        : (selectedVariant.image ? [selectedVariant.image] : []))
+      .filter(Boolean)
+      .map(getProductImage)
+    : [];
+  const hasVariantGallery = variantGallery.length > 0;
+  // Which one of them is on screen. Clamped, because switching from a variant
+  // with 3 photos to one with 2 would otherwise leave the index out of range.
+  const variantImg = hasVariantGallery
+    ? variantGallery[Math.min(variantSlide, variantGallery.length - 1)]
+    : null;
+  const selectedVariantImg = variantImg;
   // Both halves translated: { Color: "Red" } → { "रंग": "लाल" }.
   const attrEntries = Object.entries(selectedVariant?.attributes || {}).filter(([, val]) => val);
 
@@ -201,9 +260,30 @@ export default function ShopProductDetail() {
   const off = !selectedVariant && product.mrp && product.mrp > product.price
     ? Math.round(((product.mrp - product.price) / product.mrp) * 100) : 0;
   const save = off > 0 ? Number(product.mrp) - Number(product.price) : 0;
-  const inStock = product.inStock;
-  const maxQty = inStock ? product.availableStock : 0;
-  const lowStock = inStock && product.availableStock > 0 && product.availableStock <= 5;
+  /* THE STOCK THIS PAGE SHOWS.
+
+     When the API sends `variantStock` AND a variant is selected, the number is
+     that VARIANT's — picking Yellow used to show the whole product's total, so
+     Yellow and Red read identically however different their shelves were.
+
+     `variantStock` is NULL for a product whose stock is not tracked per
+     variant — every company product, and any seller product whose lots predate
+     variant tracking. Null must mean "use the product total", never "zero":
+     reading it as zero would mark the entire company catalogue out of stock.
+     Hence the explicit null check rather than `product.variantStock?.[...] ?? 0`.
+
+     A variant that IS tracked but has no entry genuinely has none left, so 0 is
+     the right answer there. The key is the variant's SKU, falling back to its
+     label — the same value the seller's Add Stock flow writes to the lot. */
+  const variantStock = product.variantStock || null;
+  const trackedByVariant = !!variantStock && !!selectedVariant;
+  const shownStock = trackedByVariant
+    ? (variantStock[selectedVariant.sku] ?? variantStock[selectedVariant.label] ?? 0)
+    : (Number(product.availableStock) || 0);
+
+  const inStock = trackedByVariant ? shownStock > 0 : product.inStock;
+  const maxQty = inStock ? shownStock : 0;
+  const lowStock = inStock && shownStock > 0 && shownStock <= 5;
   // Per VARIANT, not per product: saving Red must not light up the heart on Green.
   const wished = isWishlisted(product.listingId, variantId);
 
@@ -250,7 +330,7 @@ export default function ShopProductDetail() {
     // The variant carries its own SKU (shown above), so the product-level one
     // would read as a contradiction next to it.
     [t("pd.specSku"), selectedVariant ? null : product.sku],
-    [t("pd.specAvailableStock"), inStock && product.availableStock ? `${product.availableStock} ${product.unit || t("pd.units")}` : null],
+    [t("pd.specAvailableStock"), inStock && shownStock ? `${shownStock} ${product.unit || t("pd.units")}` : null],
     [t("pd.specGst"), product.gstPercentage ? `${product.gstPercentage}%` : null],
     [t("pd.specSoldBy"), product.seller?.name],
     [t("pd.specLocation"), product.seller?.city ? `${product.seller.city}${product.seller.state ? ", " + product.seller.state : ""}` : null],
@@ -346,11 +426,41 @@ export default function ShopProductDetail() {
             {/* The MAIN IMAGE is unchanged until a variant with a picture is
                 chosen; picking one swaps this frame, deselecting restores it. */}
             {selectedVariantImg ? (
-              <img src={selectedVariantImg} alt={`${name} — ${selectedVariant.label}`} className="h-full w-full object-contain p-6 sm:p-8" />
+              <img
+                src={selectedVariantImg}
+                alt={`${name} — ${selectedVariant.label}`}
+                className="h-full w-full object-contain p-6 sm:p-8"
+                onTouchStart={onGalleryTouchStart}
+                onTouchEnd={onGalleryTouchEnd}
+              />
             ) : images.length ? (
               <img src={images[activeImg]} alt={name} className="h-full w-full object-contain p-6 sm:p-8" />
             ) : (
               <span className="material-symbols-outlined text-7xl font-light text-stone-300">inventory_2</span>
+            )}
+            {/* PREV / NEXT — only for a variant that actually has several
+                photos. A single-image variant (and every company product) gets
+                no arrows at all, exactly as before. */}
+            {variantGallery.length > 1 && (
+              <>
+                <button
+                  onClick={() => stepVariantSlide(-1)}
+                  aria-label="Previous image"
+                  className="absolute left-2 top-1/2 flex size-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/90 shadow-sm ring-1 ring-stone-200/70 backdrop-blur transition-all hover:scale-110 active:scale-95"
+                >
+                  <span className="material-symbols-outlined text-xl text-stone-600">chevron_left</span>
+                </button>
+                <button
+                  onClick={() => stepVariantSlide(1)}
+                  aria-label="Next image"
+                  className="absolute right-2 top-1/2 flex size-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/90 shadow-sm ring-1 ring-stone-200/70 backdrop-blur transition-all hover:scale-110 active:scale-95"
+                >
+                  <span className="material-symbols-outlined text-xl text-stone-600">chevron_right</span>
+                </button>
+                {/* <span className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-stone-900/70 px-2.5 py-0.5 text-[11px] font-bold text-white">
+                  {Math.min(variantSlide, variantGallery.length - 1) + 1} / {variantGallery.length}
+                </span> */}
+              </>
             )}
             {off > 0 && (
               <span className="absolute left-4 top-4 rounded-full bg-[#EA2831] px-3 py-1 text-xs font-extrabold uppercase tracking-wide text-white shadow-sm">{t("pd.percentOff", { percent: off })}</span>
@@ -363,6 +473,23 @@ export default function ShopProductDetail() {
               <span className={`material-symbols-outlined text-2xl transition-colors ${wished ? "text-[#EA2831]" : "text-stone-400 hover:text-[#EA2831]"}`} style={{ fontVariationSettings: wished ? "'FILL' 1" : "'FILL' 0" }}>favorite</span>
             </button>
           </div>
+          {/* THIS VARIANT's photos — click one to jump straight to it. Rendered
+              only when the variant has more than one, so a single-image variant
+              looks exactly as it did before. */}
+          {variantGallery.length > 1 && (
+            <div className="mt-3 flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              {/* {variantGallery.map((src, i) => (
+                <button
+                  key={`v-${i}`}
+                  onClick={() => setVariantSlide(i)}
+                  className={`size-16 shrink-0 overflow-hidden rounded-xl bg-stone-50 ring-2 transition-all sm:size-[72px] ${i === Math.min(variantSlide, variantGallery.length - 1) ? "ring-[#EA2831]" : "ring-stone-200 hover:ring-stone-300"}`}
+                >
+                  <img src={src} alt="" className="h-full w-full object-contain p-1.5" />
+                </button>
+              ))} */}
+            </div>
+          )}
+
           {images.length > 1 && (
             <div className="mt-3 flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {images.map((src, i) => (
@@ -393,7 +520,7 @@ export default function ShopProductDetail() {
                   return (
                     <button
                       key={v.id}
-                      onClick={() => setVariantId(on ? null : v.id)}
+                      onClick={() => chooseVariant(on ? null : v.id)}
                       title={v.label}
                       aria-pressed={on}
                       className={`group relative size-16 shrink-0 overflow-hidden rounded-xl bg-stone-50 ring-2 transition-all sm:size-[72px] ${on ? "ring-[#EA2831]" : "ring-stone-200 hover:ring-stone-300"}`}
@@ -471,7 +598,7 @@ export default function ShopProductDetail() {
                   return (
                     <button
                       key={v.id}
-                      onClick={() => setVariantId(on ? null : v.id)}
+                      onClick={() => chooseVariant(on ? null : v.id)}
                       aria-pressed={on}
                       className={`rounded-xl px-3.5 py-2 text-sm font-semibold ring-1 transition-all ${on
                         ? "bg-[#EA2831] text-white ring-[#EA2831]"
@@ -503,7 +630,7 @@ export default function ShopProductDetail() {
               <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-700">
                 <span className="material-symbols-outlined text-lg">check_circle</span>
                 {t("common.inStock")}
-                {lowStock && <span className="ml-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-bold text-amber-700">{t("pd.onlyLeft", { count: product.availableStock })}</span>}
+                {lowStock && <span className="ml-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-bold text-amber-700">{t("pd.onlyLeft", { count: shownStock })}</span>}
               </span>
             ) : (
               <span className="inline-flex items-center gap-1.5 font-semibold text-[#EA2831]">

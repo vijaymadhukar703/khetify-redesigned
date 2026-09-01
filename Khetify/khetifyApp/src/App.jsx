@@ -86,6 +86,7 @@ import SellerCompanies from './pages/seller/SellerCompanies';
 import SellerCertifications from './pages/seller/SellerCertifications';
 import SellerWarehouses from './pages/seller/SellerWarehouses';
 import SellerProductCatalog from './pages/seller/SellerProductCatalog';
+import SellerMyProducts from './pages/seller/SellerMyProducts';
 import SellerListings from './pages/seller/SellerListings';
 import SellerSupply from './pages/seller/SellerSupply';
 import SellerInventory from './pages/seller/SellerInventory';
@@ -343,6 +344,7 @@ function App() {
           <Route path="/seller/team" element={<SellerTeam />} />
           <Route path="/seller/warehouses" element={<SellerWarehouses />} />
           <Route path="/seller/products" element={<SellerProductCatalog />} />
+          <Route path="/seller/my-products" element={<SellerMyProducts />} />
           <Route path="/seller/listings" element={<SellerListings />} />
           <Route path="/seller/supply" element={<SellerSupply />} />
           <Route path="/seller/inventory" element={<SellerInventory />} />

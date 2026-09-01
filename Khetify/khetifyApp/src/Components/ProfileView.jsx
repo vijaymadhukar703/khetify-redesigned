@@ -23,6 +23,83 @@ const MAX_BYTES = 10 * 1024 * 1024;
 const ACCEPT = '.pdf,.jpg,.jpeg,.png,.webp';
 const fileOk = (f) => !f || (/(pdf|jpe?g|png|webp)$/i.test(f.name) && f.size <= MAX_BYTES);
 
+/* OTHER REGISTRATION LICENCES — seller portal only.
+
+   Rendered ONLY when the caller passes `licences` (SellerProfile does; the
+   company profile does not), so the company page keeps the free-form
+   "Other registration documents" list it has always had. The field names
+   below must match SELLER_LICENCES in sellerAuthController.js and the multer
+   fields in routes/Seller/sellerRoutes.js. */
+/* LICENCE NUMBER FORMATS.
+
+   TAN and Udyam are issued centrally and have ONE published format, so they
+   are checked. Gumasta / Shop Act, Agriculture and Horticulture are issued
+   per STATE, each in its own scheme — there is no national format, and a
+   regex would reject real licence numbers and leave those sellers unable to
+   record their licence at all. `re: null` on those three is deliberate.
+
+   The server enforces exactly the same two rules (SELLER_LICENCES in
+   sellerAuthController.js); this is the immediate feedback, not the gate. */
+const LICENCE_MAX_LEN = 30;
+
+// Letters + digits only, capped. What TAN and the free-form licences share.
+const cleanUpper = (v, max) => String(v).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, max);
+
+/* UDYAM types itself: the seller enters MP230001234 (or udyam-mp-23-0001234,
+   or anything in between) and the hyphens appear on their own.
+
+   While the value is still a prefix of the literal "UDYAM" it is left alone,
+   so someone typing the prefix out sees U → UD → UDY rather than the field
+   fighting them. Everything after that is split into the state / year /
+   serial groups. Clearing the field must stay possible, so an empty input
+   returns empty rather than rebuilding the prefix. */
+const formatUdyam = (raw) => {
+  const flat = String(raw).toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!flat) return '';
+  if ('UDYAM'.startsWith(flat)) return flat;
+
+  const rest = flat.startsWith('UDYAM') ? flat.slice(5) : flat;
+  const state = rest.slice(0, 2).replace(/[^A-Z]/g, '');
+  const afterState = rest.slice(state.length);
+  const year = afterState.slice(0, 2).replace(/\D/g, '');
+  const serial = afterState.slice(year.length).replace(/\D/g, '').slice(0, 7);
+
+  let out = 'UDYAM';
+  if (state) out += `-${state}`;
+  if (year) out += `-${year}`;
+  if (serial) out += `-${serial}`;
+  return out;
+};
+
+const LICENCE_ROWS = [
+  { key: 'tan',          label: 'TAN',                  doc: 'TAN certificate',          numField: 'tanNumber',          fileField: 'tanCertificate',
+    placeholder: 'MUMA12345B',
+    format: (v) => cleanUpper(v, 10),
+    re: /^[A-Z]{4}[0-9]{5}[A-Z]$/,
+    error: 'TAN must be 10 characters — 4 letters, 5 digits, 1 letter (e.g. MUMA12345B)' },
+
+  { key: 'gumasta',      label: 'Gumasta / Shop Act',   doc: 'Gumasta certificate',      numField: 'gumastaNumber',      fileField: 'gumastaCertificate',
+    format: (v) => String(v).toUpperCase().slice(0, LICENCE_MAX_LEN), re: null },
+
+  { key: 'udyam',        label: 'Udyam',                doc: 'Udyam certificate',        numField: 'udyamNumber',        fileField: 'udyamCertificate',
+    placeholder: 'UDYAM-MP-23-0001234',
+    format: formatUdyam,
+    re: /^UDYAM-[A-Z]{2}-[0-9]{2}-[0-9]{7}$/,
+    error: 'Udyam number must look like UDYAM-MP-23-0001234' },
+
+  { key: 'agriculture',  label: 'Agriculture licence',  doc: 'Agriculture certificate',  numField: 'agricultureNumber',  fileField: 'agricultureCertificate',
+    format: (v) => String(v).toUpperCase().slice(0, LICENCE_MAX_LEN), re: null },
+
+  { key: 'horticulture', label: 'Horticulture licence', doc: 'Horticulture certificate', numField: 'horticultureNumber', fileField: 'horticultureCertificate',
+    format: (v) => String(v).toUpperCase().slice(0, LICENCE_MAX_LEN), re: null },
+];
+
+// A certificate scan is capped tighter than the 10MB the other KYC uploads
+// allow; the server enforces the same 5MB, this just says so before the
+// upload rather than after it.
+const LICENCE_MAX_BYTES = 5 * 1024 * 1024;
+const licenceFileOk = (f) => !f || (/(pdf|jpe?g|png)$/i.test(f.name) && f.size <= LICENCE_MAX_BYTES);
+
 // View / Download links for a stored file (signed S3 url or served /uploads path).
 const DocLinks = ({ url, fileName }) => {
   const href = fileHref(url);
@@ -62,12 +139,15 @@ const IdField = ({ label, value, editing, onChange, type = 'text', error }) => (
 );
 
 // A compliance row (GSTIN / PAN): value + its document, editable inline.
-const ComplianceRow = ({ label, docLabel, value, editing, onChange, error, url, fileName, fileKey, onFile, fileErr, chosenName }) => (
+// `format` (optional) rewrites each keystroke — uppercasing, capping length,
+// inserting Udyam's hyphens. Omitted for GSTIN / PAN, which keep the plain
+// pass-through they have always had.
+const ComplianceRow = ({ label, docLabel, value, editing, onChange, error, url, fileName, fileKey, onFile, fileErr, chosenName, format, placeholder }) => (
   <div className="flex flex-wrap items-start justify-between gap-3 py-3.5">
     <div className="min-w-[220px] flex-1">
       <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400">{label}</p>
       {editing ? (
-        <input className={`${inputCls} mt-1 font-mono uppercase`} value={value} onChange={(e) => onChange(e.target.value)} placeholder={label} />
+        <input className={`${inputCls} mt-1 font-mono uppercase`} value={value} onChange={(e) => onChange(format ? format(e.target.value) : e.target.value)} placeholder={placeholder || label} />
       ) : (value ? <p className="text-sm font-mono font-medium text-stone-800">{value}</p> : <Empty />)}
       {error && <span className="text-[11px] font-medium text-[#EA2831]">{error}</span>}
       <p className="text-[10px] text-stone-400 mt-1">{docLabel}</p>
@@ -87,7 +167,9 @@ const ComplianceRow = ({ label, docLabel, value, editing, onChange, error, url, 
   </div>
 );
 
-const ProfileView = ({ title, model, loading, error, onSave }) => {
+// `licences` (optional) turns on the five-row Other registration documents
+// section. Absent → the section renders exactly as it always did.
+const ProfileView = ({ title, model, loading, error, onSave, licences: showLicences = false }) => {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState(null);     // identity + compliance text fields
   const [files, setFiles] = useState({});     // { gstCertificate, panFile, otherDocs:[] }
@@ -114,12 +196,16 @@ const ProfileView = ({ title, model, loading, error, onSave }) => {
   const id = model?.identity || {};
   const c = model?.compliance || {};
   const documents = model?.documents || [];
+  const lic = model?.licences || {};
   const { pct, missing } = profileCompletion(profileChecks(model || {}));
 
   const startEdit = () => {
     setForm({
       businessName: id.businessName || '', contactPerson: id.contactPerson || '', email: id.email || '',
       phone: id.phone || '', address: id.address || '', gstin: c.gstin || '', pan: c.pan || '',
+      // Seeded from the saved values so an untouched row re-posts what it had
+      // rather than blanking it.
+      ...Object.fromEntries(LICENCE_ROWS.map((r) => [r.numField, lic[r.key]?.number || ''])),
     });
     setFiles({ otherDocs: [] });
     setFileNames({});
@@ -152,6 +238,16 @@ const ProfileView = ({ title, model, loading, error, onSave }) => {
     if (!fileOk(files.gstCertificate)) e.gstCertificate = 'PDF or image up to 10MB';
     if (!fileOk(files.panFile)) e.panFile = 'PDF or image up to 10MB';
     if ((files.otherDocs || []).some((f) => !fileOk(f))) e.otherDocs = 'Each file must be a PDF or image up to 10MB';
+    if (showLicences) {
+      LICENCE_ROWS.forEach((r) => {
+        if (!licenceFileOk(files[r.fileField])) e[r.fileField] = 'PNG, JPG or PDF up to 5MB';
+        // OPTIONAL fields: a blank one is fine and must never block the save.
+        // Only a value that is actually present is checked, and only for the
+        // two formats that have a national standard.
+        const v = (form[r.numField] || '').trim();
+        if (v && r.re && !r.re.test(v)) e[r.numField] = r.error;
+      });
+    }
     setErrs(e);
     return Object.values(e).every((x) => !x);
   };
@@ -163,6 +259,12 @@ const ProfileView = ({ title, model, loading, error, onSave }) => {
     if (files.gstCertificate) fd.append('gstCertificate', files.gstCertificate);
     if (files.panFile) fd.append('panFile', files.panFile);
     (files.otherDocs || []).forEach((f) => fd.append('otherDocs', f));
+    if (showLicences) {
+      LICENCE_ROWS.forEach((r) => {
+        fd.append(r.numField, form[r.numField] ?? '');
+        if (files[r.fileField]) fd.append(r.fileField, files[r.fileField]);
+      });
+    }
     setSaving(true);
     setBanner(null);
     try {
@@ -246,8 +348,41 @@ const ProfileView = ({ title, model, loading, error, onSave }) => {
           </div>
         </Card>
 
+        {/* OTHER REGISTRATION LICENCES — seller only.
+
+            Five FIXED rows rather than a free-form pile, so a seller can see at
+            a glance which registrations are still missing. Built from the same
+            <ComplianceRow> the GSTIN / PAN card uses, so the number input, the
+            Upload / Replace button and the spacing are identical by
+            construction and cannot drift from it. */}
+        {showLicences && (
+          <Card title="Other registration documents" icon="assignment">
+            <div className="divide-y divide-stone-100">
+              {LICENCE_ROWS.map((r) => (
+                <ComplianceRow
+                  key={r.key}
+                  label={r.label}
+                  docLabel={`${r.doc} · PNG, JPG or PDF`}
+                  value={editing ? (form[r.numField] ?? '') : (lic[r.key]?.number || '')}
+                  editing={editing}
+                  onChange={set(r.numField)}
+                  format={r.format}
+                  placeholder={r.placeholder}
+                  error={errs[r.numField]}
+                  url={lic[r.key]?.url}
+                  fileName={lic[r.key]?.fileName}
+                  fileKey={r.fileField}
+                  onFile={pickFile(r.fileField)}
+                  fileErr={errs[r.fileField]}
+                  chosenName={fileNames[r.fileField]}
+                />
+              ))}
+            </div>
+          </Card>
+        )}
+
         {/* Other uploaded documents */}
-        <Card title="Other registration documents" icon="folder">
+        <Card title={showLicences ? 'Additional documents' : 'Other registration documents'} icon="folder">
           {documents.length === 0 ? (
             <p className="text-sm text-stone-400">No additional documents uploaded.</p>
           ) : (
