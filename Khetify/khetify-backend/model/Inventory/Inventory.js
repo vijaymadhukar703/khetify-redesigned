@@ -36,6 +36,21 @@ const inventorySchema = new mongoose.Schema(
     batchNumber: { type: String, default: null },
     lotNumber:   { type: String, default: null },
     mfgBatchNo:  { type: String, default: null }, // manufacturer/supplier batch no. (optional, display-only)
+
+    // WHICH VARIANT of the product this row holds — the variant's SKU (or its
+    // label when it has no SKU), as it appears in Product.variants.
+    //
+    // Needed because a multi-variant product's Red and Yellow are DIFFERENT
+    // physical stock that must never share a row: without this the two upsert
+    // onto the same (product, owner, warehouse, batch) key and silently merge
+    // into one meaningless total.
+    //
+    // ADDITIVE and null for every existing row and for the entire company side,
+    // which does not set it — so nothing that reads Inventory today changes.
+    // Deliberately NOT part of the unique index below (CLAUDE.md invariant #3):
+    // each Add Stock mints its own lot number, so two variants already land on
+    // different batchNumbers and the index keeps holding as-is.
+    variantSku: { type: String, default: null },
     expiryDate: { type: Date, default: null },
     mfgDate: { type: Date, default: null }, // manufacturing date, captured per lot
 

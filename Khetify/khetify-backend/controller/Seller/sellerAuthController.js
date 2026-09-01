@@ -233,6 +233,66 @@ async function sellerWarehouseNames(sellerId, warehouseIds) {
   return rows.map((w) => ({ _id: String(w._id), name: w.name, code: w.code || null }));
 }
 
+/* ── OTHER REGISTRATION LICENCES ──────────────────────────────────────────
+   The five extra registrations a seller may hold. Described ONCE here so the
+   read path, the write path and the multipart field names cannot drift apart
+   — adding a sixth is one row in this list plus one line in the route's
+   multer fields().
+
+     key      where the NUMBER lives, under seller.verification.licences
+     field    the text field the Profile form posts
+     file     the multipart file field (must match routes/Seller/sellerRoutes.js)
+     docType  the SellerDocument row's type — one row per licence, replaced
+              on re-upload (upsertSellerDoc replaces everything but "other") */
+/* WHICH LICENCE NUMBERS CAN BE FORMAT-CHECKED, AND WHICH MUST NOT BE.
+
+   TAN and Udyam are issued centrally and have ONE published format, so a
+   value that does not match is a typo and is worth refusing.
+
+   Gumasta / Shop Act, Agriculture and Horticulture licences are issued by
+   each STATE in its own scheme — there is no national format to check
+   against. A regex here would reject real licence numbers and leave those
+   sellers unable to record their licence at all, which is far worse than
+   accepting an odd-looking one. They get trim + uppercase + a length cap and
+   nothing more. `re: null` says that is deliberate, not an oversight.
+
+   EVERY field is optional: the check runs only on a non-empty value. */
+const LICENCE_MAX_LEN = 30;
+
+const SELLER_LICENCES = [
+  { key: "tan",          field: "tanNumber",          file: "tanCertificate",          docType: "tan",          label: "TAN Certificate",
+    re: /^[A-Z]{4}[0-9]{5}[A-Z]$/,
+    hint: "TAN must be 10 characters — 4 letters, 5 digits, 1 letter (e.g. MUMA12345B)" },
+  { key: "gumasta",      field: "gumastaNumber",      file: "gumastaCertificate",      docType: "gumasta",      label: "Gumasta / Shop Act Certificate", re: null },
+  { key: "udyam",        field: "udyamNumber",        file: "udyamCertificate",        docType: "udyam",        label: "Udyam Certificate",
+    re: /^UDYAM-[A-Z]{2}-[0-9]{2}-[0-9]{7}$/,
+    hint: "Udyam number must look like UDYAM-MP-23-0001234" },
+  { key: "agriculture",  field: "agricultureNumber",  file: "agricultureCertificate",  docType: "agriculture",  label: "Agriculture Licence", re: null },
+  { key: "horticulture", field: "horticultureNumber", file: "horticultureCertificate", docType: "horticulture", label: "Horticulture Licence", re: null },
+];
+
+// A certificate scan has no business being larger than this. The shared
+// uploadDocuments middleware caps every KYC upload at 10MB; this is the
+// tighter limit for these five, applied here so the shared middleware — used
+// by the PC document flow too — keeps its own limit.
+const LICENCE_MAX_BYTES = 5 * 1024 * 1024;
+
+/* docType → the name the documents list shows.
+
+   The list normally renders each row's STORED label, which the profile upload
+   always sets. This is the fallback for a row that has none — one uploaded
+   through the Certifications screen (sellerDocumentController defaults the
+   label to the raw filename), or any older row — so it reads
+   "Gumasta / Shop Act Certificate" rather than "scan_final_v2.png".
+
+   Built FROM SELLER_LICENCES rather than typed out again, so a licence can
+   never be added to that list and forgotten here. */
+const DOC_TYPE_LABELS = {
+  gst: "GST Certificate",
+  pan: "PAN Card",
+  ...Object.fromEntries(SELLER_LICENCES.map((L) => [L.docType, L.label])),
+};
+
 /** Build the seller Profile response — identity + compliance + KYC docs (signed
  * at read-time). Shared by GET and PATCH so both return the same fresh shape. */
 async function sellerProfilePayload(seller) {
@@ -247,7 +307,7 @@ async function sellerProfilePayload(seller) {
   // served via a SIGNED url resolved at read-time from its stored key.
   const docRows = await SellerDocument.find({ sellerId }).sort({ createdAt: -1 });
   const documents = await Promise.all(docRows.map(async (d) => ({
-    _id: String(d._id), docType: d.docType, label: d.label || d.fileName || "Document",
+    _id: String(d._id), docType: d.docType, label: d.label || DOC_TYPE_LABELS[d.docType] || d.fileName || "Document",
     fileName: d.fileName, status: d.status, url: await fileService.signedUrl(d.fileKey),
   })));
   const legacy = (await Promise.all((v.docs || []).map(async (k, i) => ({
@@ -256,6 +316,38 @@ async function sellerProfilePayload(seller) {
   })))).filter((d) => d.url);
 
   const urlByType = (type) => documents.find((d) => d.docType === type)?.url || null;
+  const docByType = (type) => documents.find((d) => d.docType === type) || null;
+
+  // Each licence's NUMBER (from the seller) beside its CERTIFICATE (from the
+  // document rows). Every key is always present, with nulls when nothing has
+  // been filled in, so the UI can render a fixed set of rows and show
+  // "Not provided" rather than having to guess which ones exist.
+  const lic = v.licences || {};
+
+  /* UDYAM HAS TWO HOMES, AND THEY MUST AGREE.
+
+     `verification.udyam` is filled at REGISTRATION; `verification.licences
+     .udyam` is what the Other-registration-documents row writes. Read
+     separately they disagreed — the licence row opened empty even though the
+     seller had already given the number when signing up, and was asked to
+     type it again.
+
+     ONE value, resolved here: the licence row's own value when the seller has
+     edited it, otherwise the registration one. The write path keeps both
+     fields in step, so this fallback only ever matters for sellers who
+     registered before the licence rows existed. */
+  const udyamNumber = lic.udyam || v.udyam || "";
+
+  const licences = Object.fromEntries(SELLER_LICENCES.map((L) => {
+    const d = docByType(L.docType);
+    return [L.key, {
+      number: (L.key === "udyam" ? udyamNumber : lic[L.key]) || "",
+      url: d?.url || null,
+      fileName: d?.fileName || null,
+      status: d?.status || null,
+      documentId: d?._id || null,
+    }];
+  }));
 
   return {
     identity: {
@@ -268,11 +360,17 @@ async function sellerProfilePayload(seller) {
     compliance: {
       gstin: v.gstin || "",
       pan: v.pan || "",
-      udyam: v.udyam || "",
+      // The SAME number the licence row shows — see udyamNumber above.
+      udyam: udyamNumber,
       gstCertificateUrl: urlByType("gst"),
       panFileUrl: urlByType("pan"),
-      udyamCertificateUrl: null,
+      // The certificate uploaded against the Udyam licence row. This was
+      // hard-coded null back when nothing could produce a udyam document; now
+      // that the licence row uploads one, the compliance card can link to it
+      // instead of reporting "Not provided" for a file that exists.
+      udyamCertificateUrl: urlByType("udyam"),
     },
+    licences,
     documents: [...documents, ...legacy],
   };
 }
@@ -281,11 +379,14 @@ async function sellerProfilePayload(seller) {
  * SellerDocument of the given docType. For gst/pan we REPLACE the existing row
  * in place (so the compliance link points at the newest file and the doc list
  * doesn't grow); for "other" we always add a new row. Returns the doc. */
-async function upsertSellerDoc(sellerId, docType, file, label) {
+async function upsertSellerDoc(sellerId, docType, file, label, documentNumber) {
   const ext = (path.extname(file.originalname || "") || ".bin").toLowerCase();
   const key = `sellers/${sellerId}/documents/${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
   const { url } = await fileService.uploadBuffer(file.buffer, key, file.mimetype);
   const fields = { fileKey: key, fileUrl: url, fileName: file.originalname, mimeType: file.mimetype, status: "pending", label: label || file.originalname, uploadedAt: new Date() };
+  // Optional, and only for the licence types — gst/pan/other pass nothing and
+  // the key never appears, so their rows are byte-for-byte what they were.
+  if (documentNumber !== undefined) fields.documentNumber = documentNumber;
   if (docType === "other") return SellerDocument.create({ sellerId, docType, ...fields });
   const existing = await SellerDocument.findOne({ sellerId, docType }).sort({ createdAt: -1 });
   if (existing) { Object.assign(existing, fields); return existing.save(); }
@@ -359,12 +460,46 @@ exports.updateSellerProfile = async (req, res) => {
       seller.verification.pan = v;
     }
 
+    // OTHER REGISTRATION LICENCES — the numbers. Each is saved on its own, so
+    // a seller can fill one licence today and another next month without the
+    // untouched ones being cleared (only a field actually POSTED is written).
+    seller.verification.licences = seller.verification.licences || {};
+    for (const L of SELLER_LICENCES) {
+      if (b[L.field] === undefined) continue;
+      const value = String(b[L.field]).trim().toUpperCase();
+      // Blank is always allowed — these are optional, and clearing one has to
+      // stay possible.
+      if (value && value.length > LICENCE_MAX_LEN) {
+        return res.status(400).json({ success: false, message: `${L.label} number is too long (max ${LICENCE_MAX_LEN} characters)` });
+      }
+      if (value && L.re && !L.re.test(value)) {
+        return res.status(400).json({ success: false, message: L.hint });
+      }
+      seller.verification.licences[L.key] = value;
+      // Udyam is ONE number wearing two hats: the registration field and the
+      // licence row. Writing both keeps the Compliance card and the licence
+      // row from ever showing different values for the same registration.
+      if (L.key === "udyam") seller.verification.udyam = value;
+    }
+
     await seller.save({ validateModifiedOnly: true });
 
     // Document replacements (after the field save so a bad file doesn't block fields)
     const files = req.files || {};
     if (files.gstCertificate?.[0]) await upsertSellerDoc(sellerId, "gst", files.gstCertificate[0], "GST Certificate");
     if (files.panFile?.[0]) await upsertSellerDoc(sellerId, "pan", files.panFile[0], "PAN Card");
+
+    // …and their certificates. upsertSellerDoc REPLACES for every docType except
+    // "other", so re-uploading a licence updates its one row instead of piling
+    // up duplicates.
+    for (const L of SELLER_LICENCES) {
+      const f = files[L.file]?.[0];
+      if (!f) continue;
+      if (f.size > LICENCE_MAX_BYTES) {
+        return res.status(400).json({ success: false, message: `${L.label} must be 5MB or smaller` });
+      }
+      await upsertSellerDoc(sellerId, L.docType, f, L.label, seller.verification.licences?.[L.key] || "");
+    }
     if (files.otherDocs?.length) {
       for (const f of files.otherDocs) await upsertSellerDoc(sellerId, "other", f);
     }

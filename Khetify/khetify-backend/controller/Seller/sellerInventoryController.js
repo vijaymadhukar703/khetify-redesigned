@@ -1,4 +1,5 @@
 const lotService = require("../../services/lotService");
+const Product = require("../../model/Company/productModel");
 const sellerTraceService = require("../../services/sellerTraceService");
 const { warehouseScope } = require("../../services/warehouseScope");
 
@@ -30,7 +31,29 @@ exports.getSellerLots = async (req, res) => {
       expiring: req.query.expiring,
       expired: req.query.expired,
     });
-    res.json({ success: true, count: rows.length, data: rows });
+    // MY PRODUCTS SPLIT. A seller's OWN products now live in the same Product
+    // collection and their stock in the same Inventory collection, so this page
+    // would otherwise start listing it. The Inventory page is company-supplied
+    // goods; My Products is the seller's own. Filtered HERE rather than in
+    // lotService.getLots because that function serves the company side too.
+    const productIdOf = (r) => r.productId?._id || r.productId || null;
+    const productIds = rows.map(productIdOf).filter(Boolean);
+    const sellerOwned = new Set(
+      productIds.length
+        ? (
+            await Product.find({
+              _id: { $in: productIds },
+              ownerType: "seller",
+              sellerId: req.user.sellerId,
+            })
+              .select("_id")
+              .lean()
+          ).map((p) => String(p._id))
+        : []
+    );
+    const data = sellerOwned.size ? rows.filter((r) => !sellerOwned.has(String(productIdOf(r)))) : rows;
+
+    res.json({ success: true, count: data.length, data });
   } catch (err) {
     res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
   }

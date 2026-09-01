@@ -16,18 +16,63 @@ const variantSchema = new mongoose.Schema({
   stock: { type: Number, default: 0 },
 
   // Relative path to the variant-specific image, e.g. "uploads/products/<file>"
+  // UNCHANGED and still the field the COMPANY upload flow writes and reads.
   image: { type: String },
+
+  // ADDITIONAL images for the same variant — the seller's My Products form
+  // allows several per variant, the company form still sends exactly one.
+  //
+  // ADDITIVE: `image` above is untouched, so every company product and every
+  // already-saved variant behaves exactly as before. Where both are present,
+  // `image` holds images[0] so anything reading the single field (the
+  // storefront's colour swatches, for one) keeps working unchanged.
+  images: { type: [String], default: [] },
 });
 
 // ================= PRODUCT SCHEMA =================
 
 const productSchema = new mongoose.Schema(
   {
-    // Company Reference
+    // Company Reference.
+    //
+    // CONDITIONALLY required: a company product must always carry its company,
+    // exactly as before. A SELLER-OWNED product ("My Products") has no company
+    // at all — the seller uploaded it themselves — so the requirement is lifted
+    // for those rows only. Behaviour for every company product is unchanged.
     companyId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Company",
-      required: true,
+      required: function () {
+        return this.ownerType !== "seller";
+      },
+    },
+
+    // ── OWNERSHIP ─────────────────────────────────────────────────────────
+    // WHO owns this product row. Seller-uploaded products ("My Products") live
+    // in this SAME collection, distinguished only by these two fields — 22
+    // models ref "Product" (Inventory, Order, PickList, Shipment,
+    // SellerListing…), so a separate collection would break marketplace
+    // publish, ordering, stock-cut and shipment alike.
+    //
+    // ADDITIVE and defaulted: every pre-existing product reads as a company
+    // product. IMPORTANT — company-side queries must NOT filter on
+    // `ownerType: "company"`: legacy documents do not carry the field at all and
+    // .lean() applies no schema default, so such a filter would make every old
+    // product disappear. The company side is already scoped by `companyId`,
+    // which is sufficient. The SELLER side always filters on BOTH
+    // `ownerType: "seller"` AND `sellerId`.
+    ownerType: {
+      type: String,
+      enum: ["company", "seller"],
+      default: "company",
+    },
+
+    // The owning seller — set only when ownerType is "seller", null otherwise.
+    sellerId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Seller",
+      default: null,
+      index: true,
     },
 
     // Human-readable product identifier: 3 letters from the product name + 3
@@ -48,6 +93,12 @@ const productSchema = new mongoose.Schema(
     // Basic Product Info
     productName: { type: String },
     brandName:   { type: String },
+    /**
+     * SELLER-SIDE ONLY, optional. Picked from the horticulture catalogue on the
+     * seller's upload form (khetifyApp/src/lib/horticultureProducts.js). Company
+     * products never set it and stay null — nothing on that side reads it.
+     */
+    horticultureProduct: { type: String, default: null },
     category: { type: String },
     unitType: { type: String },
     unit: { type: String },

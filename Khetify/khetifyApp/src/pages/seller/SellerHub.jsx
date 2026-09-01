@@ -119,7 +119,7 @@ const SellerHub = () => {
   const cards = SELLER_MODULES.filter(visible);
 
   const openCard = (m, planLocked) => {
-    if (!approved) return;
+    if (!approved && !m.noApproval) return;
     if (planLocked) {
       if (canBill) navigate("/seller/billing");
       else toast("info", "Ask your seller admin to upgrade the plan to unlock this.");
@@ -175,10 +175,13 @@ const SellerHub = () => {
         {cards.map((m) => {
           const meta = cardMeta[m.key] || {};
           const planOk = !subLoading && sellerCan(m.feature);
-          const unlocked = approved && planOk;
-          const planLocked = approved && !planOk;       // paid module not in owner's plan
+          // `noApproval` modules open before the company approves the seller —
+          // see lib/sellerNav.js for which three and why. Plan gating unchanged.
+          const approvalOk = approved || m.noApproval === true;
+          const unlocked = approvalOk && planOk;
+          const planLocked = approvalOk && !planOk;      // paid module not in owner's plan
           const isLocked = !unlocked;                    // not approved OR plan-locked
-          const lockHint = !approved
+          const lockHint = !approvalOk
             ? "Available after your company approves you"
             : planLocked && canBill ? "Upgrade your plan to unlock"
             : planLocked ? "Ask your seller admin to upgrade"
@@ -215,7 +218,7 @@ const SellerHub = () => {
                 <span className="text-sm font-bold text-stone-700 truncate min-w-0">
                   {unlocked
                     ? meta.metric
-                    : <span className="text-stone-500 font-medium">{!approved ? "Locked until approval" : canBill ? "Upgrade to unlock" : "Ask your admin"}</span>}
+                    : <span className="text-stone-500 font-medium">{!approvalOk ? "Locked until approval" : canBill ? "Upgrade to unlock" : "Ask your admin"}</span>}
                 </span>
                 <span className={`material-symbols-outlined shrink-0 ${isLocked ? "text-stone-300" : "text-stone-300 group-hover:text-[#EA2831] group-hover:translate-x-0.5 transition-all"}`}>
                   {isLocked ? "lock" : "arrow_forward"}

@@ -149,9 +149,13 @@ const SellerLayout = () => {
   const moduleEntry = (m) => {
     if (m.cap && !hasCap(m.cap)) return null; // role lacks access → hide entirely
     const planOk = sellerCan(m.feature);
-    const unlocked = m.live && approved && planOk;
+    // A `noApproval` module (My Products, Warehouses, Outbound Sales — see
+    // lib/sellerNav.js) never waits on the supplying company. Plan and cap
+    // gating below are untouched for it.
+    const approvalOk = approved || m.noApproval === true;
+    const unlocked = m.live && approvalOk && planOk;
     if (unlocked) return { to: m.path, icon: m.icon, title: m.label };
-    const planLocked = m.live && approved && !planOk; // paid module not in owner's plan
+    const planLocked = m.live && approvalOk && !planOk; // paid module not in owner's plan
     return {
       to: m.path, icon: m.icon, title: m.label, isLocked: true, lockReason: planLocked ? "plan" : "approval",
       // Admin sees a "Pro" upgrade affordance; everyone else just a lock.

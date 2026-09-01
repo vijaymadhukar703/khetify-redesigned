@@ -46,7 +46,28 @@ certificates.get("/:id/download", pc.downloadCertificate);
 const listings = express.Router();
 listings.use(auth, sellerOnly, manageCerts);
 listings.get("/", pc.listListings);
-listings.post("/publish", requireActivePC((req) => req.body.companyId), pc.publishListing);
+/**
+ * PC GATE, ONLY WHERE THERE IS A COMPANY TO BE CERTIFIED BY.
+ *
+ * A Principal Certificate authorises a seller to resell A COMPANY'S products —
+ * so publishing a COMPANY product still requires an active PC for that company,
+ * byte for byte the same call as before. Publishing the seller's OWN product
+ * (My Products) has no company and therefore nothing a PC could certify, so
+ * demanding one would make the gate unsatisfiable: requireActivePC 400s on a
+ * missing companyId, which is why My Products could not publish at all.
+ *
+ * Ownership of a seller-own product is not left unchecked — it moves to
+ * publishListing, which proves the product is `ownerType: "seller"` AND
+ * `sellerId` = the caller before writing anything.
+ *
+ * middlewares/requireActivePC.js is untouched and still used verbatim.
+ */
+const pcGateWhenCompanyProduct = (req, res, next) =>
+  req.body?.companyId
+    ? requireActivePC((r) => r.body.companyId)(req, res, next)
+    : next();
+
+listings.post("/publish", pcGateWhenCompanyProduct, pc.publishListing);
 // Unpublish is intentionally NOT PC-gated — a seller can always pull a listing.
 listings.patch("/:id/unpublish", pc.unpublishListing);
 

@@ -3,6 +3,8 @@ const PCApplication = require("../../model/PC/PCApplication");
 const SellerAgreement = require("../../model/PC/SellerAgreement");
 const PrincipalCertificate = require("../../model/PC/PrincipalCertificate");
 const SellerListing = require("../../model/PC/SellerListing");
+// Ownership proof for publishing the seller's OWN product — see publishListing.
+const Product = require("../../model/Company/productModel");
 // Live sellable stock for the listings table — same source the storefront reads.
 const Inventory = require("../../model/Inventory/Inventory");
 const pcService = require("../../services/pcService");
@@ -124,6 +126,40 @@ exports.publishListing = async (req, res) => {
   try {
     const { companyId, productId, price } = req.body;
     if (!productId) return res.status(400).json({ success: false, message: "productId is required" });
+
+    /* ── THE SELLER'S OWN PRODUCT (My Products) ────────────────────────────
+       No companyId means there is no company, and therefore no PC gate on the
+       route. THIS is where that trust is paid back: without the check below any
+       seller could publish any other seller's — or any company's — product just
+       by omitting companyId. Both halves are required. `sellerId` alone could
+       be satisfied by a stray row; `ownerType` alone is scoped to nobody.
+
+       The filter/insert then pins companyId to NULL explicitly. Passing
+       `companyId: undefined` would have Mongoose DROP the key from the query,
+       leaving { sellerId, productId } — which can match this seller's existing
+       COMPANY listing of the same product and quietly convert it. */
+    if (!companyId) {
+      const product = await Product.findOne({
+        _id: productId,
+        ownerType: "seller",
+        sellerId: req.user.sellerId,
+      }).select("_id").lean();
+      if (!product) {
+        return res.status(403).json({ success: false, message: "Not your product" });
+      }
+
+      const own = await SellerListing.findOneAndUpdate(
+        { sellerId: req.user.sellerId, companyId: null, productId },
+        {
+          $set: { status: "published", price, publishedAt: new Date() },
+          $setOnInsert: { ownerType: "seller" },
+        },
+        { new: true, upsert: true, setDefaultsOnInsert: true }
+      );
+      return res.status(201).json({ success: true, message: "Product listed", data: own });
+    }
+
+    /* ── COMPANY PRODUCT — unchanged, PC-gated on the route above. ───────── */
     const listing = await SellerListing.findOneAndUpdate(
       { sellerId: req.user.sellerId, companyId, productId },
       { $set: { status: "published", price, publishedAt: new Date() } },

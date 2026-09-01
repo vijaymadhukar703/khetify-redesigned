@@ -62,6 +62,7 @@ const shopRoutes = require("./routes/Shop/shopRoutes"); // Public customer store
 const sellerRoutes = require("./routes/Seller/sellerRoutes"); // Seller-side IMS (Phase 1: auth + portal)
 const sellerWarehouseRoutes = require("./routes/Seller/sellerWarehouseRoutes"); // Seller warehouses (Phase 2b)
 const sellerCatalogRoutes = require("./routes/Seller/sellerCatalogRoutes"); // Seller read-only catalog (Phase 2c)
+const sellerMyProductRoutes = require("./routes/Seller/sellerMyProductRoutes"); // Seller's OWN products + own stock ("My Products")
 const sellerSupplyRoutes = require("./routes/Seller/sellerSupplyRoutes"); // Seller-initiated supply requests (Phase 3)
 const sellerInventoryRoutes = require("./routes/Seller/sellerInventoryRoutes"); // Seller read-only inventory/lots (Phase 4a)
 const sellerTransferRoutes = require("./routes/Seller/sellerTransferRoutes"); // Seller inter-warehouse transfers
@@ -234,6 +235,22 @@ app.use("/api/users", userRoutes);
 app.use("/api/purchasing", purchasingRoutes);
 app.use("/api/shop", shopRoutes); // public customer storefront (browse + consumer auth + checkout)
 app.use("/api/seller/warehouses", sellerWarehouseRoutes); // before /api/seller so the specific path wins
+// GST RATE MASTER, REACHABLE BY A SELLER TOKEN.
+//
+// The same read-only router already mounted at /api/hsn below — not a copy, not
+// a fork: `hsnRoutes` verbatim, and its controller carries no company scope
+// because a GST rate is public statutory data, identical for everyone.
+//
+// It needs a second mount because middlewares/principalRouteGuard (line ~128)
+// refuses a SELLER token on every path outside /api/seller ("Company access
+// only"), so the seller upload form could not reach /api/hsn at all — the HSN
+// autocomplete and GST auto-fill 403'd on every keystroke. Mounting the same
+// router inside the seller namespace satisfies that guard without weakening it
+// and without editing the guard, the route file or the controller.
+//
+// MUST stay above the /api/seller mount, which would otherwise swallow it.
+app.use("/api/seller/hsn", hsnRoutes); // GST master for the seller portal (same read-only router as /api/hsn)
+app.use("/api/seller/my-products", sellerMyProductRoutes); // seller's own products + own stock (ungated, free)
 app.use("/api/seller/products", sellerCatalogRoutes); // read-only catalog of the linked company
 app.use("/api/seller/supply-orders", sellerSupplyRoutes); // seller-initiated supply requests
 app.use("/api/seller/lots", sellerInventoryRoutes); // read-only seller inventory/lots

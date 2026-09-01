@@ -66,7 +66,7 @@ const upload = multer({
 // one multipart request, keeping them in separate req.files buckets.
 upload.uploadProductFields = upload.fields([
   { name: "productImages", maxCount: 5 },
-  { name: "variantImages", maxCount: 10 },
+  { name: "variantImages", maxCount: 30 },
 ]);
 
 module.exports = upload;
