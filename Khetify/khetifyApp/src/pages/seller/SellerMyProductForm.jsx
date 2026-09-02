@@ -52,7 +52,10 @@ const ATTR_SUGGESTIONS = ['Size', 'Color', 'Material', 'Capacity', 'Finish', 'Mo
 // request, so this allows 6 variants at the full 5 before multer refuses.
 const MAX_VARIANT_IMAGES = 5;
 
-const HSN_MIN = 4;
+// 2 to 8 digits: the GST master carries both HEADING-level (4-digit, the bulk
+// of the notification) and genuine CHAPTER-level (2-digit) entries, so both
+// are valid input. The lookup effect below resolves whichever level is typed.
+const HSN_MIN = 2;
 const HSN_MAX = 8;
 
 // Pure utility: cartesian product of an array of arrays.
@@ -340,6 +343,18 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
 
   // Duplicate-name warning. Advisory ONLY — it never blocks a save.
   const [dupes, setDupes] = useState([]);
+
+  /* ================= HORTICULTURE PAPERWORK ================= /
+     Picking a Horticulture Product is a claim the seller has to back with a
+     licence NUMBER and a CERTIFICATE in their profile. The real gate is the
+     backend's (sellerMyProductController → HORTICULTURE_DOCS_REQUIRED); this
+     state only renders what it says. `missing` comes STRAIGHT from that
+     response — recomputing it here would just be a second opinion that can
+     disagree with the one that actually blocked the save. */
+  const [hortiMissing, setHortiMissing] = useState(null); // null = never refused
+
+  const HORTI_LABEL = { number: 'Horticulture licence number', certificate: 'Horticulture certificate' };
+
 
   // Variant attributes. `draft` holds the value currently being typed for that
   // row (committed to `values` on Enter / comma / +); `id` keeps React keys
@@ -650,7 +665,7 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
     : null;
   const unitValueLabel = unitMeta ? UNIT_VALUE_LABEL[unitMeta.kind] : '';
 
-  /* HSN accepts DIGITS ONLY, 4 to 8 of them. Filtering on the way in means a
+  /* HSN accepts DIGITS ONLY, 2 to 8 of them. Filtering on the way in means a
      pasted "3102-1000" becomes "31021000" rather than being rejected after the
      fact. Any previous result belongs to the previous code, so it is dropped
      immediately — and the GST goes with it, because that field is filled ONLY
@@ -667,8 +682,17 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
       effect below — this only sets the code and closes the list, so there is
       exactly one place that decides GST. */
   const pickHsn = (code) => {
-    setFormData(prev => ({ ...prev, hsn: code }));
-    setHsn(null);
+    // Reset GST only when the code is actually CHANGING. The reset itself
+    // exists so a leftover rate from a previous code (edit mode, or an
+    // earlier pick) can't accidentally match one of the new code's several
+    // rates and silently skip the picker. But the GST lookup effect below is
+    // keyed on formData.hsn — if the clicked suggestion is the SAME code
+    // already in the field (e.g. typed "07", then clicked "07" in the list),
+    // that value never changes, so the effect never re-fires and a reset here
+    // would wipe the already-resolved GST% with nothing to bring it back.
+    const changed = code !== formData.hsn;
+    setFormData(prev => ({ ...prev, hsn: code, gst: changed ? '0' : prev.gst }));
+    if (changed) setHsn(null);
     setHsnPicked(true);
     setHsnOpen(false);
   };
@@ -711,7 +735,7 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
     return () => document.removeEventListener('mousedown', onDown);
   }, [hsnOpen]);
 
-  /* HSN → GST. Runs once the code reaches a valid 4-8 digits, debounced so
+  /* HSN → GST. Runs once the code reaches a valid 2-8 digits, debounced so
      typing 31021000 fires ONE request, not five.
 
      THE RATE ALWAYS COMES FROM THE DATABASE. There is no rate table in this
@@ -796,6 +820,12 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
   };
 
   /* ================= SUBMIT ================= */
+  // Clearing the dropdown removes the reason the save was refused, so the
+  // banner goes with it rather than sitting there contradicting the form.
+  useEffect(() => {
+    if (!formData.horticulture_product) setHortiMissing(null);
+  }, [formData.horticulture_product]);
+
   const handleSubmit = async (e) => {
     if (e) e.preventDefault();
     const problem = validate();
@@ -894,9 +924,21 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
       });
       onSaved?.();
     } catch (error) {
+      const body = error.response?.data;
+      // Missing horticulture paperwork is not a generic failure: it is fixable,
+      // and the fix is somewhere else. Render the banner (which keeps every
+      // field intact) instead of an error popup that says nothing actionable.
+      if (body?.code === 'HORTICULTURE_DOCS_REQUIRED') {
+        const missing = Array.isArray(body.missing) && body.missing.length
+          ? body.missing
+          : ['number', 'certificate'];
+        setHortiMissing(missing);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        return;
+      }
       Swal.fire({
         title: isEdit ? 'Could not save' : 'Could not add product',
-        text: error.response?.data?.message || 'Please try again.',
+        text: body?.message || 'Please try again.',
         icon: 'error',
         confirmButtonColor: '#EA2831',
       });
@@ -925,6 +967,54 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
           Back to My Products
         </button>
       </div>
+
+      {/* Refused by the backend for missing horticulture paperwork. Sits ABOVE
+          the form and leaves every field exactly as typed — the seller opens
+          the profile in a NEW TAB, uploads, comes back and presses Save again
+          without re-entering anything. */}
+      {hortiMissing && (
+        <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 p-5 animate__animated animate__fadeIn">
+          <div className="flex items-start gap-3">
+            <span className="material-symbols-outlined text-amber-500">lock</span>
+            <div className="flex-1 min-w-0">
+              <h3 className="text-sm font-bold text-amber-800">Horticulture documents required</h3>
+              <p className="text-sm text-amber-700 mt-1">
+                Ye product upload karne ke liye pehle profile me jaakar Horticulture licence number aur certificate upload karein.
+              </p>
+              <ul className="mt-3 space-y-1">
+                {hortiMissing.map((k) => (
+                  <li key={k} className="flex items-center gap-2 text-sm text-amber-800">
+                    <span className="material-symbols-outlined text-base text-amber-600">close</span>
+                    <span className="font-medium">{HORTI_LABEL[k] || k}</span>
+                    <span className="text-xs text-amber-600">— missing</span>
+                  </li>
+                ))}
+              </ul>
+              <div className="mt-4 flex flex-wrap items-center gap-3">
+                <a
+                  href="/seller/profile"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 text-xs font-bold px-4 py-2 rounded-lg bg-[#EA2831] text-white hover:bg-[#d11f28] transition-colors"
+                >
+                  <span className="material-symbols-outlined text-base">badge</span> Go to profile
+                </a>
+                <span className="text-xs text-amber-600">
+                  Opens in a new tab — nothing you have filled in here is lost.
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setHortiMissing(null)}
+              aria-label="Dismiss"
+              className="shrink-0 text-amber-500 hover:text-amber-700 transition-colors"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       <form onSubmit={handleSubmit} className="space-y-10 bg-white p-6 sm:p-10 border border-stone-200 rounded-2xl shadow-sm mb-12 animate__animated animate__fadeIn">
 
@@ -990,6 +1080,16 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
                 options={HORTICULTURE_PRODUCTS}
                 onChange={(v) => setFormData(prev => ({ ...prev, horticulture_product: v }))}
               />
+              {/* Soft, up-front heads-up — deliberately NOT an error colour and
+                  deliberately NOT a check of its own. The seller learns the
+                  requirement while picking rather than after filling the whole
+                  form; whether they actually HAVE the paperwork is decided by
+                  the backend on save. */}
+              {formData.horticulture_product && (
+                <p className={`${hintClass} text-stone-500`}>
+                  Needs a Horticulture licence number and certificate in your profile.
+                </p>
+              )}
             </div>
             <div className="md:col-span-2">
               <label className={labelClass}>Product Description</label>
@@ -1149,7 +1249,7 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
               />
             </div>
 
-            {/* HSN CODE. 4 to 8 digits; the field itself accepts only digits so
+            {/* HSN CODE. 2 to 8 digits; the field itself accepts only digits so
                 letters, spaces and punctuation can never be typed or pasted in.
                 Entering a valid code looks the GST rate up in the master and
                 reports the outcome directly beneath the field. */}

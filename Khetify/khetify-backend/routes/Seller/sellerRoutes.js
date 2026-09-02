@@ -16,6 +16,8 @@ const {
   sellerForgotPassword,
   sellerResetPassword,
   sellerChangePassword,
+  updateSellerLocation,
+  previewSellerLocation,
 } = require("../../controller/Seller/sellerAuthController");
 const {
   getSellerCompanyLinks,
@@ -81,6 +83,13 @@ router.patch(
   updateSellerProfile,
 ); // edit identity/compliance + replace KYC docs (multipart → S3 keys)
 router.post("/ack-approval", authMiddleware, ackApproval); // dismiss the one-time "Linked" banner
+
+// ── LIVE LOCATION CONSENT ──
+// Authenticated, but NO capability check: answering "allow" or "deny" to the
+// browser prompt is every principal's own decision, not a managed permission.
+// The controller restricts the WRITE to the seller owner (see the note there).
+router.post("/location/preview", authMiddleware, previewSellerLocation); // resolve, do not save
+router.patch("/location", authMiddleware, updateSellerLocation);
 
 // Onboarding wizard — all scoped to req.user.sellerId.
 router.put("/onboarding/info", authMiddleware, updateSellerInfo);

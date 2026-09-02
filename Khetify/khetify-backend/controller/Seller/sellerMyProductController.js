@@ -1,5 +1,7 @@
 const mongoose = require("mongoose");
 const Product = require("../../model/Company/productModel");
+const Seller = require("../../model/Seller/Seller");
+const SellerDocument = require("../../model/PC/SellerDocument");
 const Inventory = require("../../model/Inventory/Inventory");
 const sellerOwnStockService = require("../../services/sellerOwnStockService");
 const { warehouseScope } = require("../../services/warehouseScope");
@@ -22,6 +24,76 @@ const { warehouseScope } = require("../../services/warehouseScope");
  * applies no default, so such a filter would hide them. Company queries are
  * already scoped by companyId.)
  */
+
+/**
+ * HORTICULTURE PAPERWORK GATE — per-product, and only when it applies.
+ *
+ * Picking a "Horticulture Product" on the upload form is a claim that needs
+ * backing: the seller must have a horticulture licence NUMBER and the
+ * CERTIFICATE file for it. Leave the dropdown empty and nothing here runs — the
+ * product saves like any other.
+ *
+ * PRESENCE, NOT STATUS — the same rule middlewares/requireSellerProductDocs.js
+ * follows. SellerDocument.status defaults to "pending" and no admin screen ever
+ * moves it to "verified", so gating on status would block every seller forever.
+ *
+ * WHERE THE NUMBER COMES FROM. Either source counts:
+ *   · Seller.verification.licences.horticulture — the AUTHORITATIVE value, per
+ *     the note in model/PC/SellerDocument.js. The Profile edits this directly.
+ *   · the horticulture SellerDocument's `documentNumber` — a snapshot taken
+ *     when the file was uploaded.
+ * The snapshot alone is not enough to test: sellerAuthController.upsertSellerDoc
+ * writes it ONLY on a file upload, so a seller who uploads the certificate first
+ * and types the number afterwards keeps an empty snapshot forever, with no way
+ * out but re-uploading the same file. The certificate itself has only one
+ * source — the row's fileUrl — so that half is checked there and nowhere else.
+ *
+ * Returns the `missing` array (empty = clear to save).
+ */
+const HORTICULTURE_DOC_TYPE = "horticulture";
+
+const missingHorticultureDocs = async (sellerId) => {
+  const [seller, doc] = await Promise.all([
+    Seller.findById(sellerId).select("verification.licences.horticulture").lean(),
+    SellerDocument.findOne({ sellerId, docType: HORTICULTURE_DOC_TYPE })
+      .sort({ createdAt: -1 })
+      .select("documentNumber fileUrl")
+      .lean(),
+  ]);
+
+  const hasNumber = Boolean(
+    String(seller?.verification?.licences?.horticulture || "").trim() ||
+    String(doc?.documentNumber || "").trim()
+  );
+  // A row can exist with only a fileKey; an upload that never produced a URL is
+  // not a certificate the seller can be said to hold.
+  const hasCertificate = Boolean(String(doc?.fileUrl || "").trim());
+
+  const missing = [];
+  if (!hasNumber) missing.push("number");
+  if (!hasCertificate) missing.push("certificate");
+  return missing;
+};
+
+/**
+ * Runs the gate for one write and, if it fails, sends the 400 itself. Returns
+ * true when the caller must stop. Shared by CREATE and UPDATE so the two can
+ * never drift apart — an edit that ADDS a horticulture product is exactly as
+ * much of a claim as a create that does.
+ */
+const blockedOnHorticultureDocs = async (req, res) => {
+  if (!String(req.body?.horticultureProduct || "").trim()) return false;
+  const missing = await missingHorticultureDocs(req.user.sellerId);
+  if (!missing.length) return false;
+  res.status(400).json({
+    success: false,
+    code: "HORTICULTURE_DOCS_REQUIRED",
+    missing,
+    message:
+      "Upload your Horticulture licence number and certificate in your profile to list a horticulture product.",
+  });
+  return true;
+};
 
 /** The owner filter. Never build a query in this file without it. */
 const ownerFilter = (req) => ({ ownerType: "seller", sellerId: req.user.sellerId });
@@ -282,6 +354,7 @@ exports.listMyProducts = async (req, res) => {
  */
 exports.createMyProduct = async (req, res) => {
   try {
+    if (await blockedOnHorticultureDocs(req, res)) return;
     const body = { ...req.body };
     deriveShelfLife(body);
     deriveVariantType(body);
@@ -483,6 +556,7 @@ exports.updateMyProduct = async (req, res) => {
     if (!mongoose.isValidObjectId(req.params.id)) {
       return res.status(404).json({ success: false, message: "Product not found" });
     }
+    if (await blockedOnHorticultureDocs(req, res)) return;
     const body = { ...req.body };
     deriveShelfLife(body);
     deriveVariantType(body);

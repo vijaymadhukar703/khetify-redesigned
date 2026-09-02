@@ -229,24 +229,48 @@ const CompanyUploadProduct = () => {
   const resetAllStock = () =>
     setVariantRows(prev => prev.map(r => ({ ...r, stock: '0' })));
 
-  const handleVariantImageChange = (label, file) => {
-    if (!file) return;
-    const preview = URL.createObjectURL(file);
+  // Photos per variant. middlewares/upload.js accepts 30 variantImages in one
+  // request across all variants (matches the seller My Products form's limit).
+  const MAX_VARIANT_IMAGES = 5;
+
+  const variantImageCount = (r) => r.newFiles.length;
+
+  const addVariantImages = (label, files) => {
+    const picked = Array.from(files || []);
+    if (!picked.length) return;
     setVariantRows(prev => prev.map(r => {
       if (r.label !== label) return r;
-      // Revoke old preview URL to avoid memory leaks.
-      if (r.imagePreview) URL.revokeObjectURL(r.imagePreview);
-      return { ...r, image: file, imagePreview: preview };
+      const room = MAX_VARIANT_IMAGES - variantImageCount(r);
+      if (room <= 0) return r;
+      const take = picked.slice(0, room);
+      return {
+        ...r,
+        newFiles: [...r.newFiles, ...take],
+        newPreviews: [...r.newPreviews, ...take.map(f => URL.createObjectURL(f))],
+      };
     }));
+    if (picked.length > MAX_VARIANT_IMAGES) {
+      Swal.fire({
+        title: 'Limit Exceeded',
+        text: `Up to ${MAX_VARIANT_IMAGES} images per variant.`,
+        icon: 'warning',
+        confirmButtonColor: '#EA2831',
+      });
+    }
   };
 
-  const removeVariantImage = (label) => {
+  // One picked in this session — revoke its object URL as it goes.
+  const removeVariantImage = (label, index) =>
     setVariantRows(prev => prev.map(r => {
       if (r.label !== label) return r;
-      if (r.imagePreview) URL.revokeObjectURL(r.imagePreview);
-      return { ...r, image: null, imagePreview: null };
+      const url = r.newPreviews[index];
+      if (url) URL.revokeObjectURL(url);
+      return {
+        ...r,
+        newFiles: r.newFiles.filter((_, i) => i !== index),
+        newPreviews: r.newPreviews.filter((_, i) => i !== index),
+      };
     }));
-  };
 
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [previews, setPreviews] = useState([]); 
@@ -256,15 +280,17 @@ const CompanyUploadProduct = () => {
     setFormData(prev => ({ ...prev, [id]: value }));
   };
 
-  /* HSN accepts DIGITS ONLY, 4 to 8 of them. Filtering on the way in means a
+  /* HSN accepts DIGITS ONLY, 2 to 8 of them. Filtering on the way in means a
      pasted "3102-1000" simply becomes "31021000" rather than being rejected
      after the fact; the length is still checked before upload.
 
-     THE MINIMUM IS 4, NOT 8. The GST notification is written at HEADING level —
-     of its 1163 codes, 1018 are 4-digit — so a 4-digit code is a complete,
-     valid answer and refusing it would reject the very form most rates are
-     published in. */
-  const HSN_MIN = 4;
+     THE MINIMUM IS 2, NOT 8. The GST notification is written mostly at
+     HEADING level — of its 1163 codes, 1018 are 4-digit — so a 4-digit code
+     is a complete, valid answer and refusing it would reject the very form
+     most rates are published in. The master also carries genuine 2-digit
+     CHAPTER-level entries (e.g. "07" — dry herbs/roots), so a 2-digit code
+     is accepted too; the GST lookup below resolves it like any other level. */
+  const HSN_MIN = 2;
   const HSN_MAX = 8;
   const handleHsnChange = (e) => {
     const digits = e.target.value.replace(/\D/g, '').slice(0, HSN_MAX);
@@ -282,8 +308,17 @@ const CompanyUploadProduct = () => {
       effect below — this only sets the code and closes the list, so there is
       exactly one place that decides GST. */
   const pickHsn = (code) => {
-    setFormData(prev => ({ ...prev, hsn: code }));
-    setHsn(null);
+    // Reset GST only when the code is actually CHANGING. The reset itself
+    // exists so a leftover rate from a previous code (edit mode, or an
+    // earlier pick) can't accidentally match one of the new code's several
+    // rates and silently skip the picker. But the GST lookup effect below is
+    // keyed on formData.hsn — if the clicked suggestion is the SAME code
+    // already in the field (e.g. typed "07", then clicked "07" in the list),
+    // that value never changes, so the effect never re-fires and a reset here
+    // would wipe the already-resolved GST% with nothing to bring it back.
+    const changed = code !== formData.hsn;
+    setFormData(prev => ({ ...prev, hsn: code, gst: changed ? '0' : prev.gst }));
+    if (changed) setHsn(null);
     setHsnPicked(true);
     setHsnOpen(false);
   };
@@ -370,8 +405,8 @@ const CompanyUploadProduct = () => {
           sku: existing?.sku ?? autoSku(formData.product_name, combo),
           mrp: existing?.mrp ?? formData.mrp ?? '',
           stock: existing?.stock ?? '',
-          image: existing?.image ?? null,
-          imagePreview: existing?.imagePreview ?? null,
+          newFiles: existing?.newFiles ?? [],
+          newPreviews: existing?.newPreviews ?? [],
         };
       })
     );
@@ -510,7 +545,7 @@ const CompanyUploadProduct = () => {
   }, [hsnOpen]);
 
   /* ================= HSN → GST LOOKUP =================
-     Runs whenever the HSN reaches a valid 4-8 digits. Debounced by 400ms so
+     Runs whenever the HSN reaches a valid 2-8 digits. Debounced by 400ms so
      typing 31021000 fires ONE request, not five.
 
      THE RATE ALWAYS COMES FROM THE DATABASE. There is no rate table in this
@@ -731,9 +766,10 @@ const CompanyUploadProduct = () => {
     data.append('productStatus', formData.isActive ? 'active' : 'inactive');
     data.append('productUpload', uploadStatus === 'draft' ? 'saveDraft' : 'uploaded');
     if (formData.bulk_has_variants === 'yes' && variantRows.length > 0) {
-      // Build sequential file index: only rows that have an image get an index
-      // (0, 1, 2…). Rows without an image send imageIndex: undefined so the
-      // backend knows to leave that variant's image field empty.
+      // Build sequential file index: each variant records the POSITIONS of its
+      // own photos in the one combined "variantImages" list, so several photos
+      // per variant are supported the same way the seller My Products form
+      // does it. Rows with no images send imageIndexes: [] and get none.
       let fileIdx = 0;
       data.append('variants', JSON.stringify(
         variantRows.map((r) => ({
@@ -742,13 +778,13 @@ const CompanyUploadProduct = () => {
           sku: r.sku,
           mrp: r.mrp !== '' ? Number(r.mrp) : undefined,
           stock: r.stock !== '' ? Number(r.stock) : undefined,
-          imageIndex: r.image != null ? fileIdx++ : undefined,
+          imageIndexes: r.newFiles.map(() => fileIdx++),
         }))
       ));
       // Append variant image files in row order under the same field name so
       // multer collects them as an ordered array (req.files.variantImages[]).
       variantRows.forEach((r) => {
-        if (r.image) data.append('variantImages', r.image);
+        r.newFiles.forEach((f) => data.append('variantImages', f));
       });
     }
 
@@ -993,7 +1029,7 @@ const CompanyUploadProduct = () => {
                 />
               </div>
 
-              {/* 2 — HSN CODE. 4 to 8 digits; the field itself accepts only
+              {/* 2 — HSN CODE. 2 to 8 digits; the field itself accepts only
                   digits so letters, spaces and punctuation can never be typed or
                   pasted in, and the length is checked before upload.
 
@@ -1499,34 +1535,56 @@ const CompanyUploadProduct = () => {
                               onChange={e => patchVariantRow(row.label, { stock: e.target.value })}
                               placeholder="0"
                             />
-                            {/* Per-variant image upload */}
-                            <div className="relative w-[60px] h-[60px] shrink-0">
-                              {row.imagePreview ? (
-                                <>
-                                  <img
-                                    src={row.imagePreview}
-                                    alt={row.label}
-                                    className="w-full h-full object-cover rounded-lg border border-stone-200"
-                                  />
-                                  <button
-                                    type="button"
-                                    onClick={() => removeVariantImage(row.label)}
-                                    className="absolute -top-1.5 -right-1.5 bg-[#EA2831] text-white rounded-full w-4 h-4 flex items-center justify-center shadow hover:bg-black transition-colors"
-                                    aria-label="Remove photo"
+                            {/* PER-VARIANT PHOTOS — up to MAX_VARIANT_IMAGES
+                                per variant, same pattern as the seller My
+                                Products form: a fixed-height strip that
+                                scrolls sideways instead of wrapping, so adding
+                                a third photo never grows the row and jumps
+                                everything below it. The FIRST photo is what
+                                the storefront uses as this variant's swatch. */}
+                            <div className="min-w-0">
+                              <div className="flex h-[60px] items-center gap-1.5 overflow-x-auto overflow-y-hidden py-1 [scrollbar-width:thin] [&::-webkit-scrollbar]:h-1">
+                                {row.newPreviews.map((src, i) => (
+                                  <div key={`n-${src}`} className="relative w-[48px] h-[48px] shrink-0">
+                                    <img src={src} alt={row.label} className="w-full h-full object-cover rounded-lg border border-stone-200" />
+                                    <button
+                                      type="button"
+                                      onClick={() => removeVariantImage(row.label, i)}
+                                      className="absolute top-0.5 right-0.5 bg-[#EA2831] text-white rounded-full w-4 h-4 flex items-center justify-center shadow hover:bg-black transition-colors"
+                                      aria-label="Remove photo"
+                                    >
+                                      <span className="material-symbols-outlined text-[10px] leading-none">close</span>
+                                    </button>
+                                  </div>
+                                ))}
+                                {variantImageCount(row) < MAX_VARIANT_IMAGES && (
+                                  <label
+                                    title={`Add photos (${variantImageCount(row)}/${MAX_VARIANT_IMAGES})`}
+                                    className="relative w-[48px] h-[48px] shrink-0 flex flex-col items-center justify-center border border-dashed border-stone-300 rounded-lg bg-stone-50 hover:bg-stone-100 hover:border-[#EA2831]/50 cursor-pointer transition-colors group"
                                   >
-                                    <span className="material-symbols-outlined text-[10px] leading-none">close</span>
-                                  </button>
-                                </>
-                              ) : (
-                                <label className="w-full h-full flex flex-col items-center justify-center border border-dashed border-stone-300 rounded-lg bg-stone-50 hover:bg-stone-100 hover:border-[#EA2831]/50 cursor-pointer transition-colors group">
-                                  <input
-                                    type="file"
-                                    accept="image/*"
-                                    className="sr-only"
-                                    onChange={e => handleVariantImageChange(row.label, e.target.files[0])}
-                                  />
-                                  <span className="material-symbols-outlined text-stone-300 group-hover:text-[#EA2831] text-xl transition-colors">add_photo_alternate</span>
-                                </label>
+                                    {/* Full-size, transparent input rather than
+                                        sr-only — an off-screen sr-only input
+                                        keeps focus after the file dialog
+                                        closes and the browser scrolls its
+                                        nearest scrollable ancestor (this
+                                        strip) to "reveal" it, which jumps the
+                                        page. A full-tile input is already on
+                                        screen, so nothing scrolls. */}
+                                    <input
+                                      type="file"
+                                      accept="image/*"
+                                      multiple
+                                      className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                                      onChange={e => { addVariantImages(row.label, e.target.files); e.target.value = ''; }}
+                                    />
+                                    <span className="material-symbols-outlined text-stone-300 group-hover:text-[#EA2831] text-lg transition-colors pointer-events-none">add_photo_alternate</span>
+                                  </label>
+                                )}
+                              </div>
+                              {variantImageCount(row) > 0 && (
+                                <p className="text-[10px] text-stone-400 leading-none">
+                                  {variantImageCount(row)}/{MAX_VARIANT_IMAGES} photos
+                                </p>
                               )}
                             </div>
                           </div>

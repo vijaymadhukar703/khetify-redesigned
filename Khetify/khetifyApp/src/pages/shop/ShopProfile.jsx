@@ -7,7 +7,9 @@ import {
   getShopAddresses, addShopAddress, updateShopAddress,
   setDefaultShopAddress, deleteShopAddress,
   changeShopPassword, shopVerifyOtp, shopResendOtp, getShopOrders,
+  saveShopLocation,
 } from "../../lib/shopApi";
+import LocationSettingsCard from "../../Components/common/LocationSettingsCard";
 import { getProductImage } from "../../lib/productImage";
 import { rupee } from "../../Components/shop/ProductCard";
 import { useT } from "../../context/ShopLanguageContext";
@@ -870,7 +872,46 @@ export default function ShopProfile() {
           {/* ── Panel ── */}
           <div className="min-w-0">
             {tab === "profile" && (
-              <PersonalInfo consumer={consumer} updateProfile={updateProfile} refresh={refresh} />
+              <div className="space-y-6">
+                <PersonalInfo consumer={consumer} updateProfile={updateProfile} refresh={refresh} />
+                {/* Consent travels with the consumer on /me, so there is nothing
+                    extra to fetch; refresh() puts the context back in step after
+                    a change. Wrapped in the page's own Card so it matches the
+                    panels around it. */}
+                <LocationSettingsCard
+                  value={consumer?.locationAccess}
+                  Wrapper={Card}
+                  onSave={async (payload) => { await saveShopLocation(payload); await refresh(); }}
+                  text={{
+                    title: t("loc.title"),
+                    subtitle: t("loc.subtitle"),
+                    on: t("loc.on"),
+                    off: t("loc.off"),
+                    turnOn: t("loc.turnOn"),
+                    turnOff: t("loc.turnOff"),
+                    update: t("loc.update"),
+                    working: t("location.working"),
+                    savedOn: t("loc.savedOn"),
+                    savedOff: t("loc.savedOff"),
+                    capturedAt: t("loc.capturedAt"),
+                    viewOnMap: t("loc.viewOnMap"),
+                    accuracy: t("loc.accuracy"),
+                    blocked: t("location.blocked"),
+                    panel: {
+                      state: t("loc.state"),
+                      district: t("loc.district"),
+                      city: t("loc.city"),
+                      pincode: t("loc.pincode"),
+                      country: t("loc.country"),
+                      coordinates: t("loc.coordinates"),
+                      accuracy: t("loc.accuracy"),
+                      capturedAt: t("loc.capturedAt"),
+                      viewOnMap: t("loc.viewOnMap"),
+                      unresolved: t("loc.unresolved"),
+                    },
+                  }}
+                />
+              </div>
             )}
             {tab === "addresses" && (
               <AddressBook addresses={addresses} setAddresses={setAddresses} consumer={consumer} />

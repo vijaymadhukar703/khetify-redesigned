@@ -24,23 +24,32 @@ const HsnGstRate = require("../model/Master/HsnGstRate");
  * person decide. Picking the first row, the lowest, or the most common would all
  * be guesses, and on 3105 the guess is a real fertiliser mispriced by 13 points.
  *
- * It never falls back to a 2-digit chapter either. Chapter-level rows in the
- * notification are catch-alls ("28 or 38 — Micronutrients…") whose scope is set
- * by the description, so a 2-digit hit says almost nothing about a specific
- * product. Better to report not-found than to answer with a chapter average.
+ * It never WALKS UP to a 2-digit chapter as a fallback for a longer code.
+ * Chapter-level rows in the notification are catch-alls ("28 or 38 —
+ * Micronutrients…") whose scope is set by the description, so treating a
+ * chapter row as the answer for a more specific 8/6/4-digit code that itself
+ * has no data would be a guess. That still holds: candidatesFor() only ever
+ * derives 6- and 4-digit slices from a longer code, never a 2-digit one.
+ *
+ * A code TYPED as 2 digits is different — that is the user deliberately
+ * asking for the chapter, not a fallback from something more specific, so it
+ * is looked up directly like any other level and answered from whatever the
+ * master actually holds at that level (single rate, several, or not-found).
  */
 
-/** Only digits, 4–8 of them. Same rule the upload form enforces. */
-const HSN_RE = /^\d{4,8}$/;
+/** Only digits, 2–8 of them. Same rule the upload form enforces. */
+const HSN_RE = /^\d{2,8}$/;
 
 /**
  * The levels to try, most specific first. Duplicates are dropped so a 4-digit
- * input is queried once, not three times.
+ * input is queried once, not three times. The code itself is always tried
+ * regardless of length (down to 2 digits) — only the derived 6/4-digit
+ * slices are gated, so an 8-digit input still never falls back past 4.
  */
 function candidatesFor(code) {
   const out = [];
   for (const c of [code, code.slice(0, 6), code.slice(0, 4)]) {
-    if (c.length >= 4 && !out.includes(c)) out.push(c);
+    if (c.length >= 2 && !out.includes(c)) out.push(c);
   }
   return out;
 }
@@ -49,7 +58,7 @@ function candidatesFor(code) {
  * Resolve a code.
  *
  * Returns one of:
- *   { status: "invalid"   }                       — not 4–8 digits
+ *   { status: "invalid"   }                       — not 2–8 digits
  *   { status: "not_found" }                       — nothing at any level
  *   { status: "single",   gstRate, matchedHsn, matchedLevel, rates:[…] }
  *   { status: "multiple", matchedHsn, matchedLevel, rates:[…] }
@@ -60,7 +69,7 @@ function candidatesFor(code) {
 async function lookupHsn(rawCode) {
   const code = String(rawCode || "").trim();
   if (!HSN_RE.test(code)) {
-    return { status: "invalid", message: "HSN code must be 4 to 8 digits" };
+    return { status: "invalid", message: "HSN code must be 2 to 8 digits" };
   }
 
   for (const candidate of candidatesFor(code)) {

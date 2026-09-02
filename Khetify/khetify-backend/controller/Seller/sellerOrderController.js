@@ -34,12 +34,68 @@ exports.createOrder = async (req, res) => {
   } catch (err) { fail(res, err); }
 };
 
+/**
+ * SKU AS SOLD, resolved for a page of orders.
+ *
+ * An order line snapshots `variantId` / `variantLabel` but never the variant's
+ * SKU, so the SKU has to be read back off the product. Doing it here rather
+ * than at checkout means EVERY order answers — including the ones already in
+ * the database, which a write-side snapshot could never fix.
+ *
+ * One extra query per page, not per row: the product ids across the whole page
+ * are collected first and fetched in a single $in, then matched in memory.
+ *
+ * WHICH SKU WINS: the variant's own, whenever the line names a variant that
+ * still carries one. The product-level `skuNumber` is a FALLBACK only — for
+ * lines with no variant (single-variant products, POS/manual orders) or a
+ * variant with no SKU of its own. Nothing is invented: a line that resolves to
+ * neither is left `sku: null` and the table shows a dash.
+ *
+ * Purely ADDITIVE — `sku` is attached to the response objects, the stored
+ * documents are untouched.
+ */
+async function attachItemSkus(orders) {
+  const productIds = [
+    ...new Set(
+      orders
+        .flatMap((o) => (o.items || []).map((it) => it.productId))
+        .filter(Boolean)
+        .map(String)
+    ),
+  ];
+  if (!productIds.length) return orders;
+
+  const products = await Product.find({ _id: { $in: productIds } })
+    .select("skuNumber variants._id variants.sku")
+    .lean();
+
+  const byProduct = new Map();
+  for (const p of products) {
+    const variants = new Map();
+    for (const v of p.variants || []) if (v && v.sku) variants.set(String(v._id), v.sku);
+    byProduct.set(String(p._id), { parentSku: p.skuNumber || null, variants });
+  }
+
+  for (const o of orders) {
+    for (const it of o.items || []) {
+      const entry = it.productId ? byProduct.get(String(it.productId)) : null;
+      if (!entry) { it.sku = null; continue; }
+      const variantSku = it.variantId ? entry.variants.get(String(it.variantId)) : null;
+      it.sku = variantSku || entry.parentSku || null;
+    }
+  }
+  return orders;
+}
+
 /** GET /api/seller/orders */
 exports.getOrders = async (req, res) => {
   try {
     const filter = sellerScope(req);
     if (req.query.status) filter.status = req.query.status;
-    const rows = await Order.find(filter).sort({ placedAt: -1 }).limit(Math.min(Number(req.query.limit) || 200, 500));
+    // .lean() so the resolved SKU can be attached to the plain rows below. The
+    // serialised shape is unchanged — the schema declares no virtuals.
+    const rows = await Order.find(filter).sort({ placedAt: -1 }).limit(Math.min(Number(req.query.limit) || 200, 500)).lean();
+    await attachItemSkus(rows);
     res.json({ success: true, count: rows.length, data: rows });
   } catch (err) { fail(res, err); }
 };

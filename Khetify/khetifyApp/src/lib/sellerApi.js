@@ -9,7 +9,16 @@ import config from "../../config/config";
 const SELLER_TOKEN_KEY = "sellerToken";
 
 export const getSellerToken = () => localStorage.getItem(SELLER_TOKEN_KEY);
-export const setSellerToken = (t) => localStorage.setItem(SELLER_TOKEN_KEY, t);
+/* The "already asked about live location this session" marker. Cleared on every
+   fresh sign-in so a seller who DENIED is asked again after their next login,
+   while one who ALLOWED is never re-prompted (that answer lives on the account,
+   server-side, and is read from /me). */
+export const SELLER_LOCATION_PROMPT_KEY = "khetify:locationPrompt:seller";
+
+export const setSellerToken = (t) => {
+  localStorage.setItem(SELLER_TOKEN_KEY, t);
+  try { sessionStorage.removeItem(SELLER_LOCATION_PROMPT_KEY); } catch { /* private mode */ }
+};
 export const clearSellerToken = () => localStorage.removeItem(SELLER_TOKEN_KEY);
 export const isSellerAuthed = () => !!getSellerToken();
 
@@ -258,6 +267,13 @@ export const getSellerOrderSourceOptions = (id) => data(api.get(`orders/${id}/so
 // seller picked. Callers that pass a bare status string keep working.
 export const updateSellerOrderStatus = (id, statusOrBody) =>
   data(api.patch(`orders/${id}/status`, typeof statusOrBody === "string" ? { status: statusOrBody } : statusOrBody));
+
+/* ---- live location consent ---- */
+// { status: "granted" | "denied", latitude?, longitude?, accuracy? }
+// Resolve coordinates to a readable address WITHOUT saving — the confirmation
+// step. { latitude, longitude } -> { latitude, longitude, address }
+export const previewSellerLocation = (body) => data(api.post("location/preview", body));
+export const saveSellerLocation = (body) => data(api.patch("location", body));
 
 /* ---- subscription / billing ---- */
 export const getSellerSubscription = () => data(api.get("subscription/me"));
