@@ -259,11 +259,27 @@ async function sellerWarehouseNames(sellerId, warehouseIds) {
    each STATE in its own scheme — there is no national format to check
    against. A regex here would reject real licence numbers and leave those
    sellers unable to record their licence at all, which is far worse than
-   accepting an odd-looking one. They get trim + uppercase + a length cap and
-   nothing more. `re: null` says that is deliberate, not an oversight.
+   accepting an odd-looking one. `re: null` says that is deliberate, not an
+   oversight.
+
+   What those three DO get is a sanity check, not a format check: trim +
+   uppercase, a 4-30 character length, and a character set of letters, digits,
+   hyphen and slash. That accepts every real shape a state uses
+   ("MP/AGRI/2024-1234", "AB/1234-XY") while still refusing a stray "SDF" or an
+   email address pasted into the box.
 
    EVERY field is optional: the check runs only on a non-empty value. */
 const LICENCE_MAX_LEN = 30;
+const LICENCE_MIN_LEN = 4;
+// Hyphen last so it is a literal, not a range.
+const LICENCE_CHARS_RE = /^[A-Z0-9/-]+$/;
+const LICENCE_CHARS_HINT = `Use only letters, digits, - and / (${LICENCE_MIN_LEN}-${LICENCE_MAX_LEN} characters)`;
+
+/* Licences whose check is skipped when the posted value is IDENTICAL to the one
+   already stored — a value recorded before these rules existed must not make the
+   rest of the profile unsaveable (see the write loop). Udyam is deliberately not
+   in this set: its check is unchanged. */
+const LENIENT_WHEN_UNCHANGED = new Set(["tan", "gumasta", "agriculture", "horticulture"]);
 
 const SELLER_LICENCES = [
   { key: "tan",          field: "tanNumber",          file: "tanCertificate",          docType: "tan",          label: "TAN Certificate",
@@ -473,13 +489,29 @@ exports.updateSellerProfile = async (req, res) => {
     for (const L of SELLER_LICENCES) {
       if (b[L.field] === undefined) continue;
       const value = String(b[L.field]).trim().toUpperCase();
+      const stored = String(seller.verification.licences[L.key] || "").trim().toUpperCase();
       // Blank is always allowed — these are optional, and clearing one has to
       // stay possible.
-      if (value && value.length > LICENCE_MAX_LEN) {
-        return res.status(400).json({ success: false, message: `${L.label} number is too long (max ${LICENCE_MAX_LEN} characters)` });
-      }
-      if (value && L.re && !L.re.test(value)) {
-        return res.status(400).json({ success: false, message: L.hint });
+      //
+      // An UNCHANGED value is allowed through even when it fails the checks
+      // below. The profile form re-posts every licence on every save, so a bad
+      // number recorded before these rules existed would otherwise make the
+      // whole page unsaveable — a seller could never fix their phone number
+      // until they also fixed a licence they may not have to hand. Editing that
+      // number brings it back under the rules immediately.
+      const unchanged = value === stored && LENIENT_WHEN_UNCHANGED.has(L.key);
+      if (value && !unchanged) {
+        if (value.length > LICENCE_MAX_LEN) {
+          return res.status(400).json({ success: false, message: `${L.label} number is too long (max ${LICENCE_MAX_LEN} characters)` });
+        }
+        if (L.re) {
+          if (!L.re.test(value)) return res.status(400).json({ success: false, message: L.hint });
+        } else {
+          // No national format — sanity only (see the note above SELLER_LICENCES).
+          if (value.length < LICENCE_MIN_LEN || !LICENCE_CHARS_RE.test(value)) {
+            return res.status(400).json({ success: false, message: `${L.label}: ${LICENCE_CHARS_HINT}` });
+          }
+        }
       }
       seller.verification.licences[L.key] = value;
       // Udyam is ONE number wearing two hats: the registration field and the
@@ -521,22 +553,25 @@ exports.updateSellerProfile = async (req, res) => {
 // req.user.sellerId — never a client-supplied id), mirroring the company's
 // multi-step setup: info → contact → verification → review/submit.
 
-/** PUT /onboarding/info — business profile. All fields required. */
+/** PUT /onboarding/info — business profile. Business legal name + at least one
+ * product category are required. Business type and year started are no longer
+ * collected during onboarding, so they are only written when a caller actually
+ * sends them (the schema keeps both optional). */
 exports.updateSellerInfo = async (req, res) => {
   try {
     const { businessName, businessType, productCategories, yearStarted } = req.body;
-    if (isBlank(businessName)) return res.status(400).json({ success: false, message: "Business name is required" });
-    if (isBlank(businessType)) return res.status(400).json({ success: false, message: "Business type is required" });
+    if (isBlank(businessName)) return res.status(400).json({ success: false, message: "Business legal name is required" });
     if (!Array.isArray(productCategories) || productCategories.filter((c) => !isBlank(c)).length === 0)
       return res.status(400).json({ success: false, message: "Select at least one product category" });
-    if (!isValidYear(yearStarted)) return res.status(400).json({ success: false, message: "Enter a valid 4-digit year started" });
+    if (yearStarted !== undefined && !isValidYear(yearStarted))
+      return res.status(400).json({ success: false, message: "Enter a valid 4-digit year started" });
 
     const set = {
       "sellerInfo.businessName": businessName,
-      "sellerInfo.businessType": businessType,
       "sellerInfo.productCategories": productCategories.filter((c) => !isBlank(c)),
-      "sellerInfo.yearStarted": yearStarted,
     };
+    if (businessType !== undefined) set["sellerInfo.businessType"] = businessType;
+    if (yearStarted !== undefined) set["sellerInfo.yearStarted"] = yearStarted;
 
     const seller = await Seller.findByIdAndUpdate(
       req.user.sellerId,

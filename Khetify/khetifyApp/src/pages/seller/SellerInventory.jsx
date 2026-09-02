@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { STATUS, statusOf, computeInventorySummary, formatINR } from '../../lib/inventoryData';
 import { daysToExpiry, expiryBadge, fmtDate } from '../../lib/imsApi';
-import { getSellerLink, getSellerLots } from '../../lib/sellerApi';
+import { getSellerLots } from '../../lib/sellerApi';
 
 // Seller Inventory — READ-ONLY unified view of the seller's own stock
 // (ownerType "seller"). Stock, lots and expiry batches are one lots-based page:
@@ -24,7 +24,6 @@ const lotKey = (l) =>
 
 const SellerInventory = () => {
   const navigate = useNavigate();
-  const [approved, setApproved] = useState(null);
   const [lots, setLots] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -46,16 +45,7 @@ const SellerInventory = () => {
       .finally(() => setLoading(false));
   }, []);
 
-  const load = useCallback(() => {
-    getSellerLink()
-      .then((r) => {
-        const ok = r?.data?.linkStatus === 'approved';
-        setApproved(ok);
-        if (ok) loadLots(); else setLoading(false);
-      })
-      .catch(() => { setApproved(false); setLoading(false); });
-  }, [loadLots]);
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadLots(); }, [loadLots]);
 
   // One row per lot — deduped, since the same lot may arrive from more than one
   // source. Field names match statusOf/computeInventorySummary's contract.
@@ -112,19 +102,6 @@ const SellerInventory = () => {
     () => filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE),
     [filtered, safePage],
   );
-
-  if (approved === null) return <div className="flex-1 p-8 text-center text-stone-400 font-sora">Loading…</div>;
-  if (!approved) {
-    return (
-      <div className="flex-1 p-4 sm:p-8 bg-white font-sora">
-        <div className="max-w-xl mx-auto mt-10 bg-amber-50 border border-amber-200 rounded-2xl p-6 text-center">
-          <span className="material-symbols-outlined text-amber-500 text-4xl">lock</span>
-          <h2 className="text-lg font-bold text-amber-800 mt-2">Inventory is locked</h2>
-          <p className="text-sm text-amber-700 mt-1">Available after your supplying company approves you.</p>
-        </div>
-      </div>
-    );
-  }
 
   const statusClasses = (s) => (s === STATUS.IN ? 'text-green-600' : s === STATUS.LOW ? 'text-orange-500' : s === STATUS.OUT ? 'text-red-600' : 'text-stone-600');
 

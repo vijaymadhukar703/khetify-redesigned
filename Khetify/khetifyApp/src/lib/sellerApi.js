@@ -47,6 +47,10 @@ export const saveSellerInfo = (body) => data(api.put("onboarding/info", body));
 export const saveSellerContact = (body) => data(api.put("onboarding/contact", body));
 export const saveSellerVerification = (body) => data(api.put("onboarding/verification", body));
 export const submitSellerOnboarding = () => data(api.post("onboarding/submit", {}));
+// Product-category master shared by every seller: the onboarding dropdown reads
+// it, and "Other" appends to it so the next seller sees the new category too.
+export const getSellerCategories = () => data(api.get("categories"));
+export const createSellerCategory = (name) => data(api.post("categories", { name }));
 
 /* ---- companies (derived from PC issuance) ---- */
 // The seller's companies with their PC status (active = certificate issued, or an

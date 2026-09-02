@@ -20,6 +20,7 @@ app.set('trust proxy', 1); // correct client IPs behind a proxy (rate-limit/logs
 const companyRoutes = require("./routes/Company/companyRoutes");
 const productRoutes = require("./routes/Company/productRoutes");
 const hsnRoutes = require("./routes/Master/hsnRoutes");
+const sellerCategoryRoutes = require("./routes/Master/sellerCategoryRoutes"); // seller product-category master (onboarding dropdown)
 
 /* ----- NEW: IMS routes (siblings of Company, NOT inside it) ----- */
 const subscriptionRoutes = require("./routes/Subscription/subscriptionRoutes");
@@ -250,6 +251,9 @@ app.use("/api/seller/warehouses", sellerWarehouseRoutes); // before /api/seller 
 //
 // MUST stay above the /api/seller mount, which would otherwise swallow it.
 app.use("/api/seller/hsn", hsnRoutes); // GST master for the seller portal (same read-only router as /api/hsn)
+// Product-category master for the onboarding dropdown. Like the HSN mount above
+// it must stay ABOVE /api/seller, which would otherwise swallow the path.
+app.use("/api/seller/categories", sellerCategoryRoutes);
 app.use("/api/seller/my-products", sellerMyProductRoutes); // seller's own products + own stock (ungated, free)
 app.use("/api/seller/products", sellerCatalogRoutes); // read-only catalog of the linked company
 app.use("/api/seller/supply-orders", sellerSupplyRoutes); // seller-initiated supply requests

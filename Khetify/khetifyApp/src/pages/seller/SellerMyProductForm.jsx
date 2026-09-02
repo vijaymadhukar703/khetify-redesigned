@@ -355,6 +355,14 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
 
   const HORTI_LABEL = { number: 'Horticulture licence number', certificate: 'Horticulture certificate' };
 
+  /* The product's saved Product value when it is NOT in the current catalogue —
+     i.e. it was chosen from an earlier revision of lib/horticultureProducts.js.
+     The value is stored as a plain string, not an id, so old products keep
+     whatever they were saved with and nothing migrates them. Empty for every
+     product whose value is still on the list (and for a new one). */
+  const legacyValue = formData.horticulture_product && !HORTICULTURE_PRODUCTS.includes(formData.horticulture_product)
+    ? formData.horticulture_product
+    : '';
 
   // Variant attributes. `draft` holds the value currently being typed for that
   // row (committed to `values` on Enter / comma / +); `id` keeps React keys
@@ -979,7 +987,8 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
             <div className="flex-1 min-w-0">
               <h3 className="text-sm font-bold text-amber-800">Horticulture documents required</h3>
               <p className="text-sm text-amber-700 mt-1">
-                Ye product upload karne ke liye pehle profile me jaakar Horticulture licence number aur certificate upload karein.
+                To upload this product, please go to your profile and upload your
+                Horticulture licence number and certificate.
               </p>
               <ul className="mt-3 space-y-1">
                 {hortiMissing.map((k) => (
@@ -1071,13 +1080,22 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
             {/* Optional. Long catalogue, so this one is searchable rather than a
                 plain ThemedSelect; the list lives in lib/horticultureProducts.js. */}
             <div>
-              <label className={labelClass}>Horticulture Product</label>
+              {/* The LABEL says "Product"; the field, the payload key and the
+                  backend's horticultureProduct are unchanged — this is what the
+                  seller reads, not what the system calls it. */}
+              <label className={labelClass}>Product</label>
               <SearchableSelect
                 id="horticulture_product"
                 className={inputClass}
                 value={formData.horticulture_product}
-                placeholder="Select Horticulture Product"
-                options={HORTICULTURE_PRODUCTS}
+                placeholder="Select Product"
+                // A product saved against an older revision of the catalogue
+                // holds a string that is no longer in it. It is prepended so the
+                // seller SEES their current value in the open list too (the
+                // closed field always shows it) and can leave it alone or
+                // replace it — editing an old product must never silently drop
+                // what it was selling.
+                options={legacyValue ? [legacyValue, ...HORTICULTURE_PRODUCTS] : HORTICULTURE_PRODUCTS}
                 onChange={(v) => setFormData(prev => ({ ...prev, horticulture_product: v }))}
               />
               {/* Soft, up-front heads-up — deliberately NOT an error colour and

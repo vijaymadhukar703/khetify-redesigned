@@ -116,7 +116,7 @@ const SellerOutbound = () => {
             <h1 className="text-xl font-bold text-stone-900">Outbound Sales</h1>
             <p className="text-sm text-stone-500">Sell from your stock to customers and dealers. Shipping deducts stock FEFO.</p>
           </div>
-          <PrimaryBtn onClick={() => setCreating(true)}><span className="material-symbols-outlined text-base">add_shopping_cart</span> New Order</PrimaryBtn>
+          {/* <PrimaryBtn onClick={() => setCreating(true)}><span className="material-symbols-outlined text-base">add_shopping_cart</span> New Order</PrimaryBtn> */}
         </div>
 
         <div className="border border-stone-200 rounded-2xl shadow-sm bg-white overflow-hidden">
