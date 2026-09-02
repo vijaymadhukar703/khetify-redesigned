@@ -63,6 +63,36 @@ exports.resendOtp = async (req, res) => {
   }
 };
 
+/**
+ * 📍 LIVE LOCATION — PATCH /api/shop/auth/location
+ *   { status: "granted" | "denied", latitude?, longitude?, accuracy? }
+ *
+ * Returns the updated consumer in the SAME shape as GET /auth/me, so the
+ * storefront can drop it straight into ShopAuthContext — exactly like updateMe.
+ */
+/**
+ * 📍 POST /api/shop/auth/location/preview   { latitude, longitude }
+ * Resolves coordinates to a readable address WITHOUT saving — the confirmation
+ * step before the shopper commits.
+ */
+exports.previewLocation = async (req, res) => {
+  try {
+    const data = await authService.previewLocation(req.body);
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
+  }
+};
+
+exports.updateLocation = async (req, res) => {
+  try {
+    const consumer = await authService.saveLocationAccess(req.consumer.id, req.body);
+    res.json({ success: true, message: "Location preference saved", data: consumer });
+  } catch (err) {
+    res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
+  }
+};
+
 exports.me = async (req, res) => {
   try {
     const consumer = await authService.getMe(req.consumer.id);

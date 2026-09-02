@@ -3,6 +3,8 @@ const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const Consumer = require("../model/Shop/Consumer");
 const { sendMail, smtpConfigured } = require("./mailerService");
+const { buildLocationAccess, applyLocationAccess, publicLocationAccess } = require("./locationAccessService");
+const { reverseGeocode } = require("./reverseGeocodeService");
 
 /**
  * Storefront (customer-shop) auth: register / login with email OR phone +
@@ -47,6 +49,10 @@ function publicConsumer(c) {
     phone: c.phone,
     emailVerified: c.emailVerified,
     addresses: c.addresses || [],
+    // Live-location consent, so the storefront knows whether it still has to
+    // ask. Carried on register / login / me alike, which is what lets the
+    // prompt decide straight from ShopAuthContext with no extra request.
+    locationAccess: publicLocationAccess(c.locationAccess),
   };
 }
 
@@ -243,6 +249,44 @@ async function resendEmailOtp(consumerId) {
   return { otpSent: otp.delivered, smtp: otp.smtp };
 }
 
+/**
+ * LIVE LOCATION CONSENT — what the shopper answered when the storefront asked
+ * for their live location after registering / logging in.
+ *
+ * Denial is an ordinary answer, recorded so the next login knows to ask again.
+ * Nothing else about the account depends on it: a shopper who never shares a
+ * location keeps full access to the dashboard, the cart and checkout.
+ */
+async function saveLocationAccess(consumerId, body) {
+  const patch = await buildLocationAccess(body);
+  const consumer = await Consumer.findById(consumerId);
+  if (!consumer) throw httpErr("Account not found", 404);
+  applyLocationAccess(consumer, patch);
+  await consumer.save();
+  return publicConsumer(consumer);
+}
+
+/**
+ * PREVIEW — resolve coordinates to a readable address WITHOUT saving anything.
+ *
+ * Backs the confirmation step: the shopper sees the state / district / town /
+ * PIN we resolved and decides whether that is really where they are before any
+ * of it is written. Nothing is persisted here, so a shopper who backs out at
+ * the confirmation screen leaves no trace.
+ */
+async function previewLocation(body = {}) {
+  const latitude = Number(body.latitude);
+  const longitude = Number(body.longitude);
+  if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) {
+    throw httpErr("latitude must be a number between -90 and 90", 400);
+  }
+  if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+    throw httpErr("longitude must be a number between -180 and 180", 400);
+  }
+  const address = await reverseGeocode(latitude, longitude);
+  return { latitude, longitude, address: address || null };
+}
+
 async function getMe(consumerId) {
   const consumer = await Consumer.findById(consumerId);
   if (!consumer) throw httpErr("Account not found", 404);
@@ -257,6 +301,8 @@ module.exports = {
   verifyEmailOtp,
   resendEmailOtp,
   getMe,
+  saveLocationAccess,
+  previewLocation,
   publicConsumer,
   signConsumerToken,
 };

@@ -25,6 +25,10 @@ router.get("/auth/me", consumerAuth, auth.me);
 router.patch("/auth/me", consumerAuth, auth.updateMe);
 // Change the account password (current password required).
 router.post("/auth/change-password", consumerAuth, auth.changePassword);
+// 📍 LIVE LOCATION consent (allow / deny + coordinates). Authenticated and
+// scoped to the caller's own account, like the rest of /auth/*.
+router.post("/auth/location/preview", consumerAuth, auth.previewLocation); // resolve, do not save
+router.patch("/auth/location", consumerAuth, auth.updateLocation);
 
 /* ─────────── Protected: addresses, checkout, orders ─────────── */
 router.get("/addresses", consumerAuth, order.listAddresses);

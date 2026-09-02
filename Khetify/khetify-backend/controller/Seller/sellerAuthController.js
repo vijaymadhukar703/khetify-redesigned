@@ -11,6 +11,8 @@ const SellerDocument = require("../../model/PC/SellerDocument");
 const Warehouse = require("../../model/Warehouse/Warehouse");
 const fileService = require("../../services/fileService");
 const path = require("path");
+const { buildLocationAccess, applyLocationAccess, publicLocationAccess } = require("../../services/locationAccessService");
+const { reverseGeocode } = require("../../services/reverseGeocodeService");
 
 /** Seller principal token. Mirrors the company-owner token but carries the
  * seller scope + principalType so authMiddleware/RBAC route it correctly. */
@@ -47,6 +49,10 @@ function publicSeller(seller) {
     linkStatus: seller.linkStatus,
     linkRejectionReason: seller.linkRejectionReason,
     linkApprovalAcknowledged: seller.linkApprovalAcknowledged,
+    // Live-location consent, so the portal knows whether it still has to ask.
+    // Present on BOTH /me and the login response, which is what lets the
+    // prompt decide without an extra round trip.
+    locationAccess: publicLocationAccess(seller.locationAccess),
   };
 }
 
@@ -900,6 +906,75 @@ exports.sellerChangePassword = async (req, res) => {
     res.json({ success: true, message: "Password updated successfully" });
   } catch (error) {
     console.error("sellerChangePassword error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+/* ================= LIVE LOCATION CONSENT =================
+ * PATCH /api/seller/location   { status: "granted"|"denied", latitude?, longitude?, accuracy? }
+ *
+ * Records what the seller answered when the portal asked for their live
+ * location after registering / logging in. Denial is a normal, expected answer
+ * and is stored as such — it is NOT an error, and nothing about the session or
+ * the dashboard depends on it.
+ *
+ * OWNER ONLY. A seller team member (manager / warehouse staff) shares the
+ * seller account's scope but is a different person in a different place;
+ * writing their handset's position onto the seller account would quietly
+ * replace the business's own location. Members are never asked (the portal
+ * skips the prompt for them) and are refused here as well, so a stray call
+ * cannot do it either.
+ */
+exports.updateSellerLocation = async (req, res) => {
+  try {
+    if (String(req.user.id) !== String(req.user.sellerId)) {
+      return res.status(403).json({ success: false, message: "Only the seller account can set its location" });
+    }
+
+    const patch = await buildLocationAccess(req.body);
+
+    const seller = await Seller.findById(req.user.sellerId);
+    if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
+
+    applyLocationAccess(seller, patch);
+    await seller.save();
+
+    res.json({ success: true, data: publicLocationAccess(seller.locationAccess) });
+  } catch (error) {
+    res
+      .status(error.status || 500)
+      .json({ success: false, message: error.status ? error.message : "Server error" });
+  }
+};
+
+/**
+ * POST /api/seller/location/preview   { latitude, longitude }
+ *
+ * Resolves coordinates to a readable address WITHOUT saving. Backs the
+ * confirmation step so the seller can see which place was detected before any
+ * of it is written to their account. Backing out here leaves no trace.
+ *
+ * Owner-only, matching the write — a team member cannot set the seller's
+ * location, so there is nothing for them to preview either.
+ */
+exports.previewSellerLocation = async (req, res) => {
+  try {
+    if (String(req.user.id) !== String(req.user.sellerId)) {
+      return res.status(403).json({ success: false, message: "Only the seller account can set its location" });
+    }
+
+    const latitude = Number(req.body.latitude);
+    const longitude = Number(req.body.longitude);
+    if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) {
+      return res.status(400).json({ success: false, message: "latitude must be a number between -90 and 90" });
+    }
+    if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+      return res.status(400).json({ success: false, message: "longitude must be a number between -180 and 180" });
+    }
+
+    const address = await reverseGeocode(latitude, longitude);
+    res.json({ success: true, data: { latitude, longitude, address: address || null } });
+  } catch (error) {
     res.status(500).json({ success: false, message: "Server error" });
   }
 };

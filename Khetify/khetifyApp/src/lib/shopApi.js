@@ -8,7 +8,16 @@ import config from "../../config/config";
 
 const SHOP_TOKEN_KEY = "shopToken";
 export const getShopToken = () => localStorage.getItem(SHOP_TOKEN_KEY);
-export const setShopToken = (t) => localStorage.setItem(SHOP_TOKEN_KEY, t);
+/* The "already asked about live location this session" marker. Cleared on every
+   fresh sign-in so a shopper who DENIED is asked again after their next login,
+   while one who ALLOWED is never re-prompted (that answer lives on the account,
+   server-side, and arrives with the consumer on login / me). */
+export const SHOP_LOCATION_PROMPT_KEY = "khetify:locationPrompt:shop";
+
+export const setShopToken = (t) => {
+  localStorage.setItem(SHOP_TOKEN_KEY, t);
+  try { sessionStorage.removeItem(SHOP_LOCATION_PROMPT_KEY); } catch { /* private mode */ }
+};
 export const clearShopToken = () => localStorage.removeItem(SHOP_TOKEN_KEY);
 
 /* Multi-select filters (?brand=A&brand=B) must survive the trip to the server.
@@ -81,6 +90,11 @@ export const shopMe = () => data(api.get("auth/me"));
 // editable here — it is the login identifier, so changing it needs its own
 // verify-first flow.
 export const updateShopProfile = (body) => data(api.patch("auth/me", body));
+// 📍 Live location consent. { status: "granted" | "denied", latitude?, longitude?, accuracy? }
+// Returns the updated consumer in the same shape as /auth/me.
+export const saveShopLocation = (body) => data(api.patch("auth/location", body));
+// Resolve coordinates to a readable address WITHOUT saving — confirmation step.
+export const previewShopLocation = (body) => data(api.post("auth/location/preview", body));
 // Changes the account password (current password required).
 export const changeShopPassword = (body) => data(api.post("auth/change-password", body));
 

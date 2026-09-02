@@ -52,7 +52,10 @@ const ATTR_SUGGESTIONS = ['Size', 'Color', 'Material', 'Capacity', 'Finish', 'Mo
 // request, so this allows 6 variants at the full 5 before multer refuses.
 const MAX_VARIANT_IMAGES = 5;
 
-const HSN_MIN = 4;
+// 2 to 8 digits: the GST master carries both HEADING-level (4-digit, the bulk
+// of the notification) and genuine CHAPTER-level (2-digit) entries, so both
+// are valid input. The lookup effect below resolves whichever level is typed.
+const HSN_MIN = 2;
 const HSN_MAX = 8;
 
 // Pure utility: cartesian product of an array of arrays.
@@ -360,7 +363,6 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
   const legacyValue = formData.horticulture_product && !HORTICULTURE_PRODUCTS.includes(formData.horticulture_product)
     ? formData.horticulture_product
     : '';
-
 
   // Variant attributes. `draft` holds the value currently being typed for that
   // row (committed to `values` on Enter / comma / +); `id` keeps React keys
@@ -671,7 +673,7 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
     : null;
   const unitValueLabel = unitMeta ? UNIT_VALUE_LABEL[unitMeta.kind] : '';
 
-  /* HSN accepts DIGITS ONLY, 4 to 8 of them. Filtering on the way in means a
+  /* HSN accepts DIGITS ONLY, 2 to 8 of them. Filtering on the way in means a
      pasted "3102-1000" becomes "31021000" rather than being rejected after the
      fact. Any previous result belongs to the previous code, so it is dropped
      immediately — and the GST goes with it, because that field is filled ONLY
@@ -688,8 +690,17 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
       effect below — this only sets the code and closes the list, so there is
       exactly one place that decides GST. */
   const pickHsn = (code) => {
-    setFormData(prev => ({ ...prev, hsn: code }));
-    setHsn(null);
+    // Reset GST only when the code is actually CHANGING. The reset itself
+    // exists so a leftover rate from a previous code (edit mode, or an
+    // earlier pick) can't accidentally match one of the new code's several
+    // rates and silently skip the picker. But the GST lookup effect below is
+    // keyed on formData.hsn — if the clicked suggestion is the SAME code
+    // already in the field (e.g. typed "07", then clicked "07" in the list),
+    // that value never changes, so the effect never re-fires and a reset here
+    // would wipe the already-resolved GST% with nothing to bring it back.
+    const changed = code !== formData.hsn;
+    setFormData(prev => ({ ...prev, hsn: code, gst: changed ? '0' : prev.gst }));
+    if (changed) setHsn(null);
     setHsnPicked(true);
     setHsnOpen(false);
   };
@@ -732,7 +743,7 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
     return () => document.removeEventListener('mousedown', onDown);
   }, [hsnOpen]);
 
-  /* HSN → GST. Runs once the code reaches a valid 4-8 digits, debounced so
+  /* HSN → GST. Runs once the code reaches a valid 2-8 digits, debounced so
      typing 31021000 fires ONE request, not five.
 
      THE RATE ALWAYS COMES FROM THE DATABASE. There is no rate table in this
@@ -1256,7 +1267,7 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
               />
             </div>
 
-            {/* HSN CODE. 4 to 8 digits; the field itself accepts only digits so
+            {/* HSN CODE. 2 to 8 digits; the field itself accepts only digits so
                 letters, spaces and punctuation can never be typed or pasted in.
                 Entering a valid code looks the GST rate up in the master and
                 reports the outcome directly beneath the field. */}

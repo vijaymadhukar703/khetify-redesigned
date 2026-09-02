@@ -322,19 +322,30 @@ exports.createProduct = async (req, res) => {
     if (req.body.variants && typeof req.body.variants === "string") {
       req.body.variants = JSON.parse(req.body.variants);
     }
-    // Attach per-variant images. The frontend sends all variant image files under
-    // the "variantImages" field (appended multiple times → multer collects them
-    // as an ordered array), and stores each variant's position in that array as
-    // `imageIndex`. Strip imageIndex before saving — it's a transport artefact.
+    // Attach per-variant images. The frontend sends every variant's photos
+    // under the ONE "variantImages" field (appended multiple times → multer
+    // collects them as one ordered array), and each variant records which
+    // POSITIONS in that array are its own:
+    //
+    //   imageIndexes: [0, 2]   several photos (Company Upload Product now)
+    //   imageIndex: 0          exactly one (kept for older clients)
+    //
+    // Both are transport artefacts and neither reaches the document. `images`
+    // is the array the schema stores; `image` mirrors images[0] so the
+    // storefront's colour-swatch reader (and anything else on the single
+    // field) keeps working unchanged for a multi-image variant too.
     if (Array.isArray(req.body.variants) && req.body.variants.length > 0) {
       const variantFiles = req.files?.variantImages ?? [];
+      const fileAt = (i) => (i != null && variantFiles[i]
+        ? (variantFiles[i].location || `uploads/products/${variantFiles[i].filename}`)
+        : null);
       req.body.variants = req.body.variants.map((v) => {
-        const { imageIndex, ...rest } = v;
-        const img =
-          imageIndex != null && variantFiles[imageIndex]
-            ? `uploads/products/${variantFiles[imageIndex].filename}`
-            : undefined;
-        return img != null ? { ...rest, image: img } : rest;
+        const { imageIndex, imageIndexes, ...rest } = v;
+        const indexes = Array.isArray(imageIndexes)
+          ? imageIndexes
+          : (imageIndex != null ? [imageIndex] : []);
+        const images = indexes.map(fileAt).filter(Boolean);
+        return images.length ? { ...rest, images, image: images[0] } : rest;
       });
     }
     // Bulk packaging may arrive as a JSON string from multipart form-data.

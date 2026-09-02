@@ -33,6 +33,42 @@ const productSummary = (o) => {
   return { first: names[0], more: names.length - 1 };
 };
 
+/** The SKU actually sold, as a primary line plus an overflow count — the same
+ *  shape as productSummary above so the two columns read as a pair.
+ *
+ *  The server resolves this per line: the CHOSEN VARIANT's SKU when the order
+ *  named a variant that carries one, the product's own SKU otherwise. Lines
+ *  that resolve to neither are dropped rather than shown blank, so the count
+ *  only ever counts SKUs that exist. */
+const skuSummary = (o) => {
+  const skus = (o.items || []).map((it) => it.sku).filter(Boolean);
+  if (!skus.length) return { first: '—', more: 0 };
+  return { first: skus[0], more: skus.length - 1 };
+};
+
+/** HOW THE CUSTOMER PAID.
+ *
+ *  This column used to print "Online" for every website order, which is the
+ *  SALES CHANNEL, not the payment — a Cash-on-Delivery order placed on the
+ *  storefront was labelled online and read as already paid. The order's own
+ *  `payment.mode` is what checkout actually recorded ("cod" | "online"), so it
+ *  is read directly. The extra modes are the POS/manual ones the Order schema
+ *  allows; an order with no mode recorded shows nothing rather than a guess. */
+const PAYMENT_LABEL = {
+  cod: 'Cash on Delivery',
+  online: 'Online Payment',
+  cash: 'Cash',
+  upi: 'UPI',
+  card: 'Card',
+  credit: 'Credit',
+};
+const paymentMode = (o) => String(o?.payment?.mode || '').toLowerCase();
+const paymentLabel = (o) => {
+  const mode = paymentMode(o);
+  if (!mode) return null;
+  return PAYMENT_LABEL[mode] || mode.replace(/\b\w/g, (c) => c.toUpperCase());
+};
+
 /** One-line delivery address off the order's shipping (or billing) snapshot. */
 const addressLines = (o) => {
   const a = o.shippingAddress || o.billingAddress;
@@ -85,19 +121,25 @@ const SellerOutbound = () => {
 
         <div className="border border-stone-200 rounded-2xl shadow-sm bg-white overflow-hidden">
           <div className="overflow-x-auto no-scrollbar">
-            <table className="w-full text-left border-collapse min-w-[1040px] resp-table">
+            <table className="w-full text-left border-collapse min-w-[1180px] resp-table">
               <thead><tr className="bg-stone-50 border-b border-stone-200">
-                <Th>Invoice</Th><Th>Product</Th><Th>Buyer</Th><Th>Delivery Address</Th><Th>Units</Th><Th>Total</Th><Th>Status</Th><Th>Placed</Th><Th right>Actions</Th>
+                <Th>Invoice</Th><Th>Product</Th><Th>SKU</Th><Th>Buyer</Th><Th>Delivery Address</Th><Th>Units</Th><Th>Total</Th><Th>Status</Th><Th>Placed</Th><Th right>Actions</Th>
               </tr></thead>
               <tbody className="divide-y divide-stone-100">
                 {orders.map((o) => {
                   const prod = productSummary(o);
+                  const sku = skuSummary(o);
+                  const pay = paymentLabel(o);
                   const addr = addressLines(o);
                   return (
                     <tr key={o._id} className="hover:bg-stone-50/40 align-top">
                       <td data-label="Invoice" className="px-6 py-4">
                         <span className="text-sm font-mono font-bold text-stone-800">{o.invoiceNumber || o.orderNumber}</span>
-                        {o.salesChannel === 'website' && <span className="block mt-1 text-[10px] font-bold uppercase tracking-wider text-violet-600">Online</span>}
+                        {pay && (
+                          <span className={`block mt-1 text-[10px] font-bold uppercase tracking-wider ${paymentMode(o) === 'cod' ? 'text-amber-600' : 'text-violet-600'}`}>
+                            {pay}
+                          </span>
+                        )}
                       </td>
                       {/* Product name gets its own column — it was previously
                           invisible here, so a seller had to open the order to
@@ -105,6 +147,13 @@ const SellerOutbound = () => {
                       <td data-label="Product" className="px-6 py-4 max-w-[220px]">
                         <span className="block text-sm font-semibold text-stone-800 truncate" title={prod.first}>{prod.first}</span>
                         {prod.more > 0 && <span className="text-[11px] text-stone-400">+{prod.more} more item{prod.more > 1 ? 's' : ''}</span>}
+                      </td>
+                      {/* The SKU of the exact variant bought — the parent
+                          product's SKU is only used when the line has no
+                          variant SKU of its own. */}
+                      <td data-label="SKU" className="px-6 py-4 max-w-[160px]">
+                        <span className="block text-sm font-mono text-stone-700 truncate" title={sku.first}>{sku.first}</span>
+                        {sku.more > 0 && <span className="text-[11px] text-stone-400">+{sku.more} more</span>}
                       </td>
                       <td data-label="Buyer" className="px-6 py-4 text-sm text-stone-700">{o.customerName || '—'}</td>
                       {/* Where it ships to — the same address the warehouse
@@ -132,8 +181,8 @@ const SellerOutbound = () => {
                     </tr>
                   );
                 })}
-                {!loading && orders.length === 0 && <tr><td colSpan={9} className="px-6 py-12 text-center text-sm text-stone-400">No orders yet.</td></tr>}
-                {loading && <tr><td colSpan={9} className="px-6 py-12 text-center text-sm text-stone-400">Loading…</td></tr>}
+                {!loading && orders.length === 0 && <tr><td colSpan={10} className="px-6 py-12 text-center text-sm text-stone-400">No orders yet.</td></tr>}
+                {loading && <tr><td colSpan={10} className="px-6 py-12 text-center text-sm text-stone-400">Loading…</td></tr>}
               </tbody>
             </table>
           </div>
