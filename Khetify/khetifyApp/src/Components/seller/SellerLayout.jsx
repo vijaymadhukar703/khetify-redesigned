@@ -143,26 +143,25 @@ const SellerLayout = () => {
       : null;
   const showAccount = seller?.isMember && businessName && businessName !== displayName;
   const secondaryLabel = warehouseLabel || (showAccount ? businessName : undefined);
-  const approved = seller?.linkStatus === "approved";
 
-  // Gate a MODULE (approval + plan + cap), returning a sidebar entry or null.
+  /* Gate a MODULE (plan + cap), returning a sidebar entry or null.
+
+     The supplying company's approval is NOT consulted — a module is locked only
+     because the plan does not include it (or because it is not built yet). The
+     backend matches: requireApprovedSeller is off every seller route. */
   const moduleEntry = (m) => {
     if (m.cap && !hasCap(m.cap)) return null; // role lacks access → hide entirely
     const planOk = sellerCan(m.feature);
-    // A `noApproval` module (My Products, Warehouses, Outbound Sales — see
-    // lib/sellerNav.js) never waits on the supplying company. Plan and cap
-    // gating below are untouched for it.
-    const approvalOk = approved || m.noApproval === true;
-    const unlocked = m.live && approvalOk && planOk;
+    const unlocked = m.live && planOk;
     if (unlocked) return { to: m.path, icon: m.icon, title: m.label };
-    const planLocked = m.live && approvalOk && !planOk; // paid module not in owner's plan
+    const planLocked = m.live && !planOk; // paid module not in owner's plan
     return {
-      to: m.path, icon: m.icon, title: m.label, isLocked: true, lockReason: planLocked ? "plan" : "approval",
+      to: m.path, icon: m.icon, title: m.label, isLocked: true, lockReason: planLocked ? "plan" : "phase",
       // Admin sees a "Pro" upgrade affordance; everyone else just a lock.
       lockIcon: planLocked && canBill ? "workspace_premium" : "lock",
       lockTitle: planLocked
         ? (canBill ? "Upgrade your plan to unlock" : "Ask your seller admin to upgrade the plan")
-        : (m.live ? "Available after your company approves you" : `Coming in phase ${m.phase}`),
+        : `Coming in phase ${m.phase}`,
     };
   };
   // Top-level modules in the company-like order (admin-tagged modules excluded).

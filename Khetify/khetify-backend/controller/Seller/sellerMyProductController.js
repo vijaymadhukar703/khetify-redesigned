@@ -1,6 +1,9 @@
 const mongoose = require("mongoose");
 const Product = require("../../model/Company/productModel");
+const Seller = require("../../model/Seller/Seller");
+const SellerDocument = require("../../model/PC/SellerDocument");
 const Inventory = require("../../model/Inventory/Inventory");
+const Warehouse = require("../../model/Warehouse/Warehouse");
 const sellerOwnStockService = require("../../services/sellerOwnStockService");
 const { warehouseScope } = require("../../services/warehouseScope");
 
@@ -22,6 +25,126 @@ const { warehouseScope } = require("../../services/warehouseScope");
  * applies no default, so such a filter would hide them. Company queries are
  * already scoped by companyId.)
  */
+
+/**
+ * HORTICULTURE PAPERWORK GATE — per-product, and only when it applies.
+ *
+ * Picking a "Horticulture Product" on the upload form is a claim that needs
+ * backing: the seller must have a horticulture licence NUMBER and the
+ * CERTIFICATE file for it. Leave the dropdown empty and nothing here runs — the
+ * product saves like any other.
+ *
+ * PRESENCE, NOT STATUS — the same rule middlewares/requireSellerProductDocs.js
+ * follows. SellerDocument.status defaults to "pending" and no admin screen ever
+ * moves it to "verified", so gating on status would block every seller forever.
+ *
+ * WHERE THE NUMBER COMES FROM. Either source counts:
+ *   · Seller.verification.licences.horticulture — the AUTHORITATIVE value, per
+ *     the note in model/PC/SellerDocument.js. The Profile edits this directly.
+ *   · the horticulture SellerDocument's `documentNumber` — a snapshot taken
+ *     when the file was uploaded.
+ * The snapshot alone is not enough to test: sellerAuthController.upsertSellerDoc
+ * writes it ONLY on a file upload, so a seller who uploads the certificate first
+ * and types the number afterwards keeps an empty snapshot forever, with no way
+ * out but re-uploading the same file. The certificate itself has only one
+ * source — the row's fileUrl — so that half is checked there and nowhere else.
+ *
+ * Returns the `missing` array (empty = clear to save).
+ */
+const HORTICULTURE_DOC_TYPE = "horticulture";
+
+const missingHorticultureDocs = async (sellerId) => {
+  const [seller, doc] = await Promise.all([
+    Seller.findById(sellerId).select("verification.licences.horticulture").lean(),
+    SellerDocument.findOne({ sellerId, docType: HORTICULTURE_DOC_TYPE })
+      .sort({ createdAt: -1 })
+      .select("documentNumber fileUrl")
+      .lean(),
+  ]);
+
+  const hasNumber = Boolean(
+    String(seller?.verification?.licences?.horticulture || "").trim() ||
+    String(doc?.documentNumber || "").trim()
+  );
+  // A row can exist with only a fileKey; an upload that never produced a URL is
+  // not a certificate the seller can be said to hold.
+  const hasCertificate = Boolean(String(doc?.fileUrl || "").trim());
+
+  const missing = [];
+  if (!hasNumber) missing.push("number");
+  if (!hasCertificate) missing.push("certificate");
+  return missing;
+};
+
+/**
+ * Runs the gate for one write and, if it fails, sends the 400 itself. Returns
+ * true when the caller must stop. Shared by CREATE and UPDATE so the two can
+ * never drift apart — an edit that ADDS a horticulture product is exactly as
+ * much of a claim as a create that does.
+ */
+const blockedOnHorticultureDocs = async (req, res) => {
+  if (!String(req.body?.horticultureProduct || "").trim()) return false;
+  const missing = await missingHorticultureDocs(req.user.sellerId);
+  if (!missing.length) return false;
+  res.status(400).json({
+    success: false,
+    code: "HORTICULTURE_DOCS_REQUIRED",
+    missing,
+    // Word-for-word what the form's banner shows (SellerMyProductForm.jsx), so
+    // a seller reading this from an API client is told the same thing as one
+    // reading it in the page.
+    message:
+      "To upload this product, please go to your profile and upload your Horticulture licence number and certificate.",
+  });
+  return true;
+};
+
+/**
+ * PAGINATION — shared by the two list endpoints so both read the same params
+ * and answer in the same shape.
+ *
+ * OPT-IN. A caller that sends NEITHER param gets the whole filtered list, as
+ * these endpoints have always returned. That is not politeness, it is a
+ * correctness requirement: SellerAddStockModal calls getMyProducts() bare to
+ * fill its product dropdown, and silently capping that at 10 would hide a
+ * seller's other products from the Add stock form. Paging happens only when
+ * the caller asks for it.
+ *
+ * Both are CLAMPED rather than trusted. `limit` is capped so a hand-typed
+ * ?limit=100000 cannot be used to pull a seller's whole catalog (and its
+ * per-product stock aggregate) in one request; a non-numeric or negative value
+ * falls back to the default instead of producing NaN, which Mongo would reject.
+ *
+ * ORDER MATTERS, and it is the same in both endpoints: build the FILTER, count
+ * the filtered set, then skip/limit. Counting before filtering would report a
+ * total the rows on screen contradict.
+ */
+const DEFAULT_LIMIT = 10;
+const MAX_LIMIT = 100;
+
+const paginate = (req) => {
+  const enabled = req.query.page !== undefined || req.query.limit !== undefined;
+  const rawPage = Number.parseInt(req.query.page, 10);
+  const rawLimit = Number.parseInt(req.query.limit, 10);
+  const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, MAX_LIMIT) : DEFAULT_LIMIT;
+  return { enabled, page, limit, skip: (page - 1) * limit };
+};
+
+/** Applies the page to a query, or leaves it whole when the caller did not
+ *  ask to be paged. */
+const withPage = (query, { enabled, skip, limit }) =>
+  (enabled ? query.skip(skip).limit(limit) : query);
+
+/** The pagination half of a list response. `count` stays what it always was —
+ *  the number of rows in THIS response — and `total` is the filtered set.
+ *  An unpaged call reports the whole set as the one page it is. */
+const pageMeta = ({ enabled, page, limit }, total) => ({
+  page: enabled ? page : 1,
+  limit: enabled ? limit : total,
+  total,
+  totalPages: enabled ? Math.max(1, Math.ceil(total / limit)) : 1,
+});
 
 /** The owner filter. Never build a query in this file without it. */
 const ownerFilter = (req) => ({ ownerType: "seller", sellerId: req.user.sellerId });
@@ -179,10 +302,14 @@ exports.applyUploadedImages = applyUploadedImages;
 /* ================= LIST ================= */
 
 /**
- * GET /api/seller/my-products?search=&category=&status=
+ * GET /api/seller/my-products?search=&category=&status=&page=&limit=
  *
  * The seller's own products, each with `totalStock` — the sum of their
  * availableStock across their own Inventory rows for that product.
+ *
+ * PAGINATED. The filters are applied first and the page is cut from the
+ * filtered set, so `total` always describes what the seller is looking at:
+ * search for one product and the count says 1, not the size of the catalog.
  */
 exports.listMyProducts = async (req, res) => {
   try {
@@ -198,7 +325,14 @@ exports.listMyProducts = async (req, res) => {
       filter.productStatus = req.query.status;
     }
 
-    const products = await Product.find(filter).sort({ createdAt: -1, _id: -1 }).lean();
+    const pg = paginate(req);
+    // Counted against the SAME filter the page is cut from — the two can never
+    // describe different sets.
+    const total = await Product.countDocuments(filter);
+    const products = await withPage(
+      Product.find(filter).sort({ createdAt: -1, _id: -1 }),
+      pg
+    ).lean();
 
     /* ── STOCK PER PRODUCT — ONE aggregate for the page, not one per row ──
        EXPIRED STOCK IS NOT SELLABLE, so it is not part of the total.
@@ -262,7 +396,7 @@ exports.listMyProducts = async (req, res) => {
         lowStockThreshold: s?.threshold || 0,
       };
     });
-    res.json({ success: true, count: data.length, data });
+    res.json({ success: true, count: data.length, ...pageMeta(pg, total), data });
   } catch (err) {
     fail(res, err);
   }
@@ -282,6 +416,7 @@ exports.listMyProducts = async (req, res) => {
  */
 exports.createMyProduct = async (req, res) => {
   try {
+    if (await blockedOnHorticultureDocs(req, res)) return;
     const body = { ...req.body };
     deriveShelfLife(body);
     deriveVariantType(body);
@@ -309,34 +444,43 @@ exports.createMyProduct = async (req, res) => {
 /* ================= STOCK (defined before /:id in the routes) ================= */
 
 /**
- * GET /api/seller/my-products/stock?productId=&warehouseId=&expiring=&expired=
+ * GET /api/seller/my-products/stock?productId=&warehouseId=&expiring=&expired=&page=&limit=
  *
  * The seller's own stock for their OWN products only. Three-way scoped: the
  * Inventory rows are the seller's (ownerType/ownerId), the products are the
  * seller's (ownerType/sellerId), and a warehouse-scoped manager sees only their
  * assigned warehouses.
+ *
+ * PAGINATED, and the expiry chips are part of the filter — so the count beside
+ * "Expiring ≤ 90d" is the number of expiring lots, not the size of the whole
+ * stock list.
  */
 exports.getMyProductStock = async (req, res) => {
   try {
     // Warehouse-level access control, same rule as the seller lots endpoint: a
     // seller_manager sees only their assigned warehouse(s); seller_admin holds
     // "*" and is unscoped (null).
+    const pg = paginate(req);
+    // Every early return below is an EMPTY page, not an unpaginated one — the
+    // caller reads the same fields whether there are rows or not.
+    const emptyPage = { success: true, count: 0, ...pageMeta(pg, 0), data: [] };
+
     const scope = await warehouseScope(req.user);
     const warehouseId = req.query.warehouseId;
     if (scope && warehouseId && !scope.includes(String(warehouseId))) {
-      return res.json({ success: true, count: 0, data: [] });
+      return res.json(emptyPage);
     }
 
     // Which products are mine — the list that keeps company-supplied stock out
     // of this view even though it sits in the same Inventory collection.
     const mine = await Product.find(ownerFilter(req)).select("_id").lean();
-    if (!mine.length) return res.json({ success: true, count: 0, data: [] });
+    if (!mine.length) return res.json(emptyPage);
     let myProductIds = mine.map((p) => p._id);
 
     if (req.query.productId) {
       const wanted = String(req.query.productId);
       myProductIds = myProductIds.filter((id) => String(id) === wanted);
-      if (!myProductIds.length) return res.json({ success: true, count: 0, data: [] });
+      if (!myProductIds.length) return res.json(emptyPage);
     }
 
     const filter = {
@@ -359,15 +503,23 @@ exports.getMyProductStock = async (req, res) => {
     }
 
     const expiryView = req.query.expiring === "true" || req.query.expired === "true";
-    const rows = await Inventory.find(filter)
+    // Counted after every filter above (ownership, warehouse scope, product,
+    // expiry chip) has been folded into `filter`.
+    const total = await Inventory.countDocuments(filter);
+    const query = Inventory.find(filter)
       .populate({
         path: "productId",
         select: "productName product_code category unit unitType packagingType mrp brandName skuNumber productImages ownerType sellerId",
       })
       .populate("warehouseId", "name code address")
-      .sort(expiryView ? { expiryDate: 1 } : { createdAt: -1, _id: -1 });
+      // The _id tiebreak is what makes the sort TOTAL. Without it two lots
+      // sharing an expiry date have no defined order, and Mongo is free to
+      // return them differently between requests — which on a paginated list
+      // shows one row twice and drops another entirely.
+      .sort(expiryView ? { expiryDate: 1, _id: 1 } : { createdAt: -1, _id: -1 });
+    const rows = await withPage(query, pg);
 
-    res.json({ success: true, count: rows.length, data: rows });
+    res.json({ success: true, count: rows.length, ...pageMeta(pg, total), data: rows });
   } catch (err) {
     fail(res, err);
   }
@@ -381,6 +533,24 @@ exports.getMyProductStock = async (req, res) => {
  */
 exports.addMyProductStock = async (req, res) => {
   try {
+    /* NO WAREHOUSE AT ALL — answered first, and separately.
+
+       The service already refuses a missing or non-owned warehouse ("A
+       warehouse is required" / "Warehouse not found for this seller"), so this
+       is not a hole being closed; it is a seller who has not created a single
+       warehouse yet being TOLD that, instead of reading a message that sounds
+       like they picked the wrong one. The form hides Add stock in this state,
+       so reaching here means an API client — which is exactly who needs the
+       message to say what to do. */
+    const warehouseCount = await Warehouse.countDocuments({ sellerId: req.user.sellerId });
+    if (warehouseCount === 0) {
+      return res.status(400).json({
+        success: false,
+        code: "NO_WAREHOUSE",
+        message: "Stock is stored in a warehouse. Create a warehouse first, then record the stock you already hold.",
+      });
+    }
+
     // A warehouse-scoped manager may only stock into a warehouse they are
     // assigned to. (The service separately proves the warehouse is the
     // SELLER's; this is the narrower per-user check on top.)
@@ -483,6 +653,7 @@ exports.updateMyProduct = async (req, res) => {
     if (!mongoose.isValidObjectId(req.params.id)) {
       return res.status(404).json({ success: false, message: "Product not found" });
     }
+    if (await blockedOnHorticultureDocs(req, res)) return;
     const body = { ...req.body };
     deriveShelfLife(body);
     deriveVariantType(body);

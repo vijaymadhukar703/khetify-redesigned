@@ -2,13 +2,17 @@ const express = require("express");
 const router = express.Router();
 
 const auth = require("../../middlewares/authMiddlewares");
-const requireApprovedSeller = require("../../middlewares/requireApprovedSeller");
 const requireWarehouseExists = require("../../middlewares/requireWarehouseExists");
 const authorize = require("../../middlewares/authorize");
+const loadSubscription = require("../../middlewares/loadSubscription");
+const requireFeature = require("../../middlewares/requireFeature");
+const { FEATURES } = require("../../config/plans");
 const { createSellerSupplyOrder, getSellerSupplyOrders, receiveSupply, scanReceiveBox } = require("../../controller/Seller/sellerSupplyController");
 
-// Seller-initiated supply requests. Approved sellers only; scoped to the seller.
-router.use(auth, requireApprovedSeller);
+// Seller-initiated supply requests — a PAID feature (SUPPLY_WORKFLOW). Scoped
+// to the seller; no approval gate. The PLAN is the gate, enforced here and not
+// only in the sidebar, so a locked module cannot be reached by calling the API.
+router.use(auth, loadSubscription, requireFeature(FEATURES.SUPPLY_WORKFLOW));
 // A supply request must name a destination warehouse, so CREATION is blocked
 // until the seller owns one. Same middleware the company Lot gate uses; it
 // resolves the owner from req.user.sellerId here.

@@ -12,8 +12,34 @@ const FEATURE_LABEL = {
   low_stock_alerts: 'Low-stock alerts', inventory_view: 'Inventory views (stock / lots / batches)',
   multi_warehouse: 'Unlimited warehouses', unit_labels: 'Unit labels (print & scan)', batch_expiry: 'Batch & expiry tracking',
   reserved_stock: 'Reserved stock', advanced_analytics: 'Analytics',
+  stock_transfers: 'Stock transfers',
 };
 const PLAN_PRICE = { free: '₹0', pro: '₹999 / mo', enterprise: 'Contact us' };
+
+/* WHAT THE FREE CARD SAYS — a DISPLAY list, not the gate.
+ *
+ * Most of what Free actually gives is not in SELLER_PLANS.free at all: My
+ * Products, Marketplace Listings, Warehouses, Sales, the Dashboard and Team &
+ * Roles carry no `feature` tag, so they are open by being UNTAGGED rather than
+ * by being listed. Deriving this card from the feature array therefore showed
+ * two lines for a plan that unlocks eight modules, and read like Free gives
+ * almost nothing.
+ *
+ * So the Free card is written out by hand. It changes NOTHING about access:
+ * config/plans.js is still the only thing that decides what opens, and Pro /
+ * Enterprise still render straight from it. If the free tier is ever re-cut in
+ * plans.js, this list has to be re-read by a human — which is the cost of
+ * saying more here than the data can say on its own.
+ */
+const FREE_PLAN_DISPLAY = [
+  'My Products (upload & stock)',
+  'Marketplace listings',
+  'Warehouse (1)',
+  'Sales',
+  'Dashboard',
+  'Team & roles',
+  'Low-stock alerts',
+];
 
 const SellerBilling = () => {
   const { sellerPlan, refresh } = useSellerSubscription();
@@ -57,7 +83,9 @@ const SellerBilling = () => {
           const isCurrent = key === sellerPlan;
           const feats = p.features === 'ALL'
             ? ['Everything in Pro', 'All current & future features']
-            : (p.features || []).map((f) => FEATURE_LABEL[f] || f);
+            : key === 'free'
+              ? FREE_PLAN_DISPLAY // hand-written; see the note above
+              : (p.features || []).map((f) => FEATURE_LABEL[f] || f);
           return (
             <div key={key} className={`rounded-2xl border p-6 shadow-sm flex flex-col ${isCurrent ? 'border-[#EA2831] ring-2 ring-[#EA2831]/20' : 'border-stone-200'}`}>
               <div className="flex items-center justify-between">

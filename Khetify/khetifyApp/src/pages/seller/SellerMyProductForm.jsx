@@ -341,6 +341,27 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
   // Duplicate-name warning. Advisory ONLY — it never blocks a save.
   const [dupes, setDupes] = useState([]);
 
+  /* ================= HORTICULTURE PAPERWORK ================= /
+     Picking a Horticulture Product is a claim the seller has to back with a
+     licence NUMBER and a CERTIFICATE in their profile. The real gate is the
+     backend's (sellerMyProductController → HORTICULTURE_DOCS_REQUIRED); this
+     state only renders what it says. `missing` comes STRAIGHT from that
+     response — recomputing it here would just be a second opinion that can
+     disagree with the one that actually blocked the save. */
+  const [hortiMissing, setHortiMissing] = useState(null); // null = never refused
+
+  const HORTI_LABEL = { number: 'Horticulture licence number', certificate: 'Horticulture certificate' };
+
+  /* The product's saved Product value when it is NOT in the current catalogue —
+     i.e. it was chosen from an earlier revision of lib/horticultureProducts.js.
+     The value is stored as a plain string, not an id, so old products keep
+     whatever they were saved with and nothing migrates them. Empty for every
+     product whose value is still on the list (and for a new one). */
+  const legacyValue = formData.horticulture_product && !HORTICULTURE_PRODUCTS.includes(formData.horticulture_product)
+    ? formData.horticulture_product
+    : '';
+
+
   // Variant attributes. `draft` holds the value currently being typed for that
   // row (committed to `values` on Enter / comma / +); `id` keeps React keys
   // stable so removing a row never shuffles input state.
@@ -796,6 +817,12 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
   };
 
   /* ================= SUBMIT ================= */
+  // Clearing the dropdown removes the reason the save was refused, so the
+  // banner goes with it rather than sitting there contradicting the form.
+  useEffect(() => {
+    if (!formData.horticulture_product) setHortiMissing(null);
+  }, [formData.horticulture_product]);
+
   const handleSubmit = async (e) => {
     if (e) e.preventDefault();
     const problem = validate();
@@ -894,9 +921,21 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
       });
       onSaved?.();
     } catch (error) {
+      const body = error.response?.data;
+      // Missing horticulture paperwork is not a generic failure: it is fixable,
+      // and the fix is somewhere else. Render the banner (which keeps every
+      // field intact) instead of an error popup that says nothing actionable.
+      if (body?.code === 'HORTICULTURE_DOCS_REQUIRED') {
+        const missing = Array.isArray(body.missing) && body.missing.length
+          ? body.missing
+          : ['number', 'certificate'];
+        setHortiMissing(missing);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        return;
+      }
       Swal.fire({
         title: isEdit ? 'Could not save' : 'Could not add product',
-        text: error.response?.data?.message || 'Please try again.',
+        text: body?.message || 'Please try again.',
         icon: 'error',
         confirmButtonColor: '#EA2831',
       });
@@ -925,6 +964,55 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
           Back to My Products
         </button>
       </div>
+
+      {/* Refused by the backend for missing horticulture paperwork. Sits ABOVE
+          the form and leaves every field exactly as typed — the seller opens
+          the profile in a NEW TAB, uploads, comes back and presses Save again
+          without re-entering anything. */}
+      {hortiMissing && (
+        <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 p-5 animate__animated animate__fadeIn">
+          <div className="flex items-start gap-3">
+            <span className="material-symbols-outlined text-amber-500">lock</span>
+            <div className="flex-1 min-w-0">
+              <h3 className="text-sm font-bold text-amber-800">Horticulture documents required</h3>
+              <p className="text-sm text-amber-700 mt-1">
+                To upload this product, please go to your profile and upload your
+                Horticulture licence number and certificate.
+              </p>
+              <ul className="mt-3 space-y-1">
+                {hortiMissing.map((k) => (
+                  <li key={k} className="flex items-center gap-2 text-sm text-amber-800">
+                    <span className="material-symbols-outlined text-base text-amber-600">close</span>
+                    <span className="font-medium">{HORTI_LABEL[k] || k}</span>
+                    <span className="text-xs text-amber-600">— missing</span>
+                  </li>
+                ))}
+              </ul>
+              <div className="mt-4 flex flex-wrap items-center gap-3">
+                <a
+                  href="/seller/profile"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 text-xs font-bold px-4 py-2 rounded-lg bg-[#EA2831] text-white hover:bg-[#d11f28] transition-colors"
+                >
+                  <span className="material-symbols-outlined text-base">badge</span> Go to profile
+                </a>
+                <span className="text-xs text-amber-600">
+                  Opens in a new tab — nothing you have filled in here is lost.
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setHortiMissing(null)}
+              aria-label="Dismiss"
+              className="shrink-0 text-amber-500 hover:text-amber-700 transition-colors"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       <form onSubmit={handleSubmit} className="space-y-10 bg-white p-6 sm:p-10 border border-stone-200 rounded-2xl shadow-sm mb-12 animate__animated animate__fadeIn">
 
@@ -981,15 +1069,34 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
             {/* Optional. Long catalogue, so this one is searchable rather than a
                 plain ThemedSelect; the list lives in lib/horticultureProducts.js. */}
             <div>
-              <label className={labelClass}>Horticulture Product</label>
+              {/* The LABEL says "Product"; the field, the payload key and the
+                  backend's horticultureProduct are unchanged — this is what the
+                  seller reads, not what the system calls it. */}
+              <label className={labelClass}>Product</label>
               <SearchableSelect
                 id="horticulture_product"
                 className={inputClass}
                 value={formData.horticulture_product}
-                placeholder="Select Horticulture Product"
-                options={HORTICULTURE_PRODUCTS}
+                placeholder="Select Product"
+                // A product saved against an older revision of the catalogue
+                // holds a string that is no longer in it. It is prepended so the
+                // seller SEES their current value in the open list too (the
+                // closed field always shows it) and can leave it alone or
+                // replace it — editing an old product must never silently drop
+                // what it was selling.
+                options={legacyValue ? [legacyValue, ...HORTICULTURE_PRODUCTS] : HORTICULTURE_PRODUCTS}
                 onChange={(v) => setFormData(prev => ({ ...prev, horticulture_product: v }))}
               />
+              {/* Soft, up-front heads-up — deliberately NOT an error colour and
+                  deliberately NOT a check of its own. The seller learns the
+                  requirement while picking rather than after filling the whole
+                  form; whether they actually HAVE the paperwork is decided by
+                  the backend on save. */}
+              {formData.horticulture_product && (
+                <p className={`${hintClass} text-stone-500`}>
+                  Needs a Horticulture licence number and certificate in your profile.
+                </p>
+              )}
             </div>
             <div className="md:col-span-2">
               <label className={labelClass}>Product Description</label>

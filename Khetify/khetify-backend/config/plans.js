@@ -18,6 +18,12 @@ const FEATURES = {
   API_ACCESS: "api_access",
   UNIT_LABELS: "unit_labels",
   INVENTORY_VIEW: "inventory_view",
+  // Inter-warehouse stock transfers (seller Stock Transfers / Operations).
+  // Its own key rather than a reuse of MULTI_WAREHOUSE: the two are unlocked by
+  // the same plan today, but "how many warehouses you may own" and "may you move
+  // stock between them" are different questions, and the Billing card has to be
+  // able to name the second one.
+  STOCK_TRANSFERS: "stock_transfers",
   // The Administration hub (Sellers, Team & Roles, Returns, …). Paid-only:
   // absent from `free` below, so requireFeature() locks it exactly the way
   // ADVANCED_ANALYTICS locks Analytics.
@@ -66,16 +72,24 @@ const PLANS = {
 /**
  * SELLER plans — a separate free/paid split from the company PLANS above. This
  * is the ONLY place the seller free-vs-paid rule lives; move features between
- * the arrays to re-tier. Free: catalog view, request supply, customers (≤50),
- * basic outbound, and exactly 1 warehouse. Paid: Inventory views, unlimited
- * warehouses, unit Labels, batch/expiry, reserved stock, Analytics.
+ * the arrays to re-tier.
+ *
+ * FREE is what a seller can do with their OWN goods and nothing more: sell them
+ * (ORDER_DEDUCTION → Outbound Sales) and be warned when they run low
+ * (LOW_STOCK_ALERTS). My Products, Warehouses, Marketplace Listings, the
+ * Dashboard and Administration carry no feature at all, so they are free by
+ * being untagged — not by being listed here.
+ *
+ * PAID is everything that involves a SUPPLYING COMPANY's goods or the machinery
+ * around them: the company catalog (BASIC_CATALOG), requesting supply
+ * (SUPPLY_WORKFLOW), moving stock between warehouses (STOCK_TRANSFERS),
+ * Inventory views, unlimited warehouses, unit Labels, batch/expiry, reserved
+ * stock and Analytics.
  */
 const SELLER_PLANS = {
   free: {
     label: "Free",
     features: [
-      FEATURES.BASIC_CATALOG,
-      FEATURES.SUPPLY_WORKFLOW,
       FEATURES.ORDER_DEDUCTION,
       FEATURES.LOW_STOCK_ALERTS,
     ],
@@ -86,6 +100,7 @@ const SELLER_PLANS = {
     features: [
       FEATURES.BASIC_CATALOG,
       FEATURES.SUPPLY_WORKFLOW,
+      FEATURES.STOCK_TRANSFERS,
       FEATURES.ORDER_DEDUCTION,
       FEATURES.LOW_STOCK_ALERTS,
       FEATURES.INVENTORY_VIEW,

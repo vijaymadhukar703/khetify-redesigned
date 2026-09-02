@@ -38,12 +38,48 @@ const fileOk = (f) => !f || (/(pdf|jpe?g|png|webp)$/i.test(f.name) && f.size <= 
    regex would reject real licence numbers and leave those sellers unable to
    record their licence at all. `re: null` on those three is deliberate.
 
-   The server enforces exactly the same two rules (SELLER_LICENCES in
+   Those three still get a sanity check — 4-30 characters of letters, digits,
+   hyphen and slash — which accepts every real state shape ("MP/AGRI/2024-1234",
+   "AB/1234-XY") while refusing a stray "SDF" or a pasted email.
+
+   The server enforces exactly the same rules (SELLER_LICENCES in
    sellerAuthController.js); this is the immediate feedback, not the gate. */
 const LICENCE_MAX_LEN = 30;
+const LICENCE_MIN_LEN = 4;
+// Hyphen last so it is a literal, not a range.
+const LICENCE_CHARS_RE = /^[A-Z0-9/-]+$/;
+const LICENCE_CHARS_HINT = `Use only letters, digits, - and / (${LICENCE_MIN_LEN}-${LICENCE_MAX_LEN} characters)`;
 
-// Letters + digits only, capped. What TAN and the free-form licences share.
+// Letters + digits only, capped. TAN's mask — nothing else can be typed into it.
 const cleanUpper = (v, max) => String(v).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, max);
+
+/* The free-form licences' mask: uppercase, and nothing else.
+
+   Disallowed characters are deliberately NOT stripped as they are typed, and
+   the length is NOT capped. A seller who types "AB@123" or pastes 35 characters
+   is TOLD what is wrong and can fix it; silently eating the @ under the cursor,
+   or quietly cutting a pasted number down to 30 and saving the truncated
+   result, is worse — the second one loses data without anyone noticing.
+   licenceError reports both. TAN keeps its hard 10-character cap, where the
+   length is part of a fixed national format rather than a sanity bound.
+   Surrounding whitespace is trimmed when the value is checked and submitted. */
+const cleanLicence = (v) => String(v).toUpperCase();
+
+/* The one place a licence number is judged, used by the form and nothing else.
+   Returns '' when the value is acceptable. Callers only ever pass a NON-EMPTY
+   value: every one of these fields is optional and a blank must never fail. */
+const licenceError = (r, v) => {
+  if (r.re) return r.re.test(v) ? '' : r.error;
+  if (v.length < LICENCE_MIN_LEN || v.length > LICENCE_MAX_LEN || !LICENCE_CHARS_RE.test(v)) return LICENCE_CHARS_HINT;
+  return '';
+};
+
+/* Licences whose failure is only a WARNING while the value is exactly the one
+   already saved and the seller has not edited it. A number recorded before
+   these rules existed must not make the rest of the profile unsaveable. Udyam
+   is deliberately absent: its check is unchanged. Mirrors
+   LENIENT_WHEN_UNCHANGED in sellerAuthController.js. */
+const LENIENT_WHEN_UNCHANGED = ['tan', 'gumasta', 'agriculture', 'horticulture'];
 
 /* UDYAM types itself: the seller enters MP230001234 (or udyam-mp-23-0001234,
    or anything in between) and the hyphens appear on their own.
@@ -79,7 +115,7 @@ const LICENCE_ROWS = [
     error: 'TAN must be 10 characters — 4 letters, 5 digits, 1 letter (e.g. MUMA12345B)' },
 
   { key: 'gumasta',      label: 'Gumasta / Shop Act',   doc: 'Gumasta certificate',      numField: 'gumastaNumber',      fileField: 'gumastaCertificate',
-    format: (v) => String(v).toUpperCase().slice(0, LICENCE_MAX_LEN), re: null },
+    format: cleanLicence, re: null },
 
   { key: 'udyam',        label: 'Udyam',                doc: 'Udyam certificate',        numField: 'udyamNumber',        fileField: 'udyamCertificate',
     placeholder: 'UDYAM-MP-23-0001234',
@@ -88,11 +124,34 @@ const LICENCE_ROWS = [
     error: 'Udyam number must look like UDYAM-MP-23-0001234' },
 
   { key: 'agriculture',  label: 'Agriculture licence',  doc: 'Agriculture certificate',  numField: 'agricultureNumber',  fileField: 'agricultureCertificate',
-    format: (v) => String(v).toUpperCase().slice(0, LICENCE_MAX_LEN), re: null },
+    format: cleanLicence, re: null },
 
   { key: 'horticulture', label: 'Horticulture licence', doc: 'Horticulture certificate', numField: 'horticultureNumber', fileField: 'horticultureCertificate',
-    format: (v) => String(v).toUpperCase().slice(0, LICENCE_MAX_LEN), re: null },
+    format: cleanLicence, re: null },
 ];
+
+/* WHERE EACH LICENCE ROW IS SHOWN — seller portal only.
+
+   LICENCE_ROWS above is the single definition of the five rows (docType,
+   number field, multer field, format, validation) and is NOT split: the form
+   state, the validation pass and the submit all still walk the whole list, so
+   moving a row between cards cannot change what is sent or how it is checked.
+   These two arrays decide ONLY which card renders which row, and in what
+   order.
+
+   Agriculture and Horticulture sit with GSTIN and PAN because they are the
+   licences this business is actually gated on — middlewares/
+   requireSellerProductDocs needs Agriculture before My Products opens, and
+   the horticulture product gate needs Horticulture. The three that are
+   general business registrations stay in the second card.
+
+   Every key here must exist in LICENCE_ROWS, and between them the two arrays
+   must cover all five — a key in neither would silently stop rendering while
+   its data kept being submitted. */
+const COMPLIANCE_LICENCE_KEYS = ['agriculture', 'horticulture'];
+const OTHER_LICENCE_KEYS = ['udyam', 'tan', 'gumasta'];
+
+const rowsFor = (keys) => keys.map((k) => LICENCE_ROWS.find((r) => r.key === k)).filter(Boolean);
 
 // A certificate scan is capped tighter than the 10MB the other KYC uploads
 // allow; the server enforces the same 5MB, this just says so before the
@@ -142,7 +201,9 @@ const IdField = ({ label, value, editing, onChange, type = 'text', error }) => (
 // `format` (optional) rewrites each keystroke — uppercasing, capping length,
 // inserting Udyam's hyphens. Omitted for GSTIN / PAN, which keep the plain
 // pass-through they have always had.
-const ComplianceRow = ({ label, docLabel, value, editing, onChange, error, url, fileName, fileKey, onFile, fileErr, chosenName, format, placeholder }) => (
+// `warning` is the softer sibling of `error`: shown in amber, and the save is
+// NOT blocked by it (see validate()).
+const ComplianceRow = ({ label, docLabel, value, editing, onChange, error, warning, url, fileName, fileKey, onFile, fileErr, chosenName, format, placeholder }) => (
   <div className="flex flex-wrap items-start justify-between gap-3 py-3.5">
     <div className="min-w-[220px] flex-1">
       <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400">{label}</p>
@@ -150,6 +211,7 @@ const ComplianceRow = ({ label, docLabel, value, editing, onChange, error, url, 
         <input className={`${inputCls} mt-1 font-mono uppercase`} value={value} onChange={(e) => onChange(format ? format(e.target.value) : e.target.value)} placeholder={placeholder || label} />
       ) : (value ? <p className="text-sm font-mono font-medium text-stone-800">{value}</p> : <Empty />)}
       {error && <span className="text-[11px] font-medium text-[#EA2831]">{error}</span>}
+      {!error && warning && <span className="text-[11px] font-medium text-amber-600">{warning} — saved as-is; edit it to correct it</span>}
       <p className="text-[10px] text-stone-400 mt-1">{docLabel}</p>
       {editing && (
         <div className="mt-1">
@@ -175,6 +237,8 @@ const ProfileView = ({ title, model, loading, error, onSave, licences: showLicen
   const [files, setFiles] = useState({});     // { gstCertificate, panFile, otherDocs:[] }
   const [fileNames, setFileNames] = useState({}); // chosen-file labels for display
   const [errs, setErrs] = useState({});        // inline field errors
+  const [warns, setWarns] = useState({});      // inline notices that do NOT block the save
+  const [seeded, setSeeded] = useState({});    // licence numbers as they were when Edit opened
   const [saving, setSaving] = useState(false);
   const [banner, setBanner] = useState(null);  // { ok, msg }
 
@@ -200,6 +264,9 @@ const ProfileView = ({ title, model, loading, error, onSave, licences: showLicen
   const { pct, missing } = profileCompletion(profileChecks(model || {}));
 
   const startEdit = () => {
+    // What the licence numbers were BEFORE this edit — the baseline the
+    // "untouched" rule below compares against.
+    setSeeded(Object.fromEntries(LICENCE_ROWS.map((r) => [r.numField, lic[r.key]?.number || ''])));
     setForm({
       businessName: id.businessName || '', contactPerson: id.contactPerson || '', email: id.email || '',
       phone: id.phone || '', address: id.address || '', gstin: c.gstin || '', pan: c.pan || '',
@@ -210,10 +277,11 @@ const ProfileView = ({ title, model, loading, error, onSave, licences: showLicen
     setFiles({ otherDocs: [] });
     setFileNames({});
     setErrs({});
+    setWarns({});
     setBanner(null);
     setEditing(true);
   };
-  const cancel = () => { setEditing(false); setErrs({}); setFileNames({}); };
+  const cancel = () => { setEditing(false); setErrs({}); setWarns({}); setFileNames({}); };
 
   const set = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
   const pickFile = (k) => (f) => {
@@ -221,6 +289,33 @@ const ProfileView = ({ title, model, loading, error, onSave, licences: showLicen
     setFileNames((n) => ({ ...n, [k]: f?.name }));
     setFiles((prev) => ({ ...prev, [k]: f }));
   };
+  /* ONE licence row, wherever it is rendered.
+
+     Both cards call this, so a row moved between them keeps exactly the same
+     number input, format mask, validation message, Upload / Replace button
+     and View / Download links — there is no second copy of this markup that
+     could drift from the first. */
+  const licenceRow = (r) => (
+    <ComplianceRow
+      key={r.key}
+      label={r.label}
+      docLabel={`${r.doc} · PNG, JPG or PDF`}
+      value={editing ? (form[r.numField] ?? '') : (lic[r.key]?.number || '')}
+      editing={editing}
+      onChange={set(r.numField)}
+      format={r.format}
+      placeholder={r.placeholder}
+      error={errs[r.numField]}
+      warning={warns[r.numField]}
+      url={lic[r.key]?.url}
+      fileName={lic[r.key]?.fileName}
+      fileKey={r.fileField}
+      onFile={pickFile(r.fileField)}
+      fileErr={errs[r.fileField]}
+      chosenName={fileNames[r.fileField]}
+    />
+  );
+
   const pickOthers = (list) => {
     const arr = Array.from(list || []);
     const bad = arr.find((f) => !fileOk(f));
@@ -238,16 +333,26 @@ const ProfileView = ({ title, model, loading, error, onSave, licences: showLicen
     if (!fileOk(files.gstCertificate)) e.gstCertificate = 'PDF or image up to 10MB';
     if (!fileOk(files.panFile)) e.panFile = 'PDF or image up to 10MB';
     if ((files.otherDocs || []).some((f) => !fileOk(f))) e.otherDocs = 'Each file must be a PDF or image up to 10MB';
+    const w = {};
     if (showLicences) {
       LICENCE_ROWS.forEach((r) => {
         if (!licenceFileOk(files[r.fileField])) e[r.fileField] = 'PNG, JPG or PDF up to 5MB';
         // OPTIONAL fields: a blank one is fine and must never block the save.
-        // Only a value that is actually present is checked, and only for the
-        // two formats that have a national standard.
+        // Only a value that is actually present is checked.
         const v = (form[r.numField] || '').trim();
-        if (v && r.re && !r.re.test(v)) e[r.numField] = r.error;
+        if (!v) return;
+        const msg = licenceError(r, v);
+        if (!msg) return;
+        // A value the seller has NOT touched, left exactly as it was saved, is
+        // reported but does not block: it may predate these rules, and it must
+        // not stop them from editing anything else on the page. The moment they
+        // change it, it is theirs and it has to be right. (The server applies
+        // the same rule, so the save it lets through is not rejected there.)
+        if (LENIENT_WHEN_UNCHANGED.includes(r.key) && v === (seeded[r.numField] || '').trim()) w[r.numField] = msg;
+        else e[r.numField] = msg;
       });
     }
+    setWarns(w);
     setErrs(e);
     return Object.values(e).every((x) => !x);
   };
@@ -261,7 +366,10 @@ const ProfileView = ({ title, model, loading, error, onSave, licences: showLicen
     (files.otherDocs || []).forEach((f) => fd.append('otherDocs', f));
     if (showLicences) {
       LICENCE_ROWS.forEach((r) => {
-        fd.append(r.numField, form[r.numField] ?? '');
+        // Trimmed, so a stray leading/trailing space never becomes part of the
+        // stored number — and so an unchanged value still matches the stored one
+        // on the server, which is what keeps its leniency working.
+        fd.append(r.numField, (form[r.numField] ?? '').trim());
         if (files[r.fileField]) fd.append(r.fileField, files[r.fileField]);
       });
     }
@@ -324,7 +432,8 @@ const ProfileView = ({ title, model, loading, error, onSave, licences: showLicen
           </div>
         </Card>
 
-        {/* Compliance — GSTIN / PAN with their documents */}
+        {/* Compliance — GSTIN / PAN, and (seller only) the two licences this
+            portal gates on. */}
         <Card title="Compliance & registration" icon="verified_user">
           <div className="divide-y divide-stone-100">
             <ComplianceRow label="GSTIN" docLabel="GST certificate" value={editing ? form.gstin : c.gstin}
@@ -335,7 +444,16 @@ const ProfileView = ({ title, model, loading, error, onSave, licences: showLicen
               editing={editing} onChange={set('pan')} error={errs.pan}
               url={c.panFileUrl} fileName="pan-file" fileKey="panFile"
               onFile={pickFile('panFile')} fileErr={errs.panFile} chosenName={fileNames.panFile} />
-            {(c.udyam || c.udyamCertificateUrl) && (
+            {/* THE COMPANY'S read-only Udyam row. Seller-side this used to
+                render as well, which showed Udyam TWICE — once here and once
+                as the editable licence row below. Both read the same
+                Seller.verification.udyam and the same "udyam" SellerDocument,
+                so dropping this copy loses no data; the editable row is the
+                better of the two (it can be changed, this one cannot).
+
+                The company profile renders no licence card at all, so for it
+                this stays the ONLY place Udyam appears and must not go. */}
+            {!showLicences && (c.udyam || c.udyamCertificateUrl) && (
               <div className="flex flex-wrap items-center justify-between gap-3 py-3.5">
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400">Udyam / Registration</p>
@@ -345,38 +463,20 @@ const ProfileView = ({ title, model, loading, error, onSave, licences: showLicen
                 <DocLinks url={c.udyamCertificateUrl} fileName="registration-certificate" />
               </div>
             )}
+            {showLicences && rowsFor(COMPLIANCE_LICENCE_KEYS).map(licenceRow)}
           </div>
         </Card>
 
         {/* OTHER REGISTRATION LICENCES — seller only.
 
-            Five FIXED rows rather than a free-form pile, so a seller can see at
-            a glance which registrations are still missing. Built from the same
-            <ComplianceRow> the GSTIN / PAN card uses, so the number input, the
-            Upload / Replace button and the spacing are identical by
-            construction and cannot drift from it. */}
+            FIXED rows rather than a free-form pile, so a seller can see at a
+            glance which registrations are still missing. Rendered by the same
+            licenceRow() the Compliance card uses, so a row reads and behaves
+            identically whichever card it sits in. */}
         {showLicences && (
           <Card title="Other registration documents" icon="assignment">
             <div className="divide-y divide-stone-100">
-              {LICENCE_ROWS.map((r) => (
-                <ComplianceRow
-                  key={r.key}
-                  label={r.label}
-                  docLabel={`${r.doc} · PNG, JPG or PDF`}
-                  value={editing ? (form[r.numField] ?? '') : (lic[r.key]?.number || '')}
-                  editing={editing}
-                  onChange={set(r.numField)}
-                  format={r.format}
-                  placeholder={r.placeholder}
-                  error={errs[r.numField]}
-                  url={lic[r.key]?.url}
-                  fileName={lic[r.key]?.fileName}
-                  fileKey={r.fileField}
-                  onFile={pickFile(r.fileField)}
-                  fileErr={errs[r.fileField]}
-                  chosenName={fileNames[r.fileField]}
-                />
-              ))}
+              {rowsFor(OTHER_LICENCE_KEYS).map(licenceRow)}
             </div>
           </Card>
         )}

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import {
-  getSellerLink, getSellerProducts, getSellerWarehouses, getSellerCompanies,
+  getSellerProducts, getSellerWarehouses, getSellerCompanies,
   createSellerSupplyOrder, getSellerSupplyOrders, receiveSellerSupply, scanSellerReceiveBox,
 } from '../../lib/sellerApi';
 import { Modal, PrimaryBtn, GhostBtn, NoWarehouseNotice } from '../Company/ims/ImsUi';
@@ -151,7 +151,6 @@ const RECEIVABLE = ['dispatched', 'in_transit', 'arrived', 'partially_received']
 // and a destination seller warehouse → POST /api/seller/supply-orders.
 const SellerSupply = () => {
   const [params] = useSearchParams();
-  const [approved, setApproved] = useState(null);
   const [companies, setCompanies] = useState([]); // the seller's APPROVED companies
   const [companyId, setCompanyId] = useState(''); // chosen supplying company
   const [products, setProducts] = useState([]);
@@ -189,28 +188,22 @@ const SellerSupply = () => {
     getSellerSupplyOrders().then((r) => { if (r?.success) setOrders(r.data || []); }).catch(() => {});
   }, []);
 
-  // Approval gate + the seller's APPROVED companies (the ones they can order
-  // from). setState only inside the async callbacks.
+  /* The seller's APPROVED companies (the ones they can order from). There is no
+     approval gate on the PAGE any more — a seller with no supplying company
+     simply has an empty company picker, which the form already reports. */
   const load = useCallback(() => {
-    getSellerLink()
-      .then((r) => {
-        const ok = r?.data?.linkStatus === 'approved';
-        setApproved(ok);
-        if (!ok) return;
-        getSellerCompanies('approved').then((c) => {
-          const list = c?.data || [];
-          setCompanies(list);
-          if (list.length) setCompanyId((cur) => cur || String(list[0]._id)); // default to the first approved
-        }).catch(() => {});
-        // Reuses the page's EXISTING warehouse fetch — no second request just
-        // for the gate. Fails OPEN (checked stays false) so a network blip can
-        // never lock a seller out; the backend rejects the create regardless.
-        getSellerWarehouses()
-          .then((w) => { if (w?.success) { setWarehouses(w.data || []); setWarehousesChecked(true); } })
-          .catch(() => {});
-        refreshOrders();
-      })
-      .catch(() => setApproved(false));
+    getSellerCompanies('approved').then((c) => {
+      const list = c?.data || [];
+      setCompanies(list);
+      if (list.length) setCompanyId((cur) => cur || String(list[0]._id)); // default to the first approved
+    }).catch(() => {});
+    // Reuses the page's EXISTING warehouse fetch — no second request just
+    // for the gate. Fails OPEN (checked stays false) so a network blip can
+    // never lock a seller out; the backend rejects the create regardless.
+    getSellerWarehouses()
+      .then((w) => { if (w?.success) { setWarehouses(w.data || []); setWarehousesChecked(true); } })
+      .catch(() => {});
+    refreshOrders();
   }, [refreshOrders]);
   useEffect(() => { load(); }, [load]);
 
@@ -258,19 +251,6 @@ const SellerSupply = () => {
       refreshOrders();
     } catch (err) { apiError(err); } finally { setBusy(false); }
   };
-
-  if (approved === null) return <div className="flex-1 p-8 text-center text-stone-400 font-sora">Loading…</div>;
-  if (!approved) {
-    return (
-      <div className="flex-1 p-4 sm:p-8 bg-white font-sora">
-        <div className="max-w-xl mx-auto mt-10 bg-amber-50 border border-amber-200 rounded-2xl p-6 text-center">
-          <span className="material-symbols-outlined text-amber-500 text-4xl">lock</span>
-          <h2 className="text-lg font-bold text-amber-800 mt-2">Supply requests are locked</h2>
-          <p className="text-sm text-amber-700 mt-1">Available after your supplying company approves you.</p>
-        </div>
-      </div>
-    );
-  }
 
   const inputCls = 'w-full h-11 px-3 rounded-lg border border-stone-300 outline-none focus:border-[#EA2831] focus:ring-2 focus:ring-[#EA2831]/10 text-sm bg-white';
 

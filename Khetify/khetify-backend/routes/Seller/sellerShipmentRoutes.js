@@ -2,7 +2,6 @@ const express = require("express");
 const router = express.Router();
 
 const auth = require("../../middlewares/authMiddlewares");
-const requireApprovedSeller = require("../../middlewares/requireApprovedSeller");
 const authorize = require("../../middlewares/authorize");
 const ctrl = require("../../controller/Seller/sellerShipmentController");
 const wh = require("../../controller/Seller/sellerWarehouseTransferController");
@@ -13,10 +12,10 @@ const wh = require("../../controller/Seller/sellerWarehouseTransferController");
 // KYC/agreement routes, and loosening it would loosen those too.
 const uploadChallan = require("../../middlewares/uploadAny");
 
-// Seller shipments (supply + inter-warehouse transfers). Approved sellers only.
+// Seller shipments (supply + inter-warehouse transfers).
 // Reads need transfer:read; dispatch + scan-receive need transfer:create
 // (seller_admin "*" / seller_manager "transfer:*").
-router.use(auth, requireApprovedSeller);
+router.use(auth);
 router.get("/", authorize("transfer:read"), ctrl.list);
 router.get("/:id", authorize("transfer:read"), ctrl.get);
 // Seller scan validation (Phase 3 Part 1). Read-only: resolves a scanned label

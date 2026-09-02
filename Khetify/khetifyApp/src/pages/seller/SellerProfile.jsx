@@ -24,9 +24,11 @@ const SellerProfile = () => {
     return r;
   };
 
-  // `licences` switches on the five-row Other registration documents section
-  // (TAN, Gumasta, Udyam, Agriculture, Horticulture). The company profile
-  // renders the same component WITHOUT this prop and is unaffected.
+  // `licences` switches on the seller-only licence rows: Agriculture and
+  // Horticulture inside Compliance & registration, then Udyam, TAN and
+  // Gumasta under Other registration documents (see COMPLIANCE_LICENCE_KEYS /
+  // OTHER_LICENCE_KEYS in ProfileView). The company profile renders the same
+  // component WITHOUT this prop and is unaffected.
   return <ProfileView title="My Profile" model={model} loading={loading} error={error} onSave={onSave} licences />;
 };
 
