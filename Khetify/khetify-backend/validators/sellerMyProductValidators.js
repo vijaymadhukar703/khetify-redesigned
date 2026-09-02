@@ -33,6 +33,30 @@ const optionalDate = (label) =>
     z.coerce.date({ invalid_type_error: `${label} is not a valid date` }).optional()
   );
 
+/* Same result as optionalDate — a real Date — but a blank/missing value is a
+   stated error rather than an absent field, so the caller is told WHICH date is
+   missing instead of a bare "Invalid date".
+
+   Deliberately NOT z.coerce.date({ required_error }): coercion runs
+   `new Date(undefined)` FIRST, so a missing value arrives at validation as an
+   Invalid Date and is reported as a bad date — required_error and
+   invalid_type_error are never consulted, and an errorMap sees the coerced
+   value rather than what was sent. The emptiness has to be judged before any
+   coercion happens, which is what this does. */
+const requiredDate = (label) =>
+  z
+    .any()
+    .superRefine((v, ctx) => {
+      if (v === "" || v === null || v === undefined) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${label} is required` });
+        return;
+      }
+      if (Number.isNaN(new Date(v).getTime())) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${label} is not a valid date` });
+      }
+    })
+    .transform((v) => new Date(v));
+
 /**
  * ONE VARIANT ROW of a multi-variant product.
  *
@@ -169,7 +193,12 @@ const addMyProductStockBody = z.object({
   // Blank → the service mints MYP-<6 chars>.
   lotNumber: z.string().trim().max(120).optional(),
   mfgDate: optionalDate("Manufacturing date"),
-  expiryDate: optionalDate("Expiry date"),
+  /* REQUIRED, unlike everywhere else this field appears. The expiry used to be
+     derived from the product's shelf life when it was left out; it no longer is
+     (see addSellerOwnStock), so an omitted expiry would mean a lot with NO
+     expiry — invisible to the Expiring/Expired filters and to FEFO picking.
+     The seller reads it off the pack and sends it. */
+  expiryDate: requiredDate("Expiry date"),
   qty: z.coerce
     .number({ required_error: "Quantity is required", invalid_type_error: "Quantity must be a number" })
     .positive("Quantity must be greater than zero"),

@@ -133,26 +133,9 @@ async function ledger(inv, { type, quantity, refType, refId, performedBy, note, 
   );
 }
 
-/* ---------- shelf life ---------- */
-
-/**
- * Whole-days shelf life off the product, from the structured `shelfLifeDays`
- * first and the legacy human string ("365 Days", "24 Months") only as a
- * fallback, so pre-existing products still derive an expiry. Returns null when
- * the product carries no usable shelf life.
- */
-function shelfLifeDays(product) {
-  const n = Number(product?.shelfLifeDays);
-  if (Number.isFinite(n) && n > 0) return Math.round(n);
-
-  const raw = String(product?.shelfLife || "").trim();
-  const match = raw.match(/^(\d+(?:\.\d+)?)\s*(day|week|month|year)s?$/i);
-  if (!match) return null;
-  const value = Number(match[1]);
-  if (!Number.isFinite(value) || value <= 0) return null;
-  const perUnit = { day: 1, week: 7, month: 30, year: 365 }[match[2].toLowerCase()];
-  return Math.round(value * perUnit);
-}
+/* The shelf-life → expiry helper that used to live here is GONE, along with the
+   derivation that called it: the seller states the expiry off the pack and it is
+   required. The product's own shelfLife / shelfLifeDays fields are untouched. */
 
 /* ---------- add stock ---------- */
 
@@ -196,7 +179,7 @@ async function addSellerOwnStock({
     ownerType: "seller",
     sellerId,
   })
-    .select("productName shelfLife shelfLifeDays variants")
+    .select("productName variants")
     .lean();
   if (!product) throw httpErr("Product not found in My Products", 404);
 
@@ -232,17 +215,19 @@ async function addSellerOwnStock({
   const mfg = mfgDate ? new Date(mfgDate) : null;
   if (mfg && Number.isNaN(mfg.getTime())) throw httpErr("Invalid manufacturing date", 400);
 
-  let expiry = expiryDate ? new Date(expiryDate) : null;
-  if (expiry && Number.isNaN(expiry.getTime())) throw httpErr("Invalid expiry date", 400);
-  // No expiry given but the product declares a shelf life → derive it from the
-  // manufacturing date, so an expiry-aware view (FEFO, expiring/expired filters)
-  // still has something to work with.
-  if (!expiry && mfg) {
-    const days = shelfLifeDays(product);
-    if (days) expiry = new Date(mfg.getTime() + days * 86400000);
-  }
-  if (expiry && mfg && expiry <= mfg) {
-    throw httpErr("Expiry date must be after the manufacturing date", 400);
+  /* EXPIRY IS THE SELLER'S TO STATE, AND IS REQUIRED.
+
+     It used to be derived from the product's shelf life whenever it was left
+     out (mfgDate + shelfLifeDays). That is gone: a computed date looks exactly
+     like a real one to every downstream reader — FEFO picking, the Expiring
+     ≤90d / Expired filters, the storefront — while nobody ever checked it
+     against the pack. shelfLifeDays stays on the product as a property OF the
+     product; it is no longer a source of lot expiry dates. */
+  const expiry = expiryDate ? new Date(expiryDate) : null;
+  if (!expiry) throw httpErr("Expiry date is required", 400);
+  if (Number.isNaN(expiry.getTime())) throw httpErr("Invalid expiry date", 400);
+  if (mfg && expiry <= mfg) {
+    throw httpErr("Expiry date must be after the manufacturing date.", 400);
   }
 
   const typed = String(lotNumber || "").trim().toUpperCase();

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  getSellerLink, getSellerDashboardSummary, getSellerSupplyOrders, getSellerTransfers,
+  getSellerDashboardSummary, getSellerSupplyOrders, getSellerTransfers,
 } from '../../lib/sellerApi';
 import { formatINR } from '../../lib/imsApi';
 
@@ -72,24 +72,15 @@ const SellerDashboard = () => {
   const [customRange, setCustomRange] = useState({ from: '', to: '' });
   const rangeWindow = useMemo(() => rangeToWindow(range, customRange), [range, customRange]);
 
-  const [approved, setApproved] = useState(null);
   const [kpi, setKpi] = useState(null);
   const [supply, setSupply] = useState([]);
   const [transfers, setTransfers] = useState([]);
 
   useEffect(() => {
     let alive = true;
-    getSellerLink()
-      .then((r) => {
-        const ok = r?.data?.linkStatus === 'approved';
-        if (!alive) return;
-        setApproved(ok);
-        if (!ok) return;
-        getSellerDashboardSummary().then((s) => { if (alive && s?.success) setKpi(s.data); }).catch(() => {});
-        getSellerSupplyOrders().then((s) => { if (alive && s?.success) setSupply(s.data || []); }).catch(() => {});
-        getSellerTransfers().then((t) => { if (alive && t?.success) setTransfers(t.data || []); }).catch(() => {});
-      })
-      .catch(() => { if (alive) setApproved(false); });
+    getSellerDashboardSummary().then((s) => { if (alive && s?.success) setKpi(s.data); }).catch(() => {});
+    getSellerSupplyOrders().then((s) => { if (alive && s?.success) setSupply(s.data || []); }).catch(() => {});
+    getSellerTransfers().then((t) => { if (alive && t?.success) setTransfers(t.data || []); }).catch(() => {});
     return () => { alive = false; };
   }, []);
 
@@ -112,19 +103,6 @@ const SellerDashboard = () => {
   }, [periodSupply]);
 
   const openShipments = ops.pending + ops.inTransit;
-
-  if (approved === null) return <div className="flex-1 p-8 text-center text-stone-400 bg-[#f8f9fa] font-sora">Loading…</div>;
-  if (!approved) {
-    return (
-      <div className="flex-1 p-4 sm:p-8 bg-[#f8f9fa] font-sora">
-        <div className="max-w-xl mx-auto mt-10 bg-amber-50 border border-amber-200 rounded-2xl p-6 text-center shadow-sm">
-          <span className="material-symbols-outlined text-amber-500 text-4xl">lock</span>
-          <h2 className="text-lg font-bold text-amber-800 mt-2">Dashboard is locked</h2>
-          <p className="text-sm text-amber-700 mt-1">Available after your supplying company approves you.</p>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-[#f8f9fa] font-sora">

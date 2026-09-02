@@ -19,7 +19,7 @@ import { movementKind } from '../../lib/movementLabel';
 // helper the company transfer table uses for its challan link.
 import { fileHref } from '../../lib/fileHref';
 import {
-  getSellerLink, getSellerWarehouses,
+  getSellerWarehouses,
   getSellerShipments,
   scanSellerShipment, getSellerScanState,
   previewSellerBoxLabel, dispatchSellerOrder, receiveSellerShipment,
@@ -170,7 +170,6 @@ const SellerOperations = () => {
   const scoped = role !== 'seller_admin' && myWh.length > 0;
   const canActOn = (whId) => { const id = String(whId?._id ?? whId ?? ''); return !scoped || myWh.includes(id); };
 
-  const [approved, setApproved] = useState(null);
   const [shipments, setShipments] = useState([]);
   const [requests, setRequests] = useState([]);
   const [supply, setSupply] = useState([]);
@@ -193,14 +192,8 @@ const SellerOperations = () => {
 
   useEffect(() => {
     let alive = true;
-    getSellerLink().then((r) => {
-      const ok = r?.data?.linkStatus === 'approved';
-      if (!alive) return;
-      setApproved(ok);
-      if (!ok) return;
-      reload();
-      getSellerWarehouses().then((w) => { if (alive) setWarehouses(w?.data || []); }).catch(() => {});
-    }).catch(() => { if (alive) setApproved(false); });
+    reload();
+    getSellerWarehouses().then((w) => { if (alive) setWarehouses(w?.data || []); }).catch(() => {});
     return () => { alive = false; };
   }, [reload]);
 
@@ -226,19 +219,6 @@ const SellerOperations = () => {
   const incomingShipments = useMemo(() => shipments.filter((s) => RECEIVABLE.includes(s.status)), [shipments]);
   const incomingSupply = useMemo(() => supply.filter((o) => SUPPLY_RECEIVABLE.includes(o.status)), [supply]);
   const outgoing = useMemo(() => shipments.filter((s) => DISPATCHABLE.includes(s.status)), [shipments]);
-
-  if (approved === null) return <div className="flex-1 p-8 text-center text-stone-400 font-sora">Loading…</div>;
-  if (!approved) {
-    return (
-      <div className="flex-1 p-4 sm:p-8 bg-white font-sora">
-        <div className="max-w-xl mx-auto mt-10 bg-amber-50 border border-amber-200 rounded-2xl p-6 text-center">
-          <span className="material-symbols-outlined text-amber-500 text-4xl">lock</span>
-          <h2 className="text-lg font-bold text-amber-800 mt-2">Operations are locked</h2>
-          <p className="text-sm text-amber-700 mt-1">Available after your supplying company approves you.</p>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-8 py-6 font-sora">

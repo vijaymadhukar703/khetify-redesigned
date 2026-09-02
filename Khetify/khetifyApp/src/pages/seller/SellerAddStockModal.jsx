@@ -13,16 +13,6 @@ import { getSellerWarehouses } from '../../lib/sellerApi';
  * ledger row — the same shape a company lot has.
  */
 
-// yyyy-mm-dd for <input type="date">, in LOCAL time. toISOString() would shift
-// the date backwards for anyone east of UTC, so a lot made today could be filed
-// as yesterday.
-const toDateInput = (d) => {
-  const dt = d instanceof Date ? d : new Date(d);
-  if (Number.isNaN(dt.getTime())) return '';
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
-};
-
 const SellerAddStockModal = ({ onClose, onDone }) => {
   const [products, setProducts] = useState([]);
   const [warehouses, setWarehouses] = useState([]);
@@ -79,24 +69,18 @@ const SellerAddStockModal = ({ onClose, onDone }) => {
     clearErr('variantSku');
   };
 
-  /* MANUFACTURING DATE → EXPIRY.
-     Filling the mfg date derives the expiry from the product's shelf life, so
-     the seller doesn't compute "today + 730 days" by hand. It is a SUGGESTION,
-     not a lock: the expiry field stays fully editable afterwards, and a value
-     the user has already typed is never overwritten. */
+  /* MANUFACTURING DATE — nothing is derived from it.
+
+     This used to fill the expiry in from the product's shelf life. It no longer
+     does: the expiry printed on the pack is the one that matters, and a
+     computed date that merely looks right is worse than an empty field, because
+     it gets accepted without anybody reading the pack. The seller enters the
+     expiry themselves and it is required (see validate). shelfLifeDays stays on
+     the product as a record of the product; it is simply not a source of
+     expiry dates any more. */
   const onMfgDate = (e) => {
     const value = e.target.value;
-    setF((prev) => {
-      const next = { ...prev, mfgDate: value };
-      const days = Number(product?.shelfLifeDays);
-      if (value && !prev.expiryDate && Number.isFinite(days) && days > 0) {
-        const base = new Date(`${value}T00:00:00`);
-        if (!Number.isNaN(base.getTime())) {
-          next.expiryDate = toDateInput(new Date(base.getTime() + days * 86400000));
-        }
-      }
-      return next;
-    });
+    setF((prev) => ({ ...prev, mfgDate: value }));
     clearErr('mfgDate');
   };
 
@@ -108,8 +92,9 @@ const SellerAddStockModal = ({ onClose, onDone }) => {
     if (!String(f.qty).trim()) next.qty = 'Quantity is required';
     else if (!(Number(f.qty) >= 1)) next.qty = 'Quantity must be at least 1';
     if (!f.warehouseId) next.warehouseId = 'Select a warehouse';
-    if (f.mfgDate && f.expiryDate && new Date(f.expiryDate) <= new Date(f.mfgDate)) {
-      next.expiryDate = 'Expiry must be after the manufacturing date';
+    if (!f.expiryDate) next.expiryDate = 'Expiry date is required';
+    else if (f.mfgDate && new Date(f.expiryDate) <= new Date(f.mfgDate)) {
+      next.expiryDate = 'Expiry date must be after the manufacturing date.';
     }
     setErrors(next);
     return Object.keys(next).length === 0;
@@ -128,7 +113,7 @@ const SellerAddStockModal = ({ onClose, onDone }) => {
         // Blank → the server mints MYP-<6 chars>.
         lotNumber: f.lotNumber.trim() || undefined,
         mfgDate: f.mfgDate,
-        expiryDate: f.expiryDate || undefined,
+        expiryDate: f.expiryDate,
         qty: Number(f.qty),
         lowStockThreshold: String(f.lowStockThreshold).trim() === '' ? 0 : Number(f.lowStockThreshold),
         // Which variant this stock is. Sent only for a product that HAS
@@ -230,14 +215,9 @@ const SellerAddStockModal = ({ onClose, onDone }) => {
                     <Err k="mfgDate" />
                   </div>
                   <div>
-                    <label className={labelClass}>Expiry Date</label>
+                    <label className={labelClass}>Expiry Date <span className="text-[#EA2831]">*</span></label>
                     <input type="date" className={cls('expiryDate')} value={f.expiryDate} onChange={u('expiryDate')} />
                     <Err k="expiryDate" />
-                    {/* {Number(product?.shelfLifeDays) > 0 && (
-                      <p className="text-xs text-stone-400 mt-1">
-                        Filled in from this product&rsquo;s {product.shelfLifeDays}-day shelf life — edit it if the pack says otherwise.
-                      </p>
-                    )} */}
                   </div>
 
                   <div>

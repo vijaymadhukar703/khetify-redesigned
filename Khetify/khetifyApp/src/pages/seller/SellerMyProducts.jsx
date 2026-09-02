@@ -5,20 +5,19 @@ import { getMyProducts, getMyStock } from '../../lib/sellerMyProductApi';
 // The SAME publish/unpublish calls the company-product catalog uses. The only
 // difference is the body: no companyId, because a seller's own product has no
 // company — which is exactly what tells the API this is a My Products listing.
-import { getMyListings, publishListing, unpublishListing } from '../../lib/sellerApi';
+import { getMyListings, publishListing, unpublishListing, getSellerWarehouses } from '../../lib/sellerApi';
 import { getProductImage } from '../../lib/productImage';
 import SellerMyProductForm from './SellerMyProductForm';
 import SellerAddStockModal from './SellerAddStockModal';
 
 // MY PRODUCTS — the seller's OWN products and their own (existing) stock.
 //
-// NO APPROVAL GATE, deliberately. SellerProductCatalog and SellerInventory both
-// open with an `if (!approved)` lock screen because they show a supplying
-// COMPANY's goods, which only exist once that company approves the seller. This
-// page shows what the SELLER uploaded themselves — it belongs to no company, so
-// there is nothing to be approved for. A brand-new seller must be able to use it
-// on day one; that is the whole point of the module. getSellerLink() is
-// therefore never called here.
+// NO APPROVAL GATE — and there is no longer one anywhere on the seller side:
+// every module now opens on the SUBSCRIPTION alone (see lib/sellerNav.js), and
+// the pages that used to show an `if (!approved)` lock screen no longer do.
+// This page never had one to begin with: it shows what the SELLER uploaded
+// themselves, which belongs to no company, so there was never anything to be
+// approved for. getSellerLink() is still never called here.
 //
 // The backend agrees: /api/seller/my-products carries no requireApprovedSeller,
 // no loadSubscription and no requireFeature.
@@ -183,6 +182,350 @@ const StatusPill = ({ status }) => {
   );
 };
 
+// Rows per page, both tabs. Matches SellerProductCatalog's ITEMS_PER_PAGE, so a
+// seller moving between the two screens sees pages of the same size.
+const ITEMS_PER_PAGE = 10;
+
+/**
+ * Pagination footer — the same control SellerProductCatalog renders (read from
+ * there, that file untouched), lifted into a component because two tables use
+ * it here instead of one.
+ *
+ * ONE DIFFERENCE, and it is the important one: the catalog paginates a list it
+ * already holds in memory, while these two tabs are paginated by the SERVER.
+ * So `total` is the API's filtered count, not `rows.length` — the footer says
+ * "Showing 1–10 of 43" while the table holds only the 10 it was sent.
+ */
+const Pagination = ({ page, total, onPage, noun }) => {
+  const totalPages = Math.max(1, Math.ceil(total / ITEMS_PER_PAGE));
+  const goToPage = (p) => onPage(Math.min(Math.max(1, p), totalPages));
+
+  // Compact page list with ellipses for large page counts,
+  // e.g. [1, '…', 4, 5, 6, '…', 12].
+  const getPageNumbers = () => {
+    const pages = [];
+    const windowSize = 1; // pages shown on each side of the current one
+    const add = (p) => pages.push(p);
+
+    add(1);
+    const start = Math.max(2, page - windowSize);
+    const end = Math.min(totalPages - 1, page + windowSize);
+
+    if (start > 2) add('ellipsis-start');
+    for (let p = start; p <= end; p++) add(p);
+    if (end < totalPages - 1) add('ellipsis-end');
+    if (totalPages > 1) add(totalPages);
+
+    return pages;
+  };
+
+  return (
+    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-6 py-4 border-t border-stone-200 bg-stone-50/50">
+      <p className="text-xs text-stone-500">
+        Showing{' '}
+        <span className="font-semibold text-stone-700">
+          {(page - 1) * ITEMS_PER_PAGE + 1}
+          {'–'}
+          {Math.min(page * ITEMS_PER_PAGE, total)}
+        </span>{' '}
+        of <span className="font-semibold text-stone-700">{total}</span> {noun}
+      </p>
+
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => goToPage(page - 1)}
+          disabled={page === 1}
+          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold text-stone-600 border border-stone-200 hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <span className="material-symbols-outlined text-sm">chevron_left</span>
+          Previous
+        </button>
+
+        <div className="flex items-center gap-1 mx-1">
+          {getPageNumbers().map((p, idx) =>
+            typeof p === 'number' ? (
+              <button
+                key={p}
+                onClick={() => goToPage(p)}
+                aria-current={p === page ? 'page' : undefined}
+                className={`min-w-[32px] h-8 px-2 rounded-lg text-xs font-semibold transition-colors ${
+                  p === page
+                    ? 'bg-stone-900 text-white'
+                    : 'text-stone-600 hover:bg-white border border-transparent hover:border-stone-200'
+                }`}
+              >
+                {p}
+              </button>
+            ) : (
+              <span key={`${p}-${idx}`} className="px-1 text-stone-400 text-xs select-none">…</span>
+            )
+          )}
+        </div>
+
+        <button
+          onClick={() => goToPage(page + 1)}
+          disabled={page === totalPages}
+          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold text-stone-600 border border-stone-200 hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          Next
+          <span className="material-symbols-outlined text-sm">chevron_right</span>
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// One label/value pair inside a View modal. Same shape as the catalog's
+// `Detail`, kept local so that file stays untouched.
+const Detail = ({ label, value, accent, mono }) => (
+  <div>
+    <p className="text-[9px] font-bold text-stone-400 uppercase tracking-widest mb-1">{label}</p>
+    <p className={`font-bold text-sm ${accent ? 'text-[#EA2831] font-black text-base' : 'text-stone-900'} ${mono ? 'font-mono uppercase' : ''}`}>
+      {value}
+    </p>
+  </div>
+);
+
+/**
+ * PRODUCT VIEW — read-only. Same shell as SellerProductCatalog's detail modal
+ * (rounded-[2.5rem] card, image carousel, Detail grid on a stone panel); that
+ * file was read for the pattern and not edited.
+ *
+ * Longer than the catalog's because a seller's OWN product carries fields the
+ * company catalog never shows them: GST, dimensions, weight, shelf life, the
+ * three instruction blocks, the horticulture product and the variant list.
+ *
+ * NOTHING here writes. Every field is text — no inputs, no save — so the only
+ * way to change a product stays the Edit pencil.
+ */
+const ProductViewModal = ({ product, onClose }) => {
+  const [imgIndex, setImgIndex] = useState(0);
+  const images = (product.productImages || []).filter(Boolean);
+  const variants = Array.isArray(product.variants) ? product.variants : [];
+
+  // "10 × 5 × 3 cm", or nothing when the seller left the dimensions blank —
+  // "— × — × — cm" would be noise.
+  const dims = [product.length, product.width, product.height].every((v) => v == null || v === '')
+    ? null
+    : `${product.length ?? '—'} × ${product.width ?? '—'} × ${product.height ?? '—'} ${product.dimensionUnit || 'cm'}`;
+
+  return (
+    <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4 font-sora">
+      <div className="bg-white rounded-[2.5rem] max-w-3xl w-full shadow-2xl animate-in fade-in zoom-in duration-200 border border-stone-100 flex flex-col max-h-[95vh] overflow-hidden">
+        <div className="flex justify-between items-start p-8 pb-6 shrink-0 border-b border-stone-100">
+          <div className="min-w-0">
+            <h3 className="font-black text-2xl text-stone-900 tracking-tight">Product Details</h3>
+            <p className="text-[10px] text-stone-400 font-bold uppercase tracking-widest mt-0.5">
+              {product.product_code ? `Code ${product.product_code}` : 'Your own product'}
+            </p>
+          </div>
+          <button onClick={onClose} className="text-stone-400 hover:text-[#EA2831] transition-colors bg-stone-50 p-2 rounded-full flex items-center justify-center" aria-label="Close">
+            <span className="material-symbols-outlined">close</span>
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-8 pt-6 custom-scrollbar">
+          {/* Gallery — every saved image, arrows only when there is more than one. */}
+          <div className="relative w-full h-72 rounded-[2rem] mb-8 overflow-hidden bg-stone-50 border border-stone-100">
+            {images.length > 0 ? (
+              <>
+                <img src={getProductImage(images[Math.min(imgIndex, images.length - 1)])} className="w-full h-full object-contain" alt="product" />
+                {images.length > 1 && (
+                  <>
+                    <div className="absolute inset-y-0 left-0 flex items-center px-4">
+                      <button onClick={() => setImgIndex((i) => (i - 1 + images.length) % images.length)} className="bg-white/90 p-3 rounded-full shadow-xl hover:bg-[#EA2831] hover:text-white transition-all" aria-label="Previous image">
+                        <span className="material-symbols-outlined text-base font-black">chevron_left</span>
+                      </button>
+                    </div>
+                    <div className="absolute inset-y-0 right-0 flex items-center px-4">
+                      <button onClick={() => setImgIndex((i) => (i + 1) % images.length)} className="bg-white/90 p-3 rounded-full shadow-xl hover:bg-[#EA2831] hover:text-white transition-all" aria-label="Next image">
+                        <span className="material-symbols-outlined text-base font-black">chevron_right</span>
+                      </button>
+                    </div>
+                    <span className="absolute bottom-3 right-4 text-[10px] font-bold text-stone-500 bg-white/90 px-2 py-0.5 rounded-full">
+                      {Math.min(imgIndex, images.length - 1) + 1} / {images.length}
+                    </span>
+                  </>
+                )}
+              </>
+            ) : (
+              <div className="w-full h-full flex flex-col items-center justify-center text-stone-300">
+                <span className="material-symbols-outlined text-7xl font-light">image_not_supported</span>
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6 bg-stone-50/50 p-8 rounded-[2.5rem] border border-stone-100">
+            <div className="col-span-1 md:col-span-2 border-b border-stone-200 pb-2 flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest mb-1">Product Identity</p>
+                <p className="font-black text-lg text-stone-900 leading-tight">{product.productName}</p>
+              </div>
+              <StatusPill status={product.productStatus} />
+            </div>
+
+            <Detail label="Price (MRP)" value={`₹${product.mrp ?? '—'}`} accent />
+            <Detail label="GST" value={product.gstPercentage != null ? `${product.gstPercentage}%` : '—'} />
+            <Detail label="Category" value={(product.category || '—').toUpperCase()} />
+            <Detail label="Brand" value={product.brandName || '—'} />
+            <Detail label="HSN Code" value={product.hsnCode || '—'} mono />
+            <Detail label="Packaging" value={product.packagingType || '—'} />
+            <Detail
+              label="Unit"
+              value={unitLabel(product) ? `${product.unitValue ?? ''} ${unitLabel(product)}`.trim() : '—'}
+            />
+            <Detail label="Country of Origin" value={product.countryOrigin || '—'} />
+            <Detail label="Dimensions (L × W × H)" value={dims || '—'} />
+            <Detail
+              label="Gross Weight"
+              value={product.weight != null && product.weight !== '' ? `${product.weight} ${product.weightUnit || 'kg'}` : '—'}
+            />
+            <Detail
+              label="Shelf Life"
+              value={product.shelfLifeDays != null ? `${product.shelfLifeDays} days` : (product.shelfLife || '—')}
+            />
+            {/* Seller-side only — a company product never carries this. */}
+            <Detail label="Horticulture Product" value={product.horticultureProduct || '—'} />
+
+            {/* The three instruction blocks span the grid: they are prose, not
+                one-line values, so a half-width column would wrap them badly. */}
+            <div className="col-span-1 md:col-span-2 grid grid-cols-1 gap-5 border-t border-stone-200 pt-5">
+              <Detail label="Storage Instructions" value={product.storageInstructions || '—'} />
+              <Detail label="Usage Instructions" value={product.usageInstructions || '—'} />
+              <Detail label="Handling / Safety Instructions" value={product.safetyInstructions || '—'} />
+              <Detail label="Description" value={product.description || '—'} />
+            </div>
+          </div>
+
+          {/* VARIANTS — the full list, each with its own photos. Rendered only
+              when the product actually has any, so a single-variant product
+              does not get an empty section. */}
+          {variants.length > 0 && (
+            <div className="mt-8">
+              <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest mb-3">
+                Variants ({variants.length})
+              </p>
+              <div className="space-y-3">
+                {variants.map((v, i) => {
+                  // `images` is the seller form's multi-photo list; `image` is
+                  // the single field the company flow writes. Prefer the list,
+                  // fall back to the one — never show both copies of the same
+                  // photo, which is what concatenating them would do.
+                  const photos = (Array.isArray(v.images) && v.images.length ? v.images : [v.image]).filter(Boolean);
+                  return (
+                    <div key={v._id || v.sku || `${v.label}-${i}`} className="border border-stone-200 rounded-2xl p-4 bg-white">
+                      <div className="flex items-start justify-between gap-4 flex-wrap">
+                        <div className="min-w-0">
+                          <p className="font-bold text-sm text-stone-900">{v.label || '—'}</p>
+                          <p className="text-[10px] text-stone-400 font-mono uppercase tracking-tighter mt-0.5">
+                            {v.sku || 'No SKU'}
+                          </p>
+                        </div>
+                        <p className="text-sm font-black text-stone-900 tabular-nums">₹{v.mrp ?? '—'}</p>
+                      </div>
+                      {photos.length > 0 && (
+                        <div className="flex gap-2 mt-3 flex-wrap">
+                          {photos.map((src, k) => (
+                            <div key={`${src}-${k}`} className="size-14 rounded-lg border border-stone-200 overflow-hidden bg-stone-50">
+                              <img
+                                src={getProductImage(src)}
+                                className="w-full h-full object-cover"
+                                alt={`${v.label || 'variant'} ${k + 1}`}
+                                onError={(e) => { e.target.style.display = 'none'; }}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className="mt-8 flex gap-3 pb-8">
+            <button onClick={onClose} className="flex-1 bg-stone-900 text-white py-4 rounded-3xl font-black text-xs uppercase tracking-widest hover:bg-black transition-all active:scale-[0.98]">
+              Done
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/**
+ * STOCK LOT VIEW — read-only detail for one Inventory row.
+ *
+ * Everything shown is already on the row the table rendered (product and
+ * warehouse arrive populated), so opening this fetches nothing.
+ */
+const StockViewModal = ({ row, now, onClose }) => {
+  const product = row.productId || {};
+  const threshold = Number(row.lowStockThreshold) || 0;
+  const qty = Number(row.availableStock) || 0;
+
+  return (
+    <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4 font-sora">
+      <div className="bg-white rounded-[2.5rem] max-w-2xl w-full shadow-2xl animate-in fade-in zoom-in duration-200 border border-stone-100 flex flex-col max-h-[95vh] overflow-hidden">
+        <div className="flex justify-between items-start p-8 pb-6 shrink-0 border-b border-stone-100">
+          <div className="min-w-0">
+            <h3 className="font-black text-2xl text-stone-900 tracking-tight">Lot Details</h3>
+            <p className="text-[10px] text-stone-400 font-bold uppercase tracking-widest mt-0.5">
+              {row.lotNumber || row.batchNumber || 'No lot number'}
+            </p>
+          </div>
+          <button onClick={onClose} className="text-stone-400 hover:text-[#EA2831] transition-colors bg-stone-50 p-2 rounded-full flex items-center justify-center" aria-label="Close">
+            <span className="material-symbols-outlined">close</span>
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-8 pt-6 custom-scrollbar">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6 bg-stone-50/50 p-8 rounded-[2.5rem] border border-stone-100">
+            <div className="col-span-1 md:col-span-2 border-b border-stone-200 pb-2">
+              <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest mb-1">Product</p>
+              <p className="font-black text-lg text-stone-900 leading-tight">{product.productName || '—'}</p>
+              {product.product_code && (
+                <p className="text-[10px] text-stone-400 font-mono uppercase tracking-tighter mt-0.5">{product.product_code}</p>
+              )}
+            </div>
+
+            <Detail label="Variant" value={row.variantSku || '—'} mono />
+            <Detail label="Lot Number" value={row.lotNumber || row.batchNumber || '—'} mono />
+            <Detail label="Warehouse" value={row.warehouseId?.name || '—'} />
+            <Detail label="Warehouse Code" value={row.warehouseId?.code || '—'} mono />
+            <Detail label="Manufactured" value={fmtDate(row.mfgDate)} />
+
+            {/* The same pill the table shows, judged against the same clock
+                reading, so the two can never disagree about "expired". */}
+            <div>
+              <p className="text-[9px] font-bold text-stone-400 uppercase tracking-widest mb-1">Expiry</p>
+              <ExpiryCell date={row.expiryDate} now={now} />
+            </div>
+
+            <Detail
+              label="Quantity Available"
+              value={`${qty}${unitLabel(product) ? ` ${unitLabel(product)}` : ''}`}
+              accent
+            />
+            {/* 0 means the seller set no alert — say so rather than printing a
+                threshold of zero, which reads like "warn me at empty". */}
+            <Detail label="Low-stock Alert" value={threshold > 0 ? `At ${threshold} or below` : 'Not set'} />
+            <Detail label="Added On" value={fmtDate(row.createdAt)} />
+          </div>
+
+          <div className="mt-8 flex gap-3 pb-8">
+            <button onClick={onClose} className="flex-1 bg-stone-900 text-white py-4 rounded-3xl font-black text-xs uppercase tracking-widest hover:bg-black transition-all active:scale-[0.98]">
+              Done
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const SellerMyProducts = () => {
   // Active tab lives in the URL (?tab=products / ?tab=stock) so the view is
   // linkable and survives a refresh. A hand-typed unknown value falls back to
@@ -192,6 +535,14 @@ const SellerMyProducts = () => {
 
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
+  // SERVER-side pagination for both tabs: the table holds one page, `total` is
+  // the API's count of the whole FILTERED set. Each tab keeps its own page.
+  const [productPage, setProductPage] = useState(1);
+  const [productTotal, setProductTotal] = useState(0);
+  // The product whose read-only View modal is open (null = none). Holds the row
+  // itself — the list endpoint already returns the complete document, variants
+  // included, so opening a product fetches nothing.
+  const [viewing, setViewing] = useState(null);
 
   // Document gate, as reported by the API.
   //   null            — not known yet (first load in flight)
@@ -225,7 +576,22 @@ const SellerMyProducts = () => {
   const [stockAsOf, setStockAsOf] = useState(() => Date.now());
   const [stockLoading, setStockLoading] = useState(true);
   const [stockFilter, setStockFilter] = useState('all');
+  const [stockPage, setStockPage] = useState(1);
+  const [stockTotal, setStockTotal] = useState(0);
+  const [viewingStock, setViewingStock] = useState(null);
   const [addingStock, setAddingStock] = useState(false);
+  /* How many warehouses this seller has — STOCK TAB ONLY.
+
+     Stock lives in a warehouse, so with none there is nothing Add stock could
+     do; the tab offers "create a warehouse" instead of a form that can only
+     fail. The Products tab is deliberately untouched by this: a product is not
+     stored anywhere, and a seller with no warehouse must still be able to
+     upload one.
+
+     null = not known yet (nothing is decided on it), -1 = the lookup failed,
+     which is treated as "has warehouses" — a flaky call must not take the tab
+     away from a seller who does have one. The server is the actual guard. */
+  const [warehouseCount, setWarehouseCount] = useState(null);
 
   // setState only in async callbacks (not synchronously in the effect body) to
   // satisfy react-hooks/set-state-in-effect.
@@ -233,15 +599,32 @@ const SellerMyProducts = () => {
     getMyProducts({
       search: searchTerm || undefined,
       category: categoryFilter !== 'Category' ? categoryFilter : undefined,
+      page: productPage,
+      limit: ITEMS_PER_PAGE,
     })
-      .then((r) => { if (r?.success) setProducts(r.data || []); setDocsGate(false); })
+      .then((r) => {
+        if (r?.success) {
+          // `total` is the filtered count from the server. The || 0 covers an
+          // older response that predates pagination rather than rendering NaN.
+          const total = Number(r.total) || 0;
+          setProducts(r.data || []);
+          setProductTotal(total);
+          // The filtered set can shrink under a page the seller is already
+          // on (a product goes inactive, another tab deletes one). Land them
+          // on the last real page rather than an empty table.
+          const last = Math.max(1, Math.ceil(total / ITEMS_PER_PAGE));
+          if (productPage > last) setProductPage(last);
+        }
+        setDocsGate(false);
+      })
       .catch((err) => {
         const body = err?.response?.data;
         setDocsGate(body?.code === 'DOCS_REQUIRED' ? { missing: body.missing || [] } : false);
         setProducts([]);
+        setProductTotal(0);
       })
       .finally(() => setLoading(false));
-  }, [searchTerm, categoryFilter]);
+  }, [searchTerm, categoryFilter, productPage]);
 
   // setState only in async callbacks (not synchronously in the effect body) to
   // satisfy react-hooks/set-state-in-effect — the spinner is raised by the
@@ -249,11 +632,22 @@ const SellerMyProducts = () => {
   // here.
   const fetchStock = useCallback(() => {
     const chip = STOCK_FILTERS.find((c) => c.key === stockFilter) || STOCK_FILTERS[0];
-    getMyStock(chip.params)
-      .then((r) => { if (r?.success) { setStockRows(r.data || []); setStockAsOf(Date.now()); } })
-      .catch(() => setStockRows([]))
+    // The chip's params go in FIRST so the server filters, then pages — the
+    // count beside "Expired" is the number of expired lots, not of all lots.
+    getMyStock({ ...chip.params, page: stockPage, limit: ITEMS_PER_PAGE })
+      .then((r) => {
+        if (r?.success) {
+          const total = Number(r.total) || 0;
+          setStockRows(r.data || []);
+          setStockTotal(total);
+          setStockAsOf(Date.now());
+          const last = Math.max(1, Math.ceil(total / ITEMS_PER_PAGE));
+          if (stockPage > last) setStockPage(last);
+        }
+      })
+      .catch(() => { setStockRows([]); setStockTotal(0); })
       .finally(() => setStockLoading(false));
-  }, [stockFilter]);
+  }, [stockFilter, stockPage]);
 
   // The seller's listings → Map keyed by productId. The endpoint returns BOTH
   // kinds (company-product and own-product listings); keying by product is all
@@ -274,6 +668,15 @@ const SellerMyProducts = () => {
 
   useEffect(() => { fetchProducts(); }, [fetchProducts]);
   useEffect(() => { fetchListings(); }, [fetchListings]);
+
+  /* PAGE RESETS. A filter change makes the current page meaningless — page 4 of
+     an unfiltered catalog is past the end of a two-result search — so every
+     one of them lands the seller back on page 1.
+
+     Written as event handlers rather than effects on purpose: setting state
+     inside an effect body costs a second render pass (and trips
+     react-hooks/set-state-in-effect), and the change is always something the
+     seller just did, so the handler already knows. */
 
   const openPublish = async (product) => {
     // NOT A BLOCK — just make sure the seller knows. A published product with no
@@ -350,6 +753,19 @@ const SellerMyProducts = () => {
   // shouldn't keep the stock endpoint warm.
   useEffect(() => { if (active.key === 'stock') fetchStock(); }, [active.key, fetchStock]);
 
+  /* Re-read on every entry to the Stock tab, not once: the seller may have gone
+     off to Warehouses (the card below opens it), created one and come back, and
+     the tab has to notice. Reuses the SAME endpoint the Add stock modal fills
+     its warehouse dropdown from — no new one. */
+  useEffect(() => {
+    if (active.key !== 'stock') return undefined;
+    let alive = true;
+    getSellerWarehouses()
+      .then((r) => { if (alive) setWarehouseCount((r?.data || []).length); })
+      .catch(() => { if (alive) setWarehouseCount(-1); });
+    return () => { alive = false; };
+  }, [active.key]);
+
   const hasProducts = products.length > 0;
 
   // Shared by the Products toolbar and the empty state, so the two never drift.
@@ -395,10 +811,10 @@ const SellerMyProducts = () => {
       <div className="flex-1 p-4 sm:p-8 bg-white font-sora">
         <div className="max-w-xl mx-auto mt-10 bg-amber-50 border border-amber-200 rounded-2xl p-6 text-center">
           <span className="material-symbols-outlined text-amber-500 text-4xl">lock</span>
-          <h2 className="text-lg font-bold text-amber-800 mt-2">My Products is locked</h2>
+          <h2 className="text-lg font-bold text-amber-800 mt-2">You can&apos;t upload product</h2>
           <p className="text-sm text-amber-700 mt-1">
-            My Products manage karne ke liye pehle profile me jaakar GST certificate,
-            PAN card aur Agriculture certificate upload karein.
+            To manage My Products, please go to your profile and upload your
+            GST certificate, PAN card and Agriculture certificate.
           </p>
 
           <ul className="mt-5 text-left space-y-2 max-w-xs mx-auto">
@@ -446,7 +862,7 @@ const SellerMyProducts = () => {
           {TABS.map((t) => (
             <button
               key={t.key}
-              onClick={() => setParams({ tab: t.key })}
+              onClick={() => { setParams({ tab: t.key }); setProductPage(1); setStockPage(1); }}
               aria-current={active.key === t.key ? 'page' : undefined}
               className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-bold border-b-2 -mb-px whitespace-nowrap transition-colors ${
                 active.key === t.key
@@ -483,12 +899,12 @@ const SellerMyProducts = () => {
                     placeholder="Search product or brand"
                     type="text"
                     value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
+                    onChange={(e) => { setSearchTerm(e.target.value); setProductPage(1); }}
                   />
                 </div>
                 <select
                   value={categoryFilter}
-                  onChange={(e) => setCategoryFilter(e.target.value)}
+                  onChange={(e) => { setCategoryFilter(e.target.value); setProductPage(1); }}
                   className="border border-stone-200 rounded-xl text-sm py-2.5 bg-white outline-none"
                 >
                   <option>Category</option>
@@ -512,7 +928,7 @@ const SellerMyProducts = () => {
                       <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Stock</th>
                       <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Status</th>
                       <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Marketplace</th>
-                      <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest text-right">Edit</th>
+                      <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest text-right">Actions</th>
                     </tr>
                   </thead>
                   {/* NO stock/quantity column here on purpose — stock lives on
@@ -583,6 +999,17 @@ const SellerMyProducts = () => {
                             })()}
                           </td>
                           <td className="px-6 py-4 text-right cell-actions">
+                            {/* View sits BEFORE Edit: the harmless action is the
+                                one the thumb reaches first. The pencil is
+                                unchanged. */}
+                            <button
+                              type="button"
+                              onClick={() => setViewing(p)}
+                              title="View product"
+                              className="p-2 text-stone-400 hover:text-[#EA2831] transition-colors"
+                            >
+                              <span className="material-symbols-outlined text-xl">visibility</span>
+                            </button>
                             <button
                               type="button"
                               onClick={() => setEditing({ productId: p._id })}
@@ -617,11 +1044,46 @@ const SellerMyProducts = () => {
                   </tbody>
                 </table>
               </div>
+
+              {/* Hidden while loading and when there is nothing to page
+                  through — the empty state should not carry a "0 of 0" footer. */}
+              {!loading && productTotal > 0 && (
+                <Pagination page={productPage} total={productTotal} onPage={setProductPage} noun="products" />
+              )}
             </div>
           </>
         )}
 
-        {!editing && active.key === 'stock' && (
+        {/* Waiting on the warehouse count. Rendered instead of the toolbar so
+            Add stock never flashes into view and then gets pulled away — the
+            same treatment the paperwork gate gets above. */}
+        {!editing && active.key === 'stock' && warehouseCount === null && (
+          <div className="p-8 text-center text-sm text-stone-400">Loading…</div>
+        )}
+
+        {/* NO WAREHOUSE YET. Add stock and the filter chips are both gone: with
+            no warehouse there can be no stock, so there is nothing to add to and
+            nothing to filter. One thing to do, and it is the thing that unblocks
+            the tab. */}
+        {!editing && active.key === 'stock' && warehouseCount === 0 && (
+          <div className="max-w-xl mx-auto mt-6 bg-white border border-stone-200 rounded-3xl p-8 text-center shadow-sm">
+            <span className="material-symbols-outlined text-4xl text-stone-300 font-light">warehouse</span>
+            <h3 className="text-base font-bold text-stone-800 mt-2">Add a warehouse first</h3>
+            <p className="text-sm text-stone-500 mt-1 max-w-sm mx-auto">
+              Stock is stored in a warehouse. Create one first, then you can record
+              the stock you already hold.
+            </p>
+            <Link
+              to="/seller/warehouses"
+              className="inline-flex items-center gap-1.5 mt-5 bg-[#EA2831] text-white text-sm font-bold px-4 py-2.5 rounded-xl hover:bg-[#d0232b] transition-colors"
+            >
+              <span className="material-symbols-outlined text-[18px]">warehouse</span>
+              Go to Warehouses
+            </Link>
+          </div>
+        )}
+
+        {!editing && active.key === 'stock' && warehouseCount !== null && warehouseCount !== 0 && (
           <>
             {/* Toolbar — filter chips left, the primary action right. */}
             <div className="flex flex-col sm:flex-row sm:items-center gap-3">
@@ -630,7 +1092,7 @@ const SellerMyProducts = () => {
                   <button
                     key={chip.key}
                     type="button"
-                    onClick={() => { setStockLoading(true); setStockFilter(chip.key); }}
+                    onClick={() => { setStockLoading(true); setStockFilter(chip.key); setStockPage(1); }}
                     aria-pressed={stockFilter === chip.key}
                     className={`px-4 py-2 text-xs font-bold rounded-full border transition-colors whitespace-nowrap ${
                       stockFilter === chip.key
@@ -657,6 +1119,7 @@ const SellerMyProducts = () => {
                       <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Mfg</th>
                       <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Expiry</th>
                       <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest text-right">Qty</th>
+                      <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-stone-100">
@@ -707,12 +1170,22 @@ const SellerMyProducts = () => {
                             </span>
                           )}
                         </td>
+                        <td className="px-6 py-4 text-right cell-actions">
+                          <button
+                            type="button"
+                            onClick={() => setViewingStock(row)}
+                            title="View lot"
+                            className="p-2 text-stone-400 hover:text-[#EA2831] transition-colors"
+                          >
+                            <span className="material-symbols-outlined text-xl">visibility</span>
+                          </button>
+                        </td>
                       </tr>
                     ))}
 
                     {!stockLoading && stockRows.length === 0 && (
                       <tr>
-                        <td colSpan={7} className="px-6 py-16 text-center">
+                        <td colSpan={8} className="px-6 py-16 text-center">
                           <div className="flex flex-col items-center gap-3">
                             <span className="material-symbols-outlined text-4xl text-stone-300 font-light">inventory</span>
                             <p className="text-sm font-bold text-stone-600">No stock yet</p>
@@ -728,15 +1201,27 @@ const SellerMyProducts = () => {
                     )}
 
                     {stockLoading && (
-                      <tr><td colSpan={7} className="px-6 py-12 text-center text-sm text-stone-400">Loading…</td></tr>
+                      <tr><td colSpan={8} className="px-6 py-12 text-center text-sm text-stone-400">Loading…</td></tr>
                     )}
                   </tbody>
                 </table>
               </div>
+
+              {!stockLoading && stockTotal > 0 && (
+                <Pagination page={stockPage} total={stockTotal} onPage={setStockPage} noun="lots" />
+              )}
             </div>
           </>
         )}
       </div>
+
+      {viewing && <ProductViewModal product={viewing} onClose={() => setViewing(null)} />}
+
+      {/* The lot's expiry pill is judged against the SAME clock reading the
+          table used, so the modal and the row can never disagree. */}
+      {viewingStock && (
+        <StockViewModal row={viewingStock} now={stockAsOf} onClose={() => setViewingStock(null)} />
+      )}
 
       {publishTarget && (
         <div className="fixed inset-0 z-50 bg-black/40 overflow-y-auto p-4 font-sora">

@@ -536,12 +536,12 @@ const CreateWarehouseModal = ({ warehouse, onClose, onDone }) => {
 
   return (
     <Modal title={isEdit ? 'Edit Warehouse' : 'Add Warehouse'} onClose={onClose}>
-      <Field label="Name *">
-        <input className={inputCls} value={f.name} onChange={u('name')} />
+      <Field label="Warehouse Name *">
+        <input className={inputCls} value={f.name} onChange={u('name')} placeholder="e.g. Dhamnod Warehouse" />
         <FieldError msg={wErrors.name} />
       </Field>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4">
-        <Field label="Code"><input className={inputCls} value={f.code} onChange={u('code')} placeholder="WH-JBP" /></Field>
+        <Field label="Warehouse Code"><input className={inputCls} value={f.code} onChange={u('code')} placeholder="WH-JBP" /></Field>
         <Field label="Capacity (units)"><input type="number" className={inputCls} value={f.capacityUnits} onChange={u('capacityUnits')} /></Field>
         <Field label="State *">
           <select className={inputCls} value={stateIso} onChange={onStateChange}>

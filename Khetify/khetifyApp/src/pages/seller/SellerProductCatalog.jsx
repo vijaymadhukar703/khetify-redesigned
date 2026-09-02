@@ -37,7 +37,6 @@ const ITEMS_PER_PAGE = 10;
 
 const SellerProductCatalog = () => {
   const navigate = useNavigate();
-  const [approved, setApproved] = useState(null); // null = loading
   const [companyName, setCompanyName] = useState('');
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -95,20 +94,20 @@ const SellerProductCatalog = () => {
       .catch(() => setListings(new Map()));
   }, []);
 
-  // Resolve approval + linked-company name + companyId once.
+  /* The linked company's NAME + id, for the header and the publish payload.
+     linkStatus is no longer read as a gate: the catalog opens for any signed-in
+     seller and simply lists nothing while no company supplies them. */
   const loadLink = useCallback(() => {
     getSellerLink()
       .then((r) => {
-        const ok = r?.data?.linkStatus === 'approved';
-        setApproved(ok);
         setCompanyName(r?.data?.company?.businessName || '');
         setCompanyId(r?.data?.company?._id || null);
       })
-      .catch(() => setApproved(false));
+      .catch(() => {});
   }, []);
   useEffect(() => { loadLink(); }, [loadLink]);
-  useEffect(() => { if (approved) fetchProducts(); }, [approved, fetchProducts]);
-  useEffect(() => { if (approved) fetchListings(); }, [approved, fetchListings]);
+  useEffect(() => { fetchProducts(); }, [fetchProducts]);
+  useEffect(() => { fetchListings(); }, [fetchListings]);
 
   // Display order only — the fetched `products` state is left untouched so search,
   // category filtering and every existing handler keep working exactly as before.
@@ -220,21 +219,6 @@ const SellerProductCatalog = () => {
       setUnpublishingId(null);
     }
   };
-
-  if (approved === null) {
-    return <div className="flex-1 p-8 text-center text-stone-400 font-sora">Loading…</div>;
-  }
-  if (!approved) {
-    return (
-      <div className="flex-1 p-4 sm:p-8 bg-white font-sora">
-        <div className="max-w-xl mx-auto mt-10 bg-amber-50 border border-amber-200 rounded-2xl p-6 text-center">
-          <span className="material-symbols-outlined text-amber-500 text-4xl">lock</span>
-          <h2 className="text-lg font-bold text-amber-800 mt-2">Product catalog is locked</h2>
-          <p className="text-sm text-amber-700 mt-1">Available after your supplying company approves you.</p>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-stone-50/50 font-sora">

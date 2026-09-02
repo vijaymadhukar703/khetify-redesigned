@@ -4,7 +4,7 @@ import { Modal, Field, inputCls, PrimaryBtn, GhostBtn, Th } from '../Company/ims
 import { formatINR, fmtDate } from '../../lib/imsApi';
 
 import {
-  getSellerLink, getSellerCustomers, createSellerCustomer, updateSellerCustomer, getSellerCustomerHistory,
+  getSellerCustomers, createSellerCustomer, updateSellerCustomer, getSellerCustomerHistory,
 } from '../../lib/sellerApi';
 
 const toast = (icon, title) => Swal.fire({ icon, title, toast: true, position: 'top-end', timer: 2200, showConfirmButton: false });
@@ -78,9 +78,8 @@ const validateCustomer = (f) => {
 };
 
 // Seller's own buyer book — end customers AND dealers. Read+write, scoped to the
-// seller. No "New Sale" here (that's Phase 5b). Gated behind approval.
+// seller. No "New Sale" here (that's Phase 5b).
 const SellerCustomers = () => {
-  const [approved, setApproved] = useState(null);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState('');
@@ -92,31 +91,10 @@ const SellerCustomers = () => {
     getSellerCustomers(term ? { q: term } : {}).then((r) => setRows(listOf(r))).catch(apiError).finally(() => setLoading(false));
   }, []);
 
+  // Load (and re-search) whenever the query changes.
   useEffect(() => {
-    getSellerLink()
-      .then((r) => { setApproved(r?.data?.linkStatus === 'approved'); })
-      .catch(() => setApproved(false));
-  }, []);
-
-  // Load (and re-search) once approved and whenever the query changes. (When
-  // not approved, the locked panel renders and `loading` is irrelevant.)
-  useEffect(() => {
-    if (approved) refresh(q);
-  }, [q, approved, refresh]);
-
-  if (approved === null) return <div className="flex-1 p-8 text-center text-stone-400 font-sora">Loading…</div>;
-  if (!approved) {
-    return (
-      <div className="flex-1 p-4 sm:p-8 bg-white font-sora">
-      
-        <div className="max-w-xl mx-auto mt-10 bg-amber-50 border border-amber-200 rounded-2xl p-6 text-center">
-          <span className="material-symbols-outlined text-amber-500 text-4xl">lock</span>
-          <h2 className="text-lg font-bold text-amber-800 mt-2">Customers &amp; Dealers is locked</h2>
-          <p className="text-sm text-amber-700 mt-1">Available after your supplying company approves you.</p>
-        </div>
-      </div>
-    );
-  }
+    refresh(q);
+  }, [q, refresh]);
 
   return (
     <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-white font-sora">
