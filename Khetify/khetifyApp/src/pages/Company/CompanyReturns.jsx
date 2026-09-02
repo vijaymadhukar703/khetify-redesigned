@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import BackButton from '../../Components/BackButton';
+
 
 const CompanyReturns = () => {
   // 1. Accordion state handle karne ke liye
@@ -46,7 +46,7 @@ const CompanyReturns = () => {
   return (
     <div className="flex-1 overflow-y-auto p-10 bg-white font-sora">
       <div className="max-w-7xl mx-auto space-y-6">
-        <BackButton />
+      
 
         {/* Header */}
         <div className="mb-8">

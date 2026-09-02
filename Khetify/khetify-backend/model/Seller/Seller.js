@@ -65,6 +65,25 @@ const sellerSchema = new mongoose.Schema(
       gstin: { type: String, trim: true },
       pan: { type: String, trim: true },
       udyam: { type: String, trim: true },
+
+      // OTHER REGISTRATION LICENCES — number only; the certificate itself is
+      // a SellerDocument row of the matching docType.
+      //
+      // They live here rather than on that row because a seller may record a
+      // number WITHOUT uploading anything, and a SellerDocument cannot exist
+      // without a file (`fileKey` is required, and stays that way).
+      //
+      // ADDITIVE and optional: every field defaults to undefined, so no
+      // existing seller document changes and nothing that reads
+      // `verification` today is affected.
+      licences: {
+        tan: { type: String, trim: true },
+        gumasta: { type: String, trim: true },
+        udyam: { type: String, trim: true },
+        agriculture: { type: String, trim: true },
+        horticulture: { type: String, trim: true },
+      },
+
       docs: [{ type: String }], // uploaded document urls
     },
 

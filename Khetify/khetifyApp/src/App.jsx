@@ -86,6 +86,7 @@ import SellerCompanies from './pages/seller/SellerCompanies';
 import SellerCertifications from './pages/seller/SellerCertifications';
 import SellerWarehouses from './pages/seller/SellerWarehouses';
 import SellerProductCatalog from './pages/seller/SellerProductCatalog';
+import SellerMyProducts from './pages/seller/SellerMyProducts';
 import SellerListings from './pages/seller/SellerListings';
 import SellerSupply from './pages/seller/SellerSupply';
 import SellerInventory from './pages/seller/SellerInventory';
@@ -101,6 +102,7 @@ import SellerBilling from './pages/seller/SellerBilling';
 import SellerTeam from './pages/seller/SellerTeam';
 import SellerAdministration from './pages/seller/SellerAdministration';
 import SellerProfile from './pages/seller/SellerProfile';
+import SellerWarehouseSettings from './pages/seller/SellerWarehouseSettings';
 import SellerFaq from './pages/seller/SellerFaq';
 import { SellerSubscriptionProvider } from './context/SellerSubscriptionContext';
 import { SellerPermissionProvider } from './context/SellerPermissionContext';
@@ -132,6 +134,13 @@ import ShopWishlist from './pages/shop/ShopWishlist';
 import ShopDashboard from './pages/shop/ShopDashboard';
 import ShopCheckout from './pages/shop/ShopCheckout';
 import ShopOrderSuccess from './pages/shop/ShopOrderSuccess';
+// 💳 Payment screen (online payment lane). Renders whichever gateway the
+//    server has live — Razorpay, or the built-in mock when no keys are set.
+//    Chrome-less like order-success: nothing to wander off to mid-transaction.
+import ShopPayment from './pages/shop/ShopPayment';
+// 🧾 COD confirmation screen — the COD twin of the payment screen, so both
+//    payment lanes get a final look before anything is committed.
+import ShopConfirmOrder from './pages/shop/ShopConfirmOrder';
 import ShopOrders from './pages/shop/ShopOrders';
 import ShopOrderDetail from './pages/shop/ShopOrderDetail';
 import ShopProfile from './pages/shop/ShopProfile';
@@ -318,6 +327,12 @@ function App() {
         <Route element={<RequireSeller><SellerSubscriptionProvider><SellerPermissionProvider><SellerLayout /></SellerPermissionProvider></SellerSubscriptionProvider></RequireSeller>}>
           <Route path="/seller/hub" element={<SellerHub />} />
           <Route path="/seller/profile" element={<SellerProfile />} />
+          {/* SELLER WAREHOUSE — Account Settings (Change / Forgot password).
+              Inside the seller layout, so it inherits the same auth guard and
+              chrome as every other seller page. The menu entry that reaches it
+              is warehouse-role only; the route itself stays plain, exactly like
+              the company Warehouse Settings route. */}
+          <Route path="/seller/settings" element={<SellerWarehouseSettings />} />
           <Route path="/seller/admin" element={<SellerAdministration />} />
           <Route path="/seller/dashboard" element={<SellerDashboard />} />
           <Route path="/seller/analytics" element={<SellerAnalytics />} />
@@ -329,6 +344,7 @@ function App() {
           <Route path="/seller/team" element={<SellerTeam />} />
           <Route path="/seller/warehouses" element={<SellerWarehouses />} />
           <Route path="/seller/products" element={<SellerProductCatalog />} />
+          <Route path="/seller/my-products" element={<SellerMyProducts />} />
           <Route path="/seller/listings" element={<SellerListings />} />
           <Route path="/seller/supply" element={<SellerSupply />} />
           <Route path="/seller/inventory" element={<SellerInventory />} />
@@ -380,6 +396,13 @@ function App() {
           <Route path="orders/:id" element={<RequireConsumer><ShopOrderDetail /></RequireConsumer>} />
           <Route path="profile" element={<RequireConsumer><ShopProfile /></RequireConsumer>} />
           <Route path="checkout" element={<RequireConsumer><ShopCheckout /></RequireConsumer>} />
+          {/* 💳 Online payment. Sits OUTSIDE ShopLayout for the same reason
+              order-success does. No order exists yet at this point — the
+              server creates it only once the payment succeeds. */}
+          <Route path="payment/:paymentId" element={<RequireConsumer><ShopPayment /></RequireConsumer>} />
+          {/* 🧾 COD confirmation. Outside ShopLayout for the same reason as the
+              payment screen: nothing to wander off to mid-commit. */}
+          <Route path="confirm" element={<RequireConsumer><ShopConfirmOrder /></RequireConsumer>} />
           <Route path="login" element={<ShopLogin />} />
           <Route path="register" element={<ShopRegister />} />
             

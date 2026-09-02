@@ -1,5 +1,6 @@
 import React from "react";
 import { Link } from "react-router-dom";
+import { useT } from "../../context/ShopLanguageContext";
 import { getProductImage } from "../../lib/productImage";
 import { useCart } from "../../context/CartContext";
 
@@ -10,6 +11,7 @@ const rupee = (n) => `₹${Number(n || 0).toLocaleString("en-IN")}`;
 // two sellers is two tiles). Out-of-stock tiles cannot be added to the cart.
 export default function ProductCard({ product }) {
   const { addItem } = useCart();
+  const t = useT();
   const img = getProductImage(product.images?.[0]);
   const off = product.mrp && product.mrp > product.price
     ? Math.round(((product.mrp - product.price) / product.mrp) * 100)
@@ -27,10 +29,10 @@ export default function ProductCard({ product }) {
           )}
         </div>
         {off > 0 && (
-          <span className="absolute top-2 left-2 bg-[#EA2831] text-white text-[10px] font-bold px-2 py-0.5 rounded-full">{off}% OFF</span>
+          <span className="absolute top-2 left-2 bg-[#EA2831] text-white text-[10px] font-bold px-2 py-0.5 rounded-full">{t("common.percentOffCaps", { percent: off })}</span>
         )}
         {!inStock && (
-          <span className="absolute top-2 right-2 bg-stone-800/80 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">Out of stock</span>
+          <span className="absolute top-2 right-2 bg-stone-800/80 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">{t("product.outOfStock")}</span>
         )}
       </Link>
 
@@ -49,9 +51,9 @@ export default function ProductCard({ product }) {
 
         <div className="mt-1.5 flex items-center gap-1.5 text-[11px]">
           {inStock ? (
-            <span className="inline-flex items-center gap-1 text-emerald-700 font-semibold"><span className="material-symbols-outlined text-sm">check_circle</span>In stock</span>
+            <span className="inline-flex items-center gap-1 text-emerald-700 font-semibold"><span className="material-symbols-outlined text-sm">check_circle</span>{t("product.inStock")}</span>
           ) : (
-            <span className="inline-flex items-center gap-1 text-stone-400 font-semibold"><span className="material-symbols-outlined text-sm">block</span>Unavailable</span>
+            <span className="inline-flex items-center gap-1 text-stone-400 font-semibold"><span className="material-symbols-outlined text-sm">block</span>{t("product.unavailable")}</span>
           )}
         </div>
 

@@ -89,7 +89,10 @@ const resolveSellerCrumb = (pathname) => {
 const SellerLayout = () => {
   const navigate = useNavigate();
   const { sellerCan } = useSellerSubscription();
-  const { sellerCan: hasCap } = useSellerPermission();
+  // `role` comes from the same context — it decides whether the Settings entry
+  // is offered (warehouse side only). Destructured alongside the existing
+  // capability helper rather than as a second hook call.
+  const { sellerCan: hasCap, role } = useSellerPermission();
   const canBill = hasCap("billing:manage"); // only seller_admin can switch plans
 
   const [seller, setSeller] = useState(null);
@@ -140,22 +143,25 @@ const SellerLayout = () => {
       : null;
   const showAccount = seller?.isMember && businessName && businessName !== displayName;
   const secondaryLabel = warehouseLabel || (showAccount ? businessName : undefined);
-  const approved = seller?.linkStatus === "approved";
 
-  // Gate a MODULE (approval + plan + cap), returning a sidebar entry or null.
+  /* Gate a MODULE (plan + cap), returning a sidebar entry or null.
+
+     The supplying company's approval is NOT consulted — a module is locked only
+     because the plan does not include it (or because it is not built yet). The
+     backend matches: requireApprovedSeller is off every seller route. */
   const moduleEntry = (m) => {
     if (m.cap && !hasCap(m.cap)) return null; // role lacks access → hide entirely
     const planOk = sellerCan(m.feature);
-    const unlocked = m.live && approved && planOk;
+    const unlocked = m.live && planOk;
     if (unlocked) return { to: m.path, icon: m.icon, title: m.label };
-    const planLocked = m.live && approved && !planOk; // paid module not in owner's plan
+    const planLocked = m.live && !planOk; // paid module not in owner's plan
     return {
-      to: m.path, icon: m.icon, title: m.label, isLocked: true, lockReason: planLocked ? "plan" : "approval",
+      to: m.path, icon: m.icon, title: m.label, isLocked: true, lockReason: planLocked ? "plan" : "phase",
       // Admin sees a "Pro" upgrade affordance; everyone else just a lock.
       lockIcon: planLocked && canBill ? "workspace_premium" : "lock",
       lockTitle: planLocked
         ? (canBill ? "Upgrade your plan to unlock" : "Ask your seller admin to upgrade the plan")
-        : (m.live ? "Available after your company approves you" : `Coming in phase ${m.phase}`),
+        : `Coming in phase ${m.phase}`,
     };
   };
   // Top-level modules in the company-like order (admin-tagged modules excluded).
@@ -180,15 +186,33 @@ const SellerLayout = () => {
     if (e.lockReason === "plan" && canBill) navigate("/seller/billing");
   };
 
+  /**
+   * SETTINGS IS FOR THE WAREHOUSE SIDE ONLY.
+   *
+   * A seller WAREHOUSE MANAGER is a `User` with their own password, so changing
+   * or resetting it is a real need. A seller_admin signs in as the seller
+   * ACCOUNT itself — its token's `id` is the Seller record, not a User — so
+   * /api/users/change-password would not find an account for them and the page
+   * would be a dead end. The entry is therefore gated to the warehouse role
+   * rather than shown to everyone, which is also exactly the brief: add it to
+   * the Seller Warehouse, not to the ordinary seller side.
+   *
+   * The same rule that already decides a warehouse-scoped view elsewhere in the
+   * portal — anyone who is not seller_admin and is a member.
+   */
+  const isWarehouseSide = role !== "seller_admin" && !!seller?.isMember;
+
   // Mirror the company dropdown: Profile + Administration (when the role can see
   // ≥1 admin section) + Logout. Administration deep-links to the existing seller
-  // admin hub.
+  // admin hub. Settings is appended for the warehouse side; the three existing
+  // entries are untouched and keep their order.
   const profile = {
     name: displayName,
     secondary: secondaryLabel,
     menuItems: [
       { icon: "person", label: "Profile", onClick: () => navigate("/seller/profile") },
       ...(adminVisible ? [{ icon: "apps", label: "Administration", onClick: () => navigate(SELLER_ADMIN_NAV.path) }] : []),
+      ...(isWarehouseSide ? [{ icon: "settings", label: "Settings", onClick: () => navigate("/seller/settings") }] : []),
       { divider: true },
       { icon: "logout", label: "Logout", danger: true, onClick: logout },
     ],
@@ -211,6 +235,9 @@ const SellerLayout = () => {
           mobileOpen={mobileOpen}
           onMobileClose={() => setMobileOpen(false)}
           entries={entries}
+          // Sidebar header shows the seller's business name instead of the
+          // generic "Menu" label (businessName already falls back to "Seller").
+          title={businessName}
           onLocked={onLocked}
         />
         <main className="flex-1 overflow-y-auto overflow-x-hidden">

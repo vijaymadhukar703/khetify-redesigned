@@ -9,8 +9,9 @@ import { getProductImage } from '../../lib/productImage';
 const CompanyEditProduct = () => {
   const { productId } = useParams();
   const navigate = useNavigate();
-  const BASE_URL = "http://localhost:5000";
-
+  //const BASE_URL = "http://localhost:5000";
+  const BASE_URL = import.meta.env.VITE_API_URL;
+  
   // --- States ---
   const [loading, setLoading] = useState(true);
   const [selectedFiles, setSelectedFiles] = useState([]); // Sirf Nayi Images (Files)

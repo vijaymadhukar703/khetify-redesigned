@@ -29,14 +29,18 @@ import { HomeProductCard, CardSkeleton, catIcon } from "./ShopHome";
  * shareable and survives a refresh — same as every site in the screenshots.
  * ───────────────────────────────────────────────────────────────────────────── */
 
+import { useT, useShopLanguage } from "../../context/ShopLanguageContext";
+
 const PER_PAGE = 24;
 
+// Module scope has no t(): the labels live here as KEYS and are resolved where
+// the options are rendered.
 const SORTS = [
-  { value: "relevance", label: "Relevance", searchOnly: true },
-  { value: "price_asc", label: "Price -- Low to High" },
-  { value: "price_desc", label: "Price -- High to Low" },
-  { value: "newest", label: "Newest First" },
-  { value: "name_asc", label: "Name: A–Z" },
+  { value: "relevance", labelKey: "products.sortRelevance", searchOnly: true },
+  { value: "price_asc", labelKey: "products.sortPriceAsc" },
+  { value: "price_desc", labelKey: "products.sortPriceDesc" },
+  { value: "newest", labelKey: "products.sortNewest" },
+  { value: "name_asc", labelKey: "products.sortNameAsc" },
 ];
 
 const rupee = (n) => `₹${Number(n || 0).toLocaleString("en-IN")}`;
@@ -65,6 +69,10 @@ function Section({ title, children, defaultOpen = true, count }) {
 
 /* ── Checkbox refinement list, with "show more" once it gets long ── */
 function CheckList({ options, selected, onToggle, searchable, emptyNote }) {
+  const t = useT();
+  // Facet values come from the DB (categories, brands). Categories are
+  // enumerable so  maps them; a brand NAME is not translatable and passes
+  // through unchanged, which is exactly what  does with an unknown value.
   const [q, setQ] = useState("");
   const [showAll, setShowAll] = useState(false);
 
@@ -92,7 +100,7 @@ function CheckList({ options, selected, onToggle, searchable, emptyNote }) {
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search"
+            placeholder={t("products.searchAria")}
             className="h-9 w-full rounded-lg border border-stone-200 pl-8 pr-2 text-xs outline-none focus:border-[#EA2831]"
           />
         </div>
@@ -126,12 +134,12 @@ function CheckList({ options, selected, onToggle, searchable, emptyNote }) {
           onClick={() => setShowAll(true)}
           className="mt-1.5 text-xs font-bold text-[#EA2831] hover:underline"
         >
-          {hidden} MORE
+          {t("products.more", { count: hidden })}
         </button>
       )}
       {showAll && filtered.length > 6 && (
         <button onClick={() => setShowAll(false)} className="mt-1.5 text-xs font-bold text-stone-400 hover:underline">
-          Show less
+          {t("products.showLess")}
         </button>
       )}
     </>
@@ -140,6 +148,7 @@ function CheckList({ options, selected, onToggle, searchable, emptyNote }) {
 
 /* ── Pagination ── */
 function Pagination({ page, pages, onGo }) {
+  const t = useT();
   // This useMemo MUST stay above the early return — a hook that runs on some
   // renders and not others throws "Rendered fewer hooks than expected".
   const nums = useMemo(() => {
@@ -161,8 +170,8 @@ function Pagination({ page, pages, onGo }) {
   const btn = "flex h-10 min-w-10 items-center justify-center rounded-xl px-3 text-sm font-bold transition-colors";
 
   return (
-    <nav className="mt-8 flex items-center justify-center gap-1.5" aria-label="Pagination">
-      <button onClick={() => onGo(page - 1)} disabled={page <= 1} aria-label="Previous page"
+    <nav className="mt-8 flex items-center justify-center gap-1.5" aria-label={t("products.pagination")}>
+      <button onClick={() => onGo(page - 1)} disabled={page <= 1} aria-label={t("products.prevPage")}
         className={`${btn} border border-stone-200 bg-white text-stone-700 hover:border-stone-300 disabled:cursor-not-allowed disabled:opacity-40`}>
         <span className="material-symbols-outlined text-lg">chevron_left</span>
       </button>
@@ -180,7 +189,7 @@ function Pagination({ page, pages, onGo }) {
           )
       )}
 
-      <button onClick={() => onGo(page + 1)} disabled={page >= pages} aria-label="Next page"
+      <button onClick={() => onGo(page + 1)} disabled={page >= pages} aria-label={t("products.nextPage")}
         className={`${btn} border border-stone-200 bg-white text-stone-700 hover:border-stone-300 disabled:cursor-not-allowed disabled:opacity-40`}>
         <span className="material-symbols-outlined text-lg">chevron_right</span>
       </button>
@@ -197,24 +206,25 @@ function Filters({
   toggleMulti, setSingle, setSingleCategory, commit, catIcon,
   priceBuckets, priceDraft, setPriceDraft, applyPrice, rupee,
 }) {
+  const t = useT();
   return (
 <>
       <div className="flex items-center justify-between pb-3">
-        <h3 className="font-heading text-base font-bold text-stone-900">Filters</h3>
+        <h3 className="font-heading text-base font-bold text-stone-900">{t("products.filters")}</h3>
         {hasFilters && (
           <button onClick={() => { clearAll(); onPick?.(); }} className="text-xs font-bold text-[#EA2831] hover:underline">
-            Clear all
+            {t("products.clearAll")}
           </button>
         )}
       </div>
 
-      <Section title="Categories" count={categories.length}>
+      <Section title={t("products.categories")} count={categories.length}>
         {isSearch ? (
           <CheckList
             options={state.facets.categories}
             selected={categories}
             onToggle={(v) => setSingleCategory(v)}
-            emptyNote="No categories in these results."
+            emptyNote={t("products.noCategoriesInResults")}
           />
         ) : (
           /* Browse mode: the catalogue nav, exactly as before. */
@@ -236,17 +246,17 @@ function Filters({
         )}
       </Section>
 
-      <Section title="Brand" count={brands.length}>
+      <Section title={t("products.brand")} count={brands.length}>
         <CheckList
           options={state.facets.brands}
           selected={brands}
           onToggle={(v) => toggleMulti("brand", v)}
           searchable
-          emptyNote="No brands in these results."
+          emptyNote={t("products.noBrandsInResults")}
         />
       </Section>
 
-      <Section title="Price">
+      <Section title={t("products.price")}>
         {priceBuckets.length > 0 && (
           <ul className="mb-3 space-y-0.5">
             {priceBuckets.map((b) => {
@@ -276,7 +286,7 @@ function Filters({
           </ul>
         )}
 
-        <p className="mb-2 mt-1 text-xs font-semibold text-stone-500">Custom range</p>
+        <p className="mb-2 mt-1 text-xs font-semibold text-stone-500">{t("products.customRange")}</p>
         <div className="flex items-center gap-2">
           <div className="flex h-10 flex-1 items-center rounded-lg border border-stone-200 px-2.5 focus-within:border-[#EA2831]">
             <span className="text-xs font-semibold text-stone-400">₹</span>
@@ -284,7 +294,7 @@ function Filters({
               value={priceDraft.min}
               onChange={(e) => setPriceDraft((d) => ({ ...d, min: e.target.value.replace(/\D/g, "") }))}
               onKeyDown={(e) => e.key === "Enter" && applyPrice()}
-              placeholder="Min" inputMode="numeric" aria-label="Minimum price"
+              placeholder={t("products.min")} inputMode="numeric" aria-label={t("products.minPriceAria")}
               className="w-full bg-transparent px-1 text-sm outline-none"
             />
           </div>
@@ -295,7 +305,7 @@ function Filters({
               value={priceDraft.max}
               onChange={(e) => setPriceDraft((d) => ({ ...d, max: e.target.value.replace(/\D/g, "") }))}
               onKeyDown={(e) => e.key === "Enter" && applyPrice()}
-              placeholder="Max" inputMode="numeric" aria-label="Maximum price"
+              placeholder={t("products.max")} inputMode="numeric" aria-label={t("products.maxPriceAria")}
               className="w-full bg-transparent px-1 text-sm outline-none"
             />
           </div>
@@ -304,13 +314,13 @@ function Filters({
           onClick={applyPrice}
           className="mt-2.5 w-full rounded-lg bg-[#EA2831] py-2.5 text-xs font-bold uppercase tracking-wide text-white transition-colors hover:bg-[#c91e26]"
         >
-          Apply price
+          {t("products.applyPrice")}
         </button>
       </Section>
 
       {/* Only rendered when some product actually HAS a discount. */}
       {state.facets.discounts.length > 0 && (
-        <Section title="Discount" count={minDiscount ? 1 : 0}>
+        <Section title={t("products.discount")} count={minDiscount ? 1 : 0}>
           <ul className="space-y-0.5">
             {state.facets.discounts.map((d) => {
               const on = String(minDiscount) === String(d.value);
@@ -335,7 +345,7 @@ function Filters({
       {/* A marketplace refinement the reference sites don't need — but Khetify does. */}
     
 
-      <Section title="Availability">
+      <Section title={t("products.availability")}>
         <label className="flex cursor-pointer items-center gap-2.5 rounded-lg px-1 py-1.5 hover:bg-stone-50">
           <input
             type="checkbox"
@@ -344,7 +354,7 @@ function Filters({
             className="size-4 accent-[#EA2831]"
           />
           <span className={`text-sm ${inStockOnly ? "font-bold text-stone-900" : "text-stone-600"}`}>
-            In stock only
+            {t("products.inStockOnly")}
           </span>
         </label>
       </Section>
@@ -364,6 +374,11 @@ function Chip({ children, onClear }) {
 }
 
 export default function ShopProducts() {
+  const t = useT();
+  // The API returns catalogue text already localised, so the fetch effects
+  // below depend on `lang` — a language switch must refetch, not just re-render.
+  const { lang } = useShopLanguage();
+
   const navigate = useNavigate(); 
   const [params, setParams] = useSearchParams();
 
@@ -395,7 +410,9 @@ export default function ShopProducts() {
 
   useEffect(() => { setPriceDraft({ min: minPrice, max: maxPrice }); }, [minPrice, maxPrice]);
 
-  const deps = [search, categories.join(), brands.join(), sellers.join(), minDiscount, minPrice, maxPrice, inStockOnly, sort, page];
+  /* `lang` is a dependency because the API returns catalogue text ALREADY
+     localised — switching language has to refetch, not just re-render. */
+  const deps = [search, categories.join(), brands.join(), sellers.join(), minDiscount, minPrice, maxPrice, inStockOnly, sort, page, lang];
 
   useEffect(() => {
     let alive = true;
@@ -511,10 +528,10 @@ export default function ShopProducts() {
     const step = Math.ceil((max - min) / 4 / 50) * 50 || 1;
     const cuts = [min + step, min + step * 2, min + step * 3];
     return [
-      { label: `Under ${rupee(cuts[0])}`, min: "", max: String(cuts[0]) },
+      { label: t("products.under", { amount: rupee(cuts[0]) }), min: "", max: String(cuts[0]) },
       { label: `${rupee(cuts[0])} – ${rupee(cuts[1])}`, min: String(cuts[0]), max: String(cuts[1]) },
       { label: `${rupee(cuts[1])} – ${rupee(cuts[2])}`, min: String(cuts[1]), max: String(cuts[2]) },
-      { label: `Over ${rupee(cuts[2])}`, min: String(cuts[2]), max: "" },
+      { label: t("products.over", { amount: rupee(cuts[2]) }), min: String(cuts[2]), max: "" },
     ];
   }, [state.priceRange]);
 
@@ -565,7 +582,7 @@ export default function ShopProducts() {
     <button
       type="button"
       onClick={() => navigate(-1)}
-      aria-label="Go back"
+      aria-label={t("products.goBack")}
       className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-stone-200 bg-white text-stone-700 shadow-sm transition-colors hover:bg-stone-50 hover:text-[#EA2831] sm:size-10 hidden sm:block"
     >
       <span className="material-symbols-outlined text-xl sm:text-[22px]">arrow_back</span>
@@ -584,7 +601,7 @@ export default function ShopProducts() {
     <h1 className="font-heading text-lg font-bold text-stone-900 sm:text-xl leading-tight">
      {state.total === 0 && (
   <h1 className="font-heading text-lg font-bold text-stone-900 sm:text-xl leading-tight">
-    No results{isSearch && <> for “{search}”</>}
+    {isSearch ? t("products.noResultsFor", { q: search }) : t("products.noResults")}
   </h1>
 )}
     </h1>
@@ -602,7 +619,7 @@ export default function ShopProducts() {
               onClick={() => setFiltersOpen(true)}
               className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-stone-200 bg-white py-2.5 text-sm font-bold text-stone-700"
             >
-              <span className="material-symbols-outlined text-lg">tune</span> Filters
+              <span className="material-symbols-outlined text-lg">tune</span> {t("products.filters")}
               {activeCount > 0 && (
                 <span className="flex size-5 items-center justify-center rounded-full bg-[#EA2831] text-[10px] font-bold text-white">
                   {activeCount}
@@ -619,7 +636,7 @@ export default function ShopProducts() {
               >
                 <span className="material-symbols-outlined text-lg text-stone-400">swap_vert</span>
                 <span className="flex-1 truncate text-left">
-                  {sortOptions.find((s) => s.value === sort)?.label || "Sort"}
+                  {(() => { const hit = sortOptions.find((s) => s.value === sort); return hit ? t(hit.labelKey) : t("products.sortBy"); })()}
                 </span>
                 <span className={`material-symbols-outlined text-lg text-stone-400 transition-transform ${sortOpen ? "rotate-180" : ""}`}>expand_more</span>
               </button>
@@ -642,7 +659,7 @@ export default function ShopProducts() {
                               on ? "bg-red-50 font-bold text-[#EA2831]" : "font-medium text-stone-700 hover:bg-stone-50"
                             }`}
                           >
-                            {s.label}
+                            {t(s.labelKey)}
                             {on && <span className="material-symbols-outlined text-base">check</span>}
                           </button>
                         </li>
@@ -656,7 +673,7 @@ export default function ShopProducts() {
 
           {/* Desktop tabs */}
           <div className="mt-3 hidden flex-wrap items-center gap-x-4 gap-y-1 border-b border-stone-200 md:flex">
-            <span className="shrink-0 pb-2.5 text-sm font-bold text-stone-900">Sort By</span>
+            <span className="shrink-0 pb-2.5 text-sm font-bold text-stone-900">{t("products.sortBy")}</span>
             {sortOptions.map((s) => (
               <button
                 key={s.value}
@@ -667,7 +684,7 @@ export default function ShopProducts() {
                     : "border-transparent text-stone-500 hover:text-stone-800"
                 }`}
               >
-                {s.label}
+                {t(s.labelKey)}
               </button>
             ))}
           </div>
@@ -688,7 +705,7 @@ export default function ShopProducts() {
                   onClick={() => setParams(new URLSearchParams(params))}
                   className="mt-4 rounded-xl bg-[#EA2831] px-5 py-2.5 text-sm font-bold text-white hover:bg-[#c91e26]"
                 >
-                  Try again
+                  {t("common.tryAgain")}
                 </button>
               </div>
             ) : state.items.length === 0 ? (
@@ -697,20 +714,20 @@ export default function ShopProducts() {
                   <span className="mx-auto flex size-16 items-center justify-center rounded-full bg-stone-50 text-stone-300">
                     <span className="material-symbols-outlined text-4xl font-light">search_off</span>
                   </span>
-                  <h3 className="mt-4 font-heading text-lg font-bold text-stone-900">No products found</h3>
+                  <h3 className="mt-4 font-heading text-lg font-bold text-stone-900">{t("products.noProductsFound")}</h3>
                   <p className="mt-1 text-sm text-stone-500">
-                    {isSearch ? <>We couldn't find anything for “{search}”.</> : "Nothing matches these filters."}
+                    {isSearch ? t("products.notFoundFor", { q: search }) : t("products.nothingMatches")}
                   </p>
                   {hasFilters && (
                     <button onClick={clearAll} className="mt-5 inline-flex items-center gap-1.5 rounded-xl bg-[#EA2831] px-5 py-2.5 text-sm font-bold text-white hover:bg-[#c91e26]">
-                      <span className="material-symbols-outlined text-lg">restart_alt</span> Clear all filters
+                      <span className="material-symbols-outlined text-lg">restart_alt</span> {t("products.clearAllFilters")}
                     </button>
                   )}
                 </div>
 
                 {fallback.length > 0 && (
                   <div>
-                    <h4 className="mb-3 font-heading text-base font-bold text-stone-900">Popular right now</h4>
+                    <h4 className="mb-3 font-heading text-base font-bold text-stone-900">{t("products.popularNow")}</h4>
                     <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4">
                       {fallback.map((p) => <HomeProductCard key={p.listingId} product={p} />)}
                     </div>
@@ -765,7 +782,7 @@ export default function ShopProducts() {
             onClick={() => setFiltersOpen(false)}
             className="mt-5 w-full rounded-xl bg-[#EA2831] py-3 text-sm font-bold text-white transition-colors hover:bg-[#c91e26]"
           >
-            Show {state.total.toLocaleString("en-IN")} {state.total === 1 ? "product" : "products"}
+            {t(state.total === 1 ? "products.showN" : "products.showNPlural", { count: state.total.toLocaleString("en-IN") })}
           </button>
         </div>
       </div>

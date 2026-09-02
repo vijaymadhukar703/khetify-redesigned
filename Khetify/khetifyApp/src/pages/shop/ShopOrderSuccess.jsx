@@ -1,6 +1,11 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { rupee } from "../../Components/shop/ProductCard";
+import { useT } from "../../context/ShopLanguageContext";
+import { STATUS_LABEL_KEY } from "../../lib/orderStatus";
+// 💳 The payment vocabulary is SHARED with checkout and the payment screen
+//    (lib/paymentMethods.js) so the three screens cannot drift apart.
+import { isOnlinePayment, paymentModeLabelKey } from "../../lib/paymentMethods";
 
 /* ─────────────────────────────────────────────────────────────────────────────
  * Khetify — Order confirmation  (/customer-shop/order-success)
@@ -17,16 +22,23 @@ import { rupee } from "../../Components/shop/ProductCard";
  * hands over an id→name map in router state alongside the orders.
  * ───────────────────────────────────────────────────────────────────────────── */
 
-const STATUS_LABEL = {
-  pending: "Order placed", confirmed: "Confirmed", packed: "Packed",
-  shipped: "Shipped", delivered: "Delivered", returned: "Returned", cancelled: "Cancelled",
-};
+// The status vocabulary is SHARED (lib/orderStatus.js) — this page used to keep
+// its own duplicate copy, which is how two screens drift apart.
 
-const NEXT_STEPS = [
-  { icon: "receipt_long", title: "Order placed", body: "We've sent your order to the seller.", done: true },
-  { icon: "inventory",    title: "Seller confirms",  body: "The seller accepts and reserves your stock." },
-  { icon: "package_2",    title: "Packed & shipped", body: "You'll be able to track it from My Orders." },
-  { icon: "payments",     title: "Pay on delivery",  body: "Hand over the cash when your package arrives." },
+/* Module scope has no t(): copy lives here as KEYS, resolved at render.
+
+   The LAST step depends on how the order was paid for. Telling someone who has
+   already paid online to "hand over the cash when your package arrives" is not
+   a cosmetic slip — it is wrong information on the one screen they trust. So
+   the steps are built from the payment mode rather than being a fixed list.
+   Steps 1–3 are identical either way. */
+const nextSteps = (paidOnline) => [
+  { icon: "receipt_long", titleKey: "os.step1", bodyKey: "os.step1Body", done: true },
+  { icon: "inventory",    titleKey: "os.step2", bodyKey: "os.step2Body" },
+  { icon: "package_2",    titleKey: "os.step3", bodyKey: "os.step3Body" },
+  paidOnline
+    ? { icon: "home",     titleKey: "os.step4Paid", bodyKey: "os.step4PaidBody", done: true }
+    : { icon: "payments", titleKey: "os.step4",     bodyKey: "os.step4Body" },
 ];
 
 const fmtDate = (d) =>
@@ -36,6 +48,7 @@ const fmtDate = (d) =>
 
 /* ── Order number + one-tap copy (people paste this into support chats) ── */
 function OrderNumber({ value }) {
+  const t = useT();
   const [copied, setCopied] = useState(false);
 
   const copy = async () => {
@@ -51,7 +64,7 @@ function OrderNumber({ value }) {
   return (
     <button
       onClick={copy}
-      title="Copy order number"
+      title={t("os.copyOrderNumber")}
       className="group inline-flex items-center gap-1.5 rounded-lg px-1.5 py-0.5 font-heading text-[15px] font-extrabold text-[#14201A] transition-colors hover:bg-stone-100 print:hover:bg-transparent"
     >
       {value}
@@ -67,6 +80,7 @@ function OrderNumber({ value }) {
 }
 
 export default function ShopOrderSuccess() {
+  const t = useT();
   const { state } = useLocation();
   const navigate = useNavigate();
 
@@ -87,6 +101,15 @@ export default function ShopOrderSuccess() {
   const ship = orders[0]?.shippingAddress || {};
   const placedAt = orders[0]?.placedAt || orders[0]?.createdAt;
   const multi = orders.length > 1;
+
+  /* Every order in ONE checkout shares a payment method — the whole basket is
+     paid for in one go — so the first order's mode speaks for all of them.
+     Pre-existing orders have no `provider` and read as COD, which is exactly
+     what they were. */
+  const paymentMode = orders[0]?.payment?.mode || "cod";
+  const paidOnline = isOnlinePayment(paymentMode);
+  // The gateway reference, worth showing once: it is what support will ask for.
+  const txnRef = paidOnline ? orders[0]?.payment?.txnRef : null;
 
   return (
     <div className="min-h-screen bg-[#F5F4EF] print:bg-white">
@@ -128,32 +151,36 @@ export default function ShopOrderSuccess() {
           </span>
 
           <h1 className="mt-5 font-heading text-2xl font-extrabold tracking-tight text-[#14201A] sm:text-3xl">
-            {multi ? "Your orders are placed!" : "Your order is placed!"}
+            {multi ? t("os.titleMany") : t("os.titleOne")}
           </h1>
           <p className="mx-auto mt-2 max-w-md text-[15px] leading-relaxed text-[#6B6A62]">
-            Thank you{ship.name ? `, ${ship.name.split(" ")[0]}` : ""}. We've sent{" "}
-            {multi ? `${orders.length} orders` : "your order"} to{" "}
-            {multi ? "the sellers" : "the seller"} for confirmation.
+            {/* The NAME is data — interpolated into the sentence, never translated. */}
+            {t(multi ? "os.thanksMany" : "os.thanksOne", {
+              name: ship.name ? `, ${ship.name.split(" ")[0]}` : "",
+              count: orders.length,
+            })}
           </p>
 
           <div className="mt-6 grid grid-cols-3 divide-x divide-[#E2E0D6] rounded-[16px] border border-[#E2E0D6] bg-[#FAFAF7] py-4">
             <div className="px-2">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-[#9B9A92]">Amount</p>
+              <p className="text-[11px] font-bold uppercase tracking-wide text-[#9B9A92]">{t("os.amount")}</p>
               <p className="mt-0.5 font-heading text-lg font-extrabold text-[#14201A]">{rupee(grandTotal)}</p>
             </div>
             <div className="px-2">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-[#9B9A92]">{multi ? "Orders" : "Items"}</p>
+              <p className="text-[11px] font-bold uppercase tracking-wide text-[#9B9A92]">{multi ? t("os.orders") : t("os.items")}</p>
               <p className="mt-0.5 font-heading text-lg font-extrabold text-[#14201A]">
                 {multi ? orders.length : totalUnits}
               </p>
             </div>
             <div className="px-2">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-[#9B9A92]">Payment</p>
-              <p className="mt-0.5 font-heading text-lg font-extrabold text-emerald-700">COD</p>
+              <p className="text-[11px] font-bold uppercase tracking-wide text-[#9B9A92]">{t("os.payment")}</p>
+              <p className="mt-0.5 font-heading text-lg font-extrabold text-emerald-700">
+                {t(paidOnline ? "os.online" : "os.cod")}
+              </p>
             </div>
           </div>
 
-          <p className="mt-3 text-[13px] text-[#9B9A92]">Placed on {fmtDate(placedAt)}</p>
+          <p className="mt-3 text-[13px] text-[#9B9A92]">{t("os.placedOn", { date: fmtDate(placedAt) })}</p>
         </section>
 
         {/* ── The multi-seller split, explained plainly ── */}
@@ -161,9 +188,7 @@ export default function ShopOrderSuccess() {
           <p className="riseIn mb-5 flex items-start gap-2 rounded-[16px] border border-amber-200 bg-amber-50 px-4 py-3 text-[13px] font-medium leading-relaxed text-amber-900">
             <span className="material-symbols-outlined text-base">local_shipping</span>
             <span>
-              Your items came from <strong>{orders.length} different sellers</strong>, so they were placed as{" "}
-              <strong>{orders.length} separate orders</strong>. Each ships on its own schedule and may arrive on
-              different days — you pay each one on its own delivery.
+              {t("os.multiSellerNote", { count: orders.length })}
             </span>
           </p>
         )}
@@ -182,18 +207,18 @@ export default function ShopOrderSuccess() {
                   <div className="min-w-0">
                     {multi && (
                       <p className="text-[11px] font-bold uppercase tracking-wide text-[#9B9A92]">
-                        Order {idx + 1} of {orders.length}
+                        {t("os.orderXofY", { n: idx + 1, total: orders.length })}
                       </p>
                     )}
                     <OrderNumber value={o.orderNumber} />
                     <p className="flex items-center gap-1 text-[13px] text-[#6B6A62]">
                       <span className="material-symbols-outlined text-[15px] text-[#9B9A92]">storefront</span>
-                      Sold by {seller}
+                      {t("os.soldBy", { seller })}
                     </p>
                   </div>
                   <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-emerald-800">
                     <span className="material-symbols-outlined text-[13px]">schedule</span>
-                    {STATUS_LABEL[o.status] || o.status}
+                    {STATUS_LABEL_KEY[o.status] ? t(STATUS_LABEL_KEY[o.status]) : o.status}
                   </span>
                 </header>
 
@@ -216,7 +241,11 @@ export default function ShopOrderSuccess() {
 
                 <footer className="flex items-center justify-between border-t border-[#E2E0D6] px-5 py-3.5">
                   <span className="text-[13px] font-bold text-[#6B6A62]">
-                    {o.totalUnits} item{o.totalUnits === 1 ? "" : "s"} · pay on delivery
+                    {/* "pay on delivery" vs "paid" — read off THIS order's own
+                        payment status, not a page-level assumption. */}
+                    {o.payment?.status === "paid"
+                      ? t(o.totalUnits === 1 ? "os.itemsPaid" : "os.itemsPaidPlural", { count: o.totalUnits })
+                      : t(o.totalUnits === 1 ? "os.itemsPayOnDelivery" : "os.itemsPayOnDeliveryPlural", { count: o.totalUnits })}
                   </span>
                   <span className="font-heading text-lg font-extrabold text-[#14201A]">
                     {rupee(o.totalAmount || 0)}
@@ -232,7 +261,7 @@ export default function ShopOrderSuccess() {
           <section className="riseIn rounded-[20px] border border-[#E2E0D6] bg-white p-5 print-flat">
             <h2 className="mb-2.5 flex items-center gap-2 font-heading text-[15px] font-extrabold text-[#14201A]">
               <span className="material-symbols-outlined text-[19px] text-[#EA2831]">location_on</span>
-              Delivering to
+              {t("os.deliveringTo")}
             </h2>
             <p className="text-[14px] font-bold text-[#14201A]">
               {ship.name}
@@ -258,26 +287,40 @@ export default function ShopOrderSuccess() {
           <section className="riseIn rounded-[20px] border border-[#E2E0D6] bg-white p-5 print-flat">
             <h2 className="mb-2.5 flex items-center gap-2 font-heading text-[15px] font-extrabold text-[#14201A]">
               <span className="material-symbols-outlined text-[19px] text-emerald-700">payments</span>
-              Payment
+              {t("os.payment")}
             </h2>
-            <p className="text-[14px] font-bold text-[#14201A]">Cash on Delivery</p>
-            <p className="mt-1 text-[13px] leading-relaxed text-[#6B6A62]">
-              Nothing has been charged yet. Keep{" "}
-              <strong className="text-[#14201A]">{rupee(grandTotal)}</strong> ready
-              {multi ? " across your deliveries." : " when your package arrives."}
+            <p className="flex flex-wrap items-center gap-2 text-[14px] font-bold text-[#14201A]">
+              {t(paymentModeLabelKey(paymentMode))}
+              {paidOnline && (
+                <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-800">
+                  {t("os.statusPaid")}
+                </span>
+              )}
             </p>
+            <p className="mt-1 text-[13px] leading-relaxed text-[#6B6A62]">
+              {paidOnline
+                ? t(multi ? "os.paidNoteMany" : "os.paidNoteOne", { amount: rupee(grandTotal) })
+                : t(multi ? "os.codNoteMany" : "os.codNoteOne", { amount: rupee(grandTotal) })}
+            </p>
+            {/* The reference is what support asks for first. Shown once, and
+                only when there is a real transaction behind it. */}
+            {txnRef && (
+              <p className="mt-1.5 break-all font-mono text-[11px] text-[#9B9A92]">
+                {t("os.txnRef", { ref: txnRef })}
+              </p>
+            )}
             <p className="mt-2 text-[12px] leading-normal text-[#9B9A92]">
-              Inclusive of all taxes. The GST breakdown appears on each seller's invoice.
+              {t("os.taxNote")}
             </p>
           </section>
         </div>
 
         {/* ── What happens next ── */}
         <section className="riseIn mb-6 rounded-[20px] border border-[#E2E0D6] bg-white p-5 sm:p-6 print-flat">
-          <h2 className="mb-4 font-heading text-[15px] font-extrabold text-[#14201A]">What happens next</h2>
+          <h2 className="mb-4 font-heading text-[15px] font-extrabold text-[#14201A]">{t("os.whatNext")}</h2>
           <ol className="grid gap-4 sm:grid-cols-4">
-            {NEXT_STEPS.map((s, i) => (
-              <li key={s.title} className="flex gap-3 sm:flex-col sm:gap-2">
+            {nextSteps(paidOnline).map((s, i) => (
+              <li key={s.titleKey} className="flex gap-3 sm:flex-col sm:gap-2">
                 <span
                   className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
                     s.done ? "bg-emerald-600 text-white" : "bg-[#F5F4EF] text-[#9B9A92]"
@@ -287,9 +330,9 @@ export default function ShopOrderSuccess() {
                 </span>
                 <div className="min-w-0">
                   <p className="text-[13px] font-bold text-[#14201A]">
-                    {i + 1}. {s.title}
+                    {i + 1}. {t(s.titleKey)}
                   </p>
-                  <p className="mt-0.5 text-[12px] leading-normal text-[#6B6A62]">{s.body}</p>
+                  <p className="mt-0.5 text-[12px] leading-normal text-[#6B6A62]">{t(s.bodyKey)}</p>
                 </div>
               </li>
             ))}
@@ -303,29 +346,29 @@ export default function ShopOrderSuccess() {
             className="flex h-[52px] w-full items-center justify-center gap-2 rounded-full bg-[#EA2831] text-[15px] font-bold text-white shadow-[0_8px_20px_rgba(234,40,49,0.24)] transition-colors hover:bg-[#c91e26] sm:flex-1"
           >
             <span className="material-symbols-outlined text-[19px]">receipt_long</span>
-            Track my order{multi ? "s" : ""}
+            {multi ? t("os.trackMany") : t("os.trackOne")}
           </Link>
           <Link
             to="/customer-shop/products"
             className="flex h-[52px] w-full items-center justify-center gap-2 rounded-full border-[1.5px] border-[#E2E0D6] bg-white text-[15px] font-bold text-[#14201A] transition-colors hover:border-[#c9c7bb] hover:bg-[#FCFCFA] sm:flex-1"
           >
-            Continue shopping
+            {t("os.continueShopping")}
           </Link>
           <button
             onClick={() => window.print()}
-            title="Print or save as PDF"
-            aria-label="Print or save this confirmation"
+            title={t("os.printTitle")}
+            aria-label={t("os.printAria")}
             className="flex h-[52px] w-full items-center justify-center gap-2 rounded-full border-[1.5px] border-[#E2E0D6] bg-white px-5 text-[15px] font-bold text-[#6B6A62] transition-colors hover:border-[#c9c7bb] hover:text-[#14201A] sm:w-[52px] sm:px-0"
           >
             <span className="material-symbols-outlined text-[19px]">print</span>
-            <span className="sm:hidden">Save a copy</span>
+            <span className="sm:hidden">{t("os.saveCopy")}</span>
           </button>
         </div>
 
         <p className="no-print mt-6 text-center text-[12px] text-[#9B9A92]">
-          Need help with this order? Reach us from{" "}
+          {t("os.helpPrefix")}{" "}
           <Link to="/customer-shop/orders" className="font-bold text-[#EA2831] hover:underline">
-            My Orders
+            {t("os.myOrders")}
           </Link>
           .
         </p>

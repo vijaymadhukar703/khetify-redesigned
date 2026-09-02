@@ -1,6 +1,7 @@
 import React from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useWishlist } from "../../context/WishlistContext";
+import { useT } from "../../context/ShopLanguageContext";
 import { useCart } from "../../context/CartContext";
 import { getProductImage } from "../../lib/productImage";
 import { rupee } from "../../Components/shop/ProductCard";
@@ -39,8 +40,15 @@ const Icon = {
 };
 
 function WishlistCard({ product, inCart, onAddToCart, onRemove }) {
-  const img = getProductImage(product.images?.[0]);
-  const href = `/customer-shop/product/${product.listingId}`;
+  const t = useT();
+  /* THE SAVED VARIANT WINS. The shopper saved Red, so the card must show Red's
+     picture and Red's price — the product's defaults would be a different item
+     from the one they saved. All three fall back to the product when nothing
+     variant-specific was stored, which is every pre-existing entry. */
+  const img = getProductImage(product.variantImage || product.images?.[0]);
+  const price = product.variantPrice != null ? product.variantPrice : product.price;
+  // The link carries the variant, so opening it reopens the saved option.
+  const href = `/customer-shop/product/${product.listingId}${product.variantId ? `?variant=${product.variantId}` : ""}`;
   const seller = product.seller?.name || product.sellerName;
   const inStock = product.inStock;
 
@@ -58,9 +66,9 @@ function WishlistCard({ product, inCart, onAddToCart, onRemove }) {
         </Link>
         <button
           type="button"
-          aria-label="Remove from wishlist"
-          title="Remove from wishlist"
-          onClick={() => onRemove(product.listingId)}
+          aria-label={t("wishlist.remove")}
+          title={t("wishlist.remove")}
+          onClick={() => onRemove(product.wishId || product.listingId)}
           className="absolute right-3 top-3 inline-flex h-[38px] w-[38px] items-center justify-center rounded-full bg-white/95 text-[#EA2831] shadow-[0_4px_12px_rgba(20,32,26,0.14)] transition-all hover:scale-110 hover:bg-[#FFF1F2]"
         >
           <Icon.Heart filled className="h-[17px] w-[17px]" />
@@ -79,26 +87,32 @@ function WishlistCard({ product, inCart, onAddToCart, onRemove }) {
             {product.name}
           </h3>
         </Link>
+        {product.variantLabel && (
+          <span className="w-fit rounded bg-stone-100 px-2 py-0.5 text-[11px] font-semibold text-stone-600">
+            {product.variantLabel}
+          </span>
+        )}
         <div className="flex items-baseline gap-2">
-          <span className="font-heading text-[21px] font-extrabold text-[#14201A]">{rupee(product.price)}</span>
+          <span className="font-heading text-[21px] font-extrabold text-[#14201A]">{rupee(price)}</span>
           {product.unit && <span className="text-[13px] text-[#9B9A92]">/ {product.unit}</span>}
         </div>
         <p className="flex items-center gap-1.5 text-[13px] font-semibold">
           {inStock ? (
             <span className="flex items-center gap-1.5 text-[#2E6B3E]">
-              <Icon.CheckCircle className="h-[13px] w-[13px]" /> In stock
+              <Icon.CheckCircle className="h-[13px] w-[13px]" /> {t("wishlist.inStock")}
             </span>
           ) : (
-            <span className="text-stone-400">Currently unavailable</span>
+            <span className="text-stone-400">{t("wishlist.unavailable")}</span>
           )}
-          {seller && <span className="font-normal text-[#9B9A92]">· sold by {seller}</span>}
+          {/* The seller NAME is data — interpolated, never translated. */}
+          {seller && <span className="font-normal text-[#9B9A92]">{t("wishlist.soldBy", { seller })}</span>}
         </p>
 
         <div className="mt-auto pt-2.5">
           {inCart ? (
             <span className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-full bg-[#E9F2EA] text-sm font-bold text-[#2E6B3E]">
               <Icon.Check className="h-[15px] w-[15px]" />
-              Already in cart
+              {t("wishlist.alreadyInCart")}
             </span>
           ) : inStock ? (
             <button
@@ -107,11 +121,11 @@ function WishlistCard({ product, inCart, onAddToCart, onRemove }) {
               className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-full bg-[#EA2831] text-sm font-bold text-white transition-all hover:-translate-y-px hover:bg-[#c91e26] hover:shadow-[0_8px_18px_rgba(234,40,49,0.25)] active:translate-y-0"
             >
               <Icon.Cart className="h-[15px] w-[15px]" />
-              Add to cart
+              {t("wishlist.addToCart")}
             </button>
           ) : (
             <span className="inline-flex h-11 w-full items-center justify-center rounded-full bg-stone-100 text-sm font-bold text-stone-400">
-              Sold out
+              {t("common.soldOut")}
             </span>
           )}
         </div>
@@ -121,15 +135,16 @@ function WishlistCard({ product, inCart, onAddToCart, onRemove }) {
 }
 
 function EmptyWishlist() {
+  const t = useT();
   return (
     <div className="rounded-3xl border-[1.5px] border-dashed border-[#E2E0D6] bg-white px-6 py-[72px] text-center">
       <span className="mb-[18px] inline-flex h-16 w-16 items-center justify-center rounded-full bg-[#FFF1F2]">
         <Icon.Heart className="h-7 w-7 text-[#EA2831]" />
       </span>
-      <h2 className="mb-2 font-heading text-2xl font-bold text-[#14201A]">Your wishlist is empty</h2>
-      <p className="mb-6 text-[15px] text-[#6B6A62]">Tap the heart on any product to save it here for later.</p>
+      <h2 className="mb-2 font-heading text-2xl font-bold text-[#14201A]">{t("wishlist.empty")}</h2>
+      <p className="mb-6 text-[15px] text-[#6B6A62]">{t("wishlist.emptySub")}</p>
       <Link to="/customer-shop/products" className="inline-flex h-12 items-center rounded-full bg-[#EA2831] px-7 text-[15px] font-bold text-white transition-colors hover:bg-[#c91e26]">
-        Browse products
+        {t("wishlist.browse")}
       </Link>
     </div>
   );
@@ -137,13 +152,23 @@ function EmptyWishlist() {
 
 export default function ShopWishlist() {
   const { items, removeItem } = useWishlist();
+  const t = useT();
   const { addItem, items: cartItems } = useCart();
   const navigate = useNavigate();
 
-  const inCart = (listingId) => cartItems.some((c) => c.listingId === listingId);
-  const addToCart = (product) => addItem(product, 1);
+  /* A wishlist entry maps to ONE cart line — the same variant, at the same key
+     the cart uses. Saving Red must not report "already in cart" because Green
+     happens to be in there. */
+  const lineIdOf = (p) => (p.variantId ? `${p.listingId}::${p.variantId}` : String(p.listingId));
+  const inCart = (p) => cartItems.some((c) => (c.lineId || c.listingId) === lineIdOf(p));
+  // Rebuild the variant from the snapshot stored on the entry, so the cart line
+  // gets its price, image and attributes — not the product's defaults.
+  const variantOf = (p) => (p.variantId
+    ? { id: p.variantId, label: p.variantLabel, attributes: p.variantAttributes, image: p.variantImage, mrp: p.variantPrice }
+    : null);
+  const addToCart = (product) => addItem(product, 1, variantOf(product));
   const addAllToCart = () => {
-    items.forEach((p) => { if (p.inStock && !inCart(p.listingId)) addItem(p, 1); });
+    items.forEach((p) => { if (p.inStock && !inCart(p)) addItem(p, 1, variantOf(p)); });
     navigate("/customer-shop/cart");
   };
 
@@ -176,14 +201,14 @@ export default function ShopWishlist() {
       {/* Badge Text */}
       <p className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.12em] text-[#EA2831]">
         <Icon.Heart filled className="h-[13px] w-[13px]" />
-        Saved for later
+        {t("wishlist.badge")}
       </p>
     </div>
             <h1 className="font-heading text-[28px] font-extrabold tracking-tight text-[#14201A] sm:text-[40px]">
-              Your wishlist
+              {t("wishlist.title")}
             </h1>
             <p className="mt-2 text-[15px] text-[#6B6A62]">
-              {items.length} {items.length === 1 ? "item" : "items"} saved — add them to your cart before they sell out.
+              {t(items.length === 1 ? "wishlist.savedCount" : "wishlist.savedCountPlural", { count: items.length })}
             </p>
           </div>
 
@@ -194,7 +219,7 @@ export default function ShopWishlist() {
                 className="inline-flex h-[46px] w-full items-center justify-center gap-2 whitespace-nowrap rounded-full border-[1.5px] border-[#E2E0D6] bg-white px-[22px] text-sm font-bold text-[#14201A] transition-colors hover:border-[#C9C7BB] hover:bg-[#FBFAF6] sm:w-auto"
               >
                 <Icon.ArrowLeft className="h-[15px] w-[15px]" />
-                Continue shopping
+                {t("wishlist.continueShopping")}
               </Link>
               <button
                 type="button"
@@ -202,7 +227,7 @@ export default function ShopWishlist() {
                 className="inline-flex h-[46px] w-full items-center justify-center gap-2 whitespace-nowrap rounded-full bg-[#14201A] px-6 text-sm font-bold text-white transition-all hover:-translate-y-px hover:bg-[#223528] active:translate-y-0 sm:w-auto"
               >
                 <Icon.Cart className="h-[15px] w-[15px]" />
-                Add all to cart
+                {t("wishlist.addAll")}
               </button>
             </div>
           )}
@@ -214,9 +239,9 @@ export default function ShopWishlist() {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 lg:gap-[22px] xl:grid-cols-4">
             {items.map((product) => (
               <WishlistCard
-                key={product.listingId}
+                key={product.wishId || product.listingId}
                 product={product}
-                inCart={inCart(product.listingId)}
+                inCart={inCart(product)}
                 onAddToCart={addToCart}
                 onRemove={removeItem}
               />

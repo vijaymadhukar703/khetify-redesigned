@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import { State, City } from 'country-state-city';
 import { Modal, Field, inputCls, PrimaryBtn } from '../Company/ims/ImsUi';
-import { getSellerLink, getSellerWarehouses, getSellerWarehouseStockSummary, getSellerLots, createSellerWarehouse, updateSellerWarehouse, SELLER_FEATURES } from '../../lib/sellerApi';
+import { getSellerWarehouses, getSellerWarehouseStockSummary, getSellerLots, createSellerWarehouse, updateSellerWarehouse, SELLER_FEATURES } from '../../lib/sellerApi';
 import { getSellerSocket } from '../../lib/socket';
 import { useSellerSubscription } from '../../context/SellerSubscriptionContext';
 import { useSellerPermission } from '../../context/SellerPermissionContext';
@@ -28,14 +28,16 @@ const toast = (icon, title) => Swal.fire({ icon, title, toast: true, position: '
 
 // Seller Warehouses — mirrors the company warehouse module (pages/Company/ims/
 // ImsWarehouses.jsx) but is scoped to the seller via the seller API client.
-// Gated by approval: an unapproved seller sees a locked panel (the backend also
-// enforces this via requireApprovedSeller). Seller lots arrive in Phase 4, so
-// per-warehouse occupancy is omitted for now.
+// NOT gated by approval. A seller must be able to create a warehouse before any
+// company issues them a Principal Certificate, or My Products' "Add stock" form
+// has nothing to put stock into — routes/Seller/sellerWarehouseRoutes.js dropped
+// requireApprovedSeller for the same reason. The PLAN LIMIT is unchanged: free
+// still gets one warehouse (see `atFreeLimit` below). Seller lots arrive in
+// Phase 4, so per-warehouse occupancy is omitted for now.
 const SellerWarehouses = () => {
   const navigate = useNavigate();
   const { sellerCan } = useSellerSubscription();
   const canCreate = useSellerPermission('warehouse:create'); // seller_admin only
-  const [approved, setApproved] = useState(null); // null = loading
   const [warehouses, setWarehouses] = useState([]);
   const [lots, setLots] = useState([]);
   const [showCreate, setShowCreate] = useState(false);
@@ -72,45 +74,20 @@ const SellerWarehouses = () => {
     getSellerLots({}).then((r) => { if (r?.success) setLots(r.data || []); }).catch(() => {});
   }, []);
 
-  const load = useCallback(() => {
-    getSellerLink()
-      .then((r) => {
-        const ok = r?.data?.linkStatus === 'approved';
-        setApproved(ok);
-        if (ok) refresh();
-      })
-      .catch(() => setApproved(false));
-  }, [refresh]);
-  useEffect(() => { load(); }, [load]);
+  // Straight to the data — there is no approval to wait on any more.
+  useEffect(() => { refresh(); }, [refresh]);
 
   // Live stock updates: when a supply lands into one of the seller's warehouses
   // (verifyReceipt → emitToSeller), refresh the cards' occupancy and nudge the
   // open detail modal to refetch — no manual refresh. Fires for the seller's
   // own device too (their socket is in the same room).
   useEffect(() => {
-    if (!approved) return undefined;
     const s = getSellerSocket();
     if (!s) return undefined;
     const onInv = () => { refresh(); setLiveBump((n) => n + 1); };
     s.on('seller:inventory:update', onInv);
     return () => { s.off('seller:inventory:update', onInv); };
-  }, [approved, refresh]);
-
-  if (approved === null) {
-    return <div className="flex-1 p-8 text-center text-stone-400 font-sora">Loading…</div>;
-  }
-
-  if (!approved) {
-    return (
-      <div className="flex-1 p-4 sm:p-8 bg-white font-sora">
-        <div className="max-w-xl mx-auto mt-10 bg-amber-50 border border-amber-200 rounded-2xl p-6 text-center">
-          <span className="material-symbols-outlined text-amber-500 text-4xl">lock</span>
-          <h2 className="text-lg font-bold text-amber-800 mt-2">Warehouses are locked</h2>
-          <p className="text-sm text-amber-700 mt-1">Available after your supplying company approves you.</p>
-        </div>
-      </div>
-    );
-  }
+  }, [refresh]);
 
   return (
     <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-white font-sora">
@@ -559,12 +536,12 @@ const CreateWarehouseModal = ({ warehouse, onClose, onDone }) => {
 
   return (
     <Modal title={isEdit ? 'Edit Warehouse' : 'Add Warehouse'} onClose={onClose}>
-      <Field label="Name *">
-        <input className={inputCls} value={f.name} onChange={u('name')} />
+      <Field label="Warehouse Name *">
+        <input className={inputCls} value={f.name} onChange={u('name')} placeholder="e.g. Dhamnod Warehouse" />
         <FieldError msg={wErrors.name} />
       </Field>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4">
-        <Field label="Code"><input className={inputCls} value={f.code} onChange={u('code')} placeholder="WH-JBP" /></Field>
+        <Field label="Warehouse Code"><input className={inputCls} value={f.code} onChange={u('code')} placeholder="WH-JBP" /></Field>
         <Field label="Capacity (units)"><input type="number" className={inputCls} value={f.capacityUnits} onChange={u('capacityUnits')} /></Field>
         <Field label="State *">
           <select className={inputCls} value={stateIso} onChange={onStateChange}>

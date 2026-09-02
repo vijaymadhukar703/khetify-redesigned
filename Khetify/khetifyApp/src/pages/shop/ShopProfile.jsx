@@ -10,6 +10,8 @@ import {
 } from "../../lib/shopApi";
 import { getProductImage } from "../../lib/productImage";
 import { rupee } from "../../Components/shop/ProductCard";
+import { useT } from "../../context/ShopLanguageContext";
+import { STATUS_LABEL_KEY } from "../../lib/orderStatus";
 
 /* ─────────────────────────────────────────────────────────────────────────────
  * Khetify — Customer Profile hub  (/customer-shop/profile)
@@ -27,12 +29,13 @@ import { rupee } from "../../Components/shop/ProductCard";
  *   muted #6B6A62 · faint #9B9A92 · Sora headings (font-heading) / Manrope body
  * ───────────────────────────────────────────────────────────────────────────── */
 
+// Module scope has no t(): labels are KEYS, resolved where the tabs render.
 const TABS = [
-  { key: "profile",   label: "Personal information", short: "Profile",   icon: "person" },
-  { key: "addresses", label: "Manage addresses",     short: "Addresses", icon: "location_on" },
-  { key: "orders",    label: "My orders",            short: "Orders",    icon: "receipt_long" },
-  { key: "wishlist",  label: "My wishlist",          short: "Wishlist",  icon: "favorite" },
-  { key: "security",  label: "Login & security",     short: "Security",  icon: "lock" },
+  { key: "profile",   labelKey: "pf.tabProfile",   shortKey: "pf.tabProfileShort",   icon: "person" },
+  { key: "addresses", labelKey: "pf.tabAddresses", shortKey: "pf.tabAddressesShort", icon: "location_on" },
+  { key: "orders",    labelKey: "pf.tabOrders",    shortKey: "pf.tabOrdersShort",    icon: "receipt_long" },
+  { key: "wishlist",  labelKey: "pf.tabWishlist",  shortKey: "pf.tabWishlistShort",  icon: "favorite" },
+  { key: "security",  labelKey: "pf.tabSecurity",  shortKey: "pf.tabSecurityShort",  icon: "lock" },
 ];
 
 const EMPTY_ADDR = {
@@ -41,10 +44,8 @@ const EMPTY_ADDR = {
 };
 
 const ORDER_STEPS = ["pending", "confirmed", "packed", "shipped", "delivered"];
-const STATUS_LABEL = {
-  pending: "Order placed", confirmed: "Confirmed", packed: "Packed",
-  shipped: "Shipped", delivered: "Delivered", returned: "Returned", cancelled: "Cancelled",
-};
+// The status vocabulary is SHARED (lib/orderStatus.js) — this page used to keep
+// its own duplicate copy, which is how two screens drift apart.
 
 /* ─────────────── Small presentational helpers ─────────────── */
 
@@ -126,6 +127,7 @@ const initialsOf = (name = "") =>
 /* ─────────────── Personal information ─────────────── */
 
 function PersonalInfo({ consumer, updateProfile, refresh }) {
+  const t = useT();
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({ name: consumer.name || "", phone: consumer.phone || "" });
   const [busy, setBusy] = useState(false);
@@ -152,15 +154,15 @@ function PersonalInfo({ consumer, updateProfile, refresh }) {
   const save = async (e) => {
     e.preventDefault();
     setError(""); setOk("");
-    if (!form.name.trim()) { setError("Name cannot be empty."); return; }
-    if (form.phone && form.phone.length !== 10) { setError("Please enter a valid 10-digit phone number."); return; }
+    if (!form.name.trim()) { setError(t("pf.errNameEmpty")); return; }
+    if (form.phone && form.phone.length !== 10) { setError(t("pf.errPhone")); return; }
     setBusy(true);
     try {
       await updateProfile({ name: form.name.trim(), phone: form.phone });
-      setOk("Profile updated.");
+      setOk(t("pf.profileUpdated"));
       setEditing(false);
     } catch (err) {
-      setError(err?.response?.data?.message || "Could not update your profile.");
+      setError(err?.response?.data?.message || t("pf.errProfileUpdate"));
     } finally {
       setBusy(false);
     }
@@ -172,10 +174,10 @@ function PersonalInfo({ consumer, updateProfile, refresh }) {
       const res = await shopResendOtp();
       setOtpOpen(true);
       setOtpNote(res.otpSent
-        ? `We sent a 6-digit code to ${consumer.email}.`
-        : "Code generated — email isn't configured, so check the server console.");
+        ? t("pf.otpSent", { email: consumer.email })
+        : t("pf.otpNotConfigured"));
     } catch (err) {
-      setError(err?.response?.data?.message || "Could not send the code.");
+      setError(err?.response?.data?.message || t("pf.errSendCode"));
     } finally {
       setOtpBusy(false);
     }
@@ -188,9 +190,9 @@ function PersonalInfo({ consumer, updateProfile, refresh }) {
       await shopVerifyOtp(otp);
       await refresh();
       setOtpOpen(false); setOtp(""); setOtpNote("");
-      setOk("Email verified.");
+      setOk(t("pf.emailVerified"));
     } catch (err) {
-      setError(err?.response?.data?.message || "Incorrect code.");
+      setError(err?.response?.data?.message || t("pf.errIncorrectCode"));
     } finally {
       setOtpBusy(false);
     }
@@ -198,11 +200,11 @@ function PersonalInfo({ consumer, updateProfile, refresh }) {
 
   return (
     <Card
-      title="Personal information"
-      subtitle="This is how sellers reach you about your orders."
+      title={t("pf.tabProfile")}
+      subtitle={t("pf.personalSubtitle")}
       action={!editing && (
         <GhostButton onClick={() => { setEditing(true); setOk(""); }}>
-          <span className="material-symbols-outlined text-[18px]">edit</span> Edit
+          <span className="material-symbols-outlined text-[18px]">edit</span> {t("pf.edit")}
         </GhostButton>
       )}
     >
@@ -212,25 +214,25 @@ function PersonalInfo({ consumer, updateProfile, refresh }) {
 
         <form onSubmit={save} className="grid gap-4 sm:grid-cols-2">
           <label className="flex flex-col gap-1.5">
-            <span className="text-sm font-semibold text-[#14201A]">Full name</span>
+            <span className="text-sm font-semibold text-[#14201A]">{t("pf.fullName")}</span>
             <input
               className={field}
               value={form.name}
               onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
               disabled={!editing}
-              placeholder="Your name"
+              placeholder={t("pf.yourName")}
               autoComplete="name"
             />
           </label>
 
           <label className="flex flex-col gap-1.5">
-            <span className="text-sm font-semibold text-[#14201A]">Phone</span>
+            <span className="text-sm font-semibold text-[#14201A]">{t("pf.phone")}</span>
             <input
               className={field}
               value={form.phone}
               onChange={onPhone}
               disabled={!editing}
-              placeholder="10-digit mobile number"
+              placeholder={t("pf.phonePlaceholder")}
               inputMode="numeric"
               maxLength={10}
               autoComplete="tel"
@@ -241,27 +243,27 @@ function PersonalInfo({ consumer, updateProfile, refresh }) {
               changing it needs its own verify-first flow rather than a plain save. */}
           <label className="flex flex-col gap-1.5 sm:col-span-2">
             <span className="flex items-center justify-between">
-              <span className="text-sm font-semibold text-[#14201A]">Email</span>
+              <span className="text-sm font-semibold text-[#14201A]">{t("pf.email")}</span>
               {consumer.emailVerified ? (
                 <span className="inline-flex items-center gap-1 rounded-full bg-[#E9F2EA] px-2.5 py-1 text-[11px] font-bold text-[#2E6B3E]">
-                  <span className="material-symbols-outlined text-[14px]">verified</span> Verified
+                  <span className="material-symbols-outlined text-[14px]">verified</span> {t("pf.verified")}
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1 rounded-full bg-[#FEF3E2] px-2.5 py-1 text-[11px] font-bold text-[#9A6700]">
-                  <span className="material-symbols-outlined text-[14px]">error</span> Not verified
+                  <span className="material-symbols-outlined text-[14px]">error</span> {t("pf.notVerified")}
                 </span>
               )}
             </span>
             <input className={field} value={consumer.email || "—"} disabled />
             <span className="text-[13px] text-[#9B9A92]">
-              Your email is your sign-in ID, so it can't be changed here.
+              {t("pf.emailLocked")}
             </span>
           </label>
 
           {editing && (
             <div className="flex flex-wrap gap-2.5 sm:col-span-2">
-              <SolidButton type="submit" disabled={busy}>{busy ? "Saving…" : "Save changes"}</SolidButton>
-              <GhostButton type="button" onClick={cancel} disabled={busy}>Cancel</GhostButton>
+              <SolidButton type="submit" disabled={busy}>{busy ? t("pf.saving") : t("pf.saveChanges")}</SolidButton>
+              <GhostButton type="button" onClick={cancel} disabled={busy}>{t("pf.cancel")}</GhostButton>
             </div>
           )}
         </form>
@@ -272,10 +274,10 @@ function PersonalInfo({ consumer, updateProfile, refresh }) {
             {!otpOpen ? (
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <p className="text-sm text-[#6B6A62]">
-                  Verify your email so we can send order updates and receipts.
+                  {t("pf.verifyPrompt")}
                 </p>
                 <GhostButton onClick={sendOtp} disabled={otpBusy}>
-                  {otpBusy ? "Sending…" : "Verify now"}
+                  {otpBusy ? t("pf.sending") : t("pf.verifyNow")}
                 </GhostButton>
               </div>
             ) : (
@@ -288,19 +290,19 @@ function PersonalInfo({ consumer, updateProfile, refresh }) {
                     placeholder="______"
                     maxLength={6}
                     inputMode="numeric"
-                    aria-label="6-digit code"
+                    aria-label={t("pf.otpAria")}
                     className="h-[48px] w-[160px] rounded-[12px] border-[1.5px] border-[#E2E0D6] bg-white px-3 text-center text-lg tracking-[0.4em] text-[#14201A] outline-none focus:border-[#EA2831] focus:ring-4 focus:ring-[#EA2831]/10"
                   />
                   <SolidButton type="submit" disabled={otpBusy || otp.length < 4}>
-                    {otpBusy ? "Verifying…" : "Verify"}
+                    {otpBusy ? t("pf.verifying") : t("pf.verify")}
                   </SolidButton>
-                  <GhostButton type="button" onClick={sendOtp} disabled={otpBusy}>Resend</GhostButton>
+                  <GhostButton type="button" onClick={sendOtp} disabled={otpBusy}>{t("pf.resend")}</GhostButton>
                   <button
                     type="button"
                     onClick={() => { setOtpOpen(false); setOtp(""); setOtpNote(""); }}
                     className="text-sm font-semibold text-[#9B9A92] hover:text-[#6B6A62]"
                   >
-                    Cancel
+                    {t("pf.cancel")}
                   </button>
                 </div>
               </form>
@@ -315,6 +317,7 @@ function PersonalInfo({ consumer, updateProfile, refresh }) {
 /* ─────────────── Address book ─────────────── */
 
 function AddressForm({ initial, onSave, onCancel, busy }) {
+  const t = useT();
   const [form, setForm] = useState({ ...EMPTY_ADDR, ...initial });
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const onPhone = (e) => setForm((f) => ({ ...f, phone: e.target.value.replace(/\D/g, "").slice(0, 10) }));
@@ -345,24 +348,25 @@ function AddressForm({ initial, onSave, onCancel, busy }) {
         </div>
       </div>
 
-      <input required className={field} value={form.fullName} onChange={set("fullName")} placeholder="Full name" autoComplete="name" />
-      <input required className={field} value={form.phone} onChange={onPhone} placeholder="10-digit phone" inputMode="numeric" maxLength={10} autoComplete="tel" />
-      <input required className={`${field} sm:col-span-2`} value={form.line1} onChange={set("line1")} placeholder="House / street / area" />
-      <input className={`${field} sm:col-span-2`} value={form.line2} onChange={set("line2")} placeholder="Landmark (optional)" />
-      <input required className={field} value={form.city} onChange={set("city")} placeholder="City" />
-      <input className={field} value={form.district} onChange={set("district")} placeholder="District" />
-      <input className={field} value={form.state} onChange={set("state")} placeholder="State" />
-      <input required className={field} value={form.pincode} onChange={(e) => setForm((f) => ({ ...f, pincode: e.target.value.replace(/\D/g, "").slice(0, 6) }))} placeholder="Pincode" inputMode="numeric" maxLength={6} />
+      <input required className={field} value={form.fullName} onChange={set("fullName")} placeholder={t("pf.addrFullName")} autoComplete="name" />
+      <input required className={field} value={form.phone} onChange={onPhone} placeholder={t("pf.addrPhone")} inputMode="numeric" maxLength={10} autoComplete="tel" />
+      <input required className={`${field} sm:col-span-2`} value={form.line1} onChange={set("line1")} placeholder={t("pf.addrLine1")} />
+      <input className={`${field} sm:col-span-2`} value={form.line2} onChange={set("line2")} placeholder={t("pf.addrLine2")} />
+      <input required className={field} value={form.city} onChange={set("city")} placeholder={t("pf.addrCity")} />
+      <input className={field} value={form.district} onChange={set("district")} placeholder={t("pf.addrDistrict")} />
+      <input className={field} value={form.state} onChange={set("state")} placeholder={t("pf.addrState")} />
+      <input required className={field} value={form.pincode} onChange={(e) => setForm((f) => ({ ...f, pincode: e.target.value.replace(/\D/g, "").slice(0, 6) }))} placeholder={t("pf.addrPincode")} inputMode="numeric" maxLength={6} />
 
       <div className="flex flex-wrap gap-2.5 sm:col-span-2">
-        <SolidButton type="submit" disabled={busy}>{busy ? "Saving…" : "Save address"}</SolidButton>
-        <GhostButton type="button" onClick={onCancel} disabled={busy}>Cancel</GhostButton>
+        <SolidButton type="submit" disabled={busy}>{busy ? t("pf.saving") : t("pf.saveAddress")}</SolidButton>
+        <GhostButton type="button" onClick={onCancel} disabled={busy}>{t("pf.cancel")}</GhostButton>
       </div>
     </form>
   );
 }
 
 function AddressBook({ addresses, setAddresses, consumer }) {
+  const t = useT();
   const [mode, setMode] = useState(null);   // null | "add" | addressId (editing)
   const [busy, setBusy] = useState(false);
   const [confirmId, setConfirmId] = useState("");
@@ -378,7 +382,7 @@ function AddressBook({ addresses, setAddresses, consumer }) {
       setMode(null);
       setConfirmId("");
     } catch (err) {
-      setError(err?.response?.data?.message || "Something went wrong.");
+      setError(err?.response?.data?.message || t("pf.errGeneric"));
     } finally {
       setBusy(false);
     }
@@ -388,11 +392,11 @@ function AddressBook({ addresses, setAddresses, consumer }) {
 
   return (
     <Card
-      title="Manage addresses"
-      subtitle="Saved addresses show up at checkout so you can order in one tap."
+      title={t("pf.tabAddresses")}
+      subtitle={t("pf.addressesSubtitle")}
       action={mode === null && (
         <GhostButton onClick={() => { setMode("add"); setOk(""); }}>
-          <span className="material-symbols-outlined text-[18px]">add</span> Add new
+          <span className="material-symbols-outlined text-[18px]">add</span> {t("pf.addNew")}
         </GhostButton>
       )}
     >
@@ -421,9 +425,9 @@ function AddressBook({ addresses, setAddresses, consumer }) {
         {addresses.length === 0 && mode === null ? (
           <EmptyState
             icon="location_off"
-            title="No addresses saved yet"
-            body="Add a delivery address now and checkout becomes a single tap."
-            cta={<SolidButton className="mt-4" onClick={() => setMode("add")}>Add your first address</SolidButton>}
+            title={t("pf.noAddresses")}
+            body={t("pf.noAddressesBody")}
+            cta={<SolidButton className="mt-4" onClick={() => setMode("add")}>{t("pf.addFirstAddress")}</SolidButton>}
           />
         ) : (
           <div className="grid gap-3.5 md:grid-cols-2">
@@ -440,7 +444,7 @@ function AddressBook({ addresses, setAddresses, consumer }) {
                   </span>
                   {a.isDefault && (
                     <span className="inline-flex items-center gap-1 rounded-full bg-[#EA2831] px-2.5 py-1 text-[11px] font-bold text-white">
-                      <span className="material-symbols-outlined text-[13px]">check</span> Default
+                      <span className="material-symbols-outlined text-[13px]">check</span> {t("pf.default")}
                     </span>
                   )}
                 </div>
@@ -457,19 +461,19 @@ function AddressBook({ addresses, setAddresses, consumer }) {
 
                 {confirmId === a._id ? (
                   <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-[#E2E0D6] pt-3">
-                    <span className="text-sm font-semibold text-[#14201A]">Delete this address?</span>
+                    <span className="text-sm font-semibold text-[#14201A]">{t("pf.deleteConfirm")}</span>
                     <button
                       onClick={() => run(() => deleteShopAddress(a._id), "Address removed.")}
                       disabled={busy}
                       className="h-[34px] rounded-full bg-[#EA2831] px-4 text-[13px] font-bold text-white disabled:opacity-60"
                     >
-                      Yes, delete
+                      {t("common.yesDelete")}
                     </button>
                     <button
                       onClick={() => setConfirmId("")}
                       className="h-[34px] rounded-full px-3 text-[13px] font-bold text-[#6B6A62] hover:text-[#14201A]"
                     >
-                      Cancel
+                      {t("pf.cancel")}
                     </button>
                   </div>
                 ) : (
@@ -479,7 +483,7 @@ function AddressBook({ addresses, setAddresses, consumer }) {
                       disabled={busy}
                       className="inline-flex h-[34px] items-center gap-1 rounded-full px-3 text-[13px] font-bold text-[#14201A] hover:bg-[#F5F4EF] disabled:opacity-60"
                     >
-                      <span className="material-symbols-outlined text-[16px]">edit</span> Edit
+                      <span className="material-symbols-outlined text-[16px]">edit</span> {t("pf.edit")}
                     </button>
                     {!a.isDefault && (
                       <button
@@ -487,7 +491,7 @@ function AddressBook({ addresses, setAddresses, consumer }) {
                         disabled={busy}
                         className="inline-flex h-[34px] items-center gap-1 rounded-full px-3 text-[13px] font-bold text-[#14201A] hover:bg-[#F5F4EF] disabled:opacity-60"
                       >
-                        <span className="material-symbols-outlined text-[16px]">star</span> Set default
+                        <span className="material-symbols-outlined text-[16px]">star</span> {t("pf.setDefault")}
                       </button>
                     )}
                     <button
@@ -495,7 +499,7 @@ function AddressBook({ addresses, setAddresses, consumer }) {
                       disabled={busy}
                       className="inline-flex h-[34px] items-center gap-1 rounded-full px-3 text-[13px] font-bold text-[#EA2831] hover:bg-[#FDECEC] disabled:opacity-60"
                     >
-                      <span className="material-symbols-outlined text-[16px]">delete</span> Delete
+                      <span className="material-symbols-outlined text-[16px]">delete</span> {t("pf.delete")}
                     </button>
                   </div>
                 )}
@@ -511,8 +515,9 @@ function AddressBook({ addresses, setAddresses, consumer }) {
 /* ─────────────── Orders ─────────────── */
 
 function OrderTracker({ status }) {
+  const t = useT();
   if (status === "cancelled" || status === "returned") {
-    return <span className="text-[13px] font-bold text-[#EA2831]">{STATUS_LABEL[status]}</span>;
+    return <span className="text-[13px] font-bold text-[#EA2831]">{t(STATUS_LABEL_KEY[status])}</span>;
   }
   const active = ORDER_STEPS.indexOf(status);
   return (
@@ -521,7 +526,7 @@ function OrderTracker({ status }) {
         <React.Fragment key={s}>
           <div
             className={`h-2 w-2 shrink-0 rounded-full ${i <= active ? "bg-[#2E6B3E]" : "bg-[#E2E0D6]"}`}
-            title={STATUS_LABEL[s]}
+            title={t(STATUS_LABEL_KEY[s])}
           />
           {/* {i < ORDER_STEPS.length - 1 && (
             <div className={`h-0.5 flex-1 ${i < active ? "bg-[#2E6B3E]" : "bg-[#E2E0D6]"}`} />
@@ -533,13 +538,14 @@ function OrderTracker({ status }) {
 }
 
 function OrdersPanel({ orders, loading }) {
+  const t = useT();
   const recent = orders.slice(0, 3);
   return (
     <Card
-      title="My orders"
+      title={t("pf.tabOrders")}
       subtitle={orders.length ? `${orders.length} order${orders.length === 1 ? "" : "s"} so far.` : undefined}
       action={orders.length > 0 && (
-        <Link to="/customer-shop/orders" className={GHOST_CLS}>View all</Link>
+        <Link to="/customer-shop/orders" className={GHOST_CLS}>{t("pf.viewAll")}</Link>
       )}
     >
       {loading ? (
@@ -551,10 +557,10 @@ function OrdersPanel({ orders, loading }) {
       ) : recent.length === 0 ? (
         <EmptyState
           icon="receipt_long"
-          title="No orders yet"
-          body="Your orders will show up here once you check out."
+          title={t("pf.noOrders")}
+          body={t("pf.noOrdersBody")}
           cta={
-            <Link to="/customer-shop/products" className={`${SOLID_CLS} mt-4`}>Start shopping</Link>
+            <Link to="/customer-shop/products" className={`${SOLID_CLS} mt-4`}>{t("pf.startShopping")}</Link>
           }
         />
       ) : (
@@ -575,7 +581,7 @@ function OrdersPanel({ orders, loading }) {
                   <p className="text-[11px] font-bold uppercase tracking-wide text-[#9B9A92]">{o.payment?.mode || "cod"}</p>
                 </div>
               </div>
-              <p className="mt-3 text-[13px] font-bold text-[#6B6A62]">{STATUS_LABEL[o.status] || o.status}</p>
+              <p className="mt-3 text-[13px] font-bold text-[#6B6A62]">{STATUS_LABEL_KEY[o.status] ? t(STATUS_LABEL_KEY[o.status]) : o.status}</p>
               {/* <OrderTracker status={o.status} /> */}
             </article>
           ))}
@@ -588,24 +594,25 @@ function OrdersPanel({ orders, loading }) {
 /* ─────────────── Wishlist ─────────────── */
 
 function WishlistPanel({ items }) {
+  const t = useT();
   const { addItem } = useCart();
   const preview = items.slice(0, 4);
 
   return (
     <Card
-      title="My wishlist"
+      title={t("pf.tabWishlist")}
       subtitle={items.length ? `${items.length} item${items.length === 1 ? "" : "s"} saved.` : undefined}
       action={items.length > 0 && (
-        <Link to="/customer-shop/wishlist" className={GHOST_CLS}>View all</Link>
+        <Link to="/customer-shop/wishlist" className={GHOST_CLS}>{t("pf.viewAll")}</Link>
       )}
     >
       {preview.length === 0 ? (
         <EmptyState
           icon="favorite_border"
-          title="Nothing saved yet"
-          body="Tap the heart on any product to keep it here for later."
+          title={t("pf.nothingSaved")}
+          body={t("pf.nothingSavedBody")}
           cta={
-            <Link to="/customer-shop/products" className={`${SOLID_CLS} mt-4`}>Browse products</Link>
+            <Link to="/customer-shop/products" className={`${SOLID_CLS} mt-4`}>{t("pf.browseProducts")}</Link>
           }
         />
       ) : (
@@ -632,7 +639,7 @@ function WishlistPanel({ items }) {
                     onClick={() => addItem(p, 1)}
                     className="mt-2 h-[32px] rounded-full bg-[#EA2831] text-[12px] font-bold text-white transition-colors hover:bg-[#c91e26]"
                   >
-                    Add to cart
+                    {t("common.addToCart")}
                   </button>
                 </div>
               </article>
@@ -647,6 +654,7 @@ function WishlistPanel({ items }) {
 /* ─────────────── Security ─────────────── */
 
 function Security({ refresh }) {
+  const t = useT();
   const [form, setForm] = useState({ currentPassword: "", newPassword: "", confirm: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -656,8 +664,8 @@ function Security({ refresh }) {
   const submit = async (e) => {
     e.preventDefault();
     setError(""); setOk("");
-    if (form.newPassword.length < 6) { setError("Password must be at least 6 characters."); return; }
-    if (form.newPassword !== form.confirm) { setError("The two passwords don't match."); return; }
+    if (form.newPassword.length < 6) { setError(t("pf.errPasswordShort")); return; }
+    if (form.newPassword !== form.confirm) { setError(t("pf.errPasswordMismatch")); return; }
     setBusy(true);
     try {
       await changeShopPassword({ currentPassword: form.currentPassword, newPassword: form.newPassword });
@@ -665,47 +673,47 @@ function Security({ refresh }) {
       setForm({ currentPassword: "", newPassword: "", confirm: "" });
       setOk("Password updated.");
     } catch (err) {
-      setError(err?.response?.data?.message || "Could not update your password.");
+      setError(err?.response?.data?.message || t("pf.errPasswordUpdate"));
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <Card title="Change password" subtitle="Use at least 6 characters.">
+    <Card title={t("pf.changePassword")} subtitle={t("pf.passwordSubtitle")}>
       <form onSubmit={submit} className="grid max-w-md gap-4">
         {error && <Note tone="error">{error}</Note>}
         {ok && <Note tone="success">{ok}</Note>}
 
         <label className="flex flex-col gap-1.5">
-          <span className="text-sm font-semibold text-[#14201A]">Current password</span>
+          <span className="text-sm font-semibold text-[#14201A]">{t("pf.currentPassword")}</span>
           <input
             type="password" required className={field}
             value={form.currentPassword} onChange={set("currentPassword")}
-            placeholder="Enter your current password" autoComplete="current-password"
+            placeholder={t("pf.currentPasswordPlaceholder")} autoComplete="current-password"
           />
         </label>
 
         <label className="flex flex-col gap-1.5">
-          <span className="text-sm font-semibold text-[#14201A]">New password</span>
+          <span className="text-sm font-semibold text-[#14201A]">{t("pf.newPassword")}</span>
           <input
             type="password" required className={field}
             value={form.newPassword} onChange={set("newPassword")}
-            placeholder="At least 6 characters" autoComplete="new-password"
+            placeholder={t("pf.newPasswordPlaceholder")} autoComplete="new-password"
           />
         </label>
 
         <label className="flex flex-col gap-1.5">
-          <span className="text-sm font-semibold text-[#14201A]">Confirm new password</span>
+          <span className="text-sm font-semibold text-[#14201A]">{t("pf.confirmPassword")}</span>
           <input
             type="password" required className={field}
             value={form.confirm} onChange={set("confirm")}
-            placeholder="Re-enter the new password" autoComplete="new-password"
+            placeholder={t("pf.confirmPasswordPlaceholder")} autoComplete="new-password"
           />
         </label>
 
         <SolidButton type="submit" disabled={busy} className="justify-self-start">
-          {busy ? "Saving…" : "Update password"}
+          {busy ? t("pf.saving") : t("pf.updatePassword")}
         </SolidButton>
       </form>
     </Card>
@@ -715,6 +723,7 @@ function Security({ refresh }) {
 /* ─────────────── Page ─────────────── */
 
 export default function ShopProfile() {
+  const t = useT();
   const { consumer, logout, refresh, updateProfile } = useShopAuth();
   const { count: cartCount } = useCart();
   const { items: wishlistItems, count: wishlistCount } = useWishlist();
@@ -787,7 +796,7 @@ export default function ShopProfile() {
           <line x1="19" y1="12" x2="5" y2="12" />
           <polyline points="12 19 5 12 12 5" />
         </svg>
-        <span className="leading-none">Back</span>
+        <span className="leading-none">{t("pf.back")}</span>
       </button>
     </div>
 
@@ -799,7 +808,7 @@ export default function ShopProfile() {
                 {initialsOf(consumer.name)}
               </span>
             <div className="min-w-0">
-              <p className="text-[13px] font-semibold text-[#9B9A92]">Hello 👋</p>
+              <p className="text-[13px] font-semibold text-[#9B9A92]">{t("pf.hello")}</p>
               <h1 className="truncate font-heading text-2xl font-extrabold tracking-tight text-[#14201A]">
                 {consumer.name}
               </h1>
@@ -810,10 +819,10 @@ export default function ShopProfile() {
           <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
             <Link to="/customer-shop/cart" className={GHOST_CLS}>
               <span className="material-symbols-outlined text-[18px]">shopping_cart</span>
-              Cart {cartCount > 0 && <span className="text-[#EA2831]">({cartCount})</span>}
+              {t("pf.cart")} {cartCount > 0 && <span className="text-[#EA2831]">({cartCount})</span>}
             </Link>
             <GhostButton onClick={onLogout} className="!border-[#F3C6C8] !text-[#EA2831] hover:!bg-[#FDECEC]">
-              <span className="material-symbols-outlined text-[18px]">logout</span> Logout
+              <span className="material-symbols-outlined text-[18px]">logout</span> {t("pf.logout")}
             </GhostButton>
           </div>
         </header>
@@ -826,13 +835,14 @@ export default function ShopProfile() {
           {/* ── Nav: sidebar on desktop, scrollable chip row on mobile ── */}
           <nav className="md:sticky md:top-24 md:self-start">
             <ul className="grid grid-cols-3 gap-2 sm:grid-cols-5 md:flex md:flex-col md:gap-1.5">
-              {TABS.map((t) => {
-                const active = t.key === tab;
-                const n = counts[t.key];
+              {/* Map param renamed off `t` — it would shadow the translator. */}
+              {TABS.map((item) => {
+                const active = item.key === tab;
+                const n = counts[item.key];
                 return (
-                  <li key={t.key} className="shrink-0 lg:shrink">
+                  <li key={item.key} className="shrink-0 lg:shrink">
                     <button
-                      onClick={() => setTab(t.key)}
+                      onClick={() => setTab(item.key)}
                       aria-current={active ? "page" : undefined}
                       className={`flex w-full flex-col items-center gap-1 rounded-[14px] px-2 py-2.5 text-xs font-bold transition-colors md:flex-row md:gap-2.5 md:px-4 md:py-3 md:text-sm ${
                         active
@@ -840,9 +850,9 @@ export default function ShopProfile() {
                           : "border-[1.5px] border-[#E2E0D6] bg-white text-[#6B6A62] hover:border-[#c9c7bb] hover:text-[#14201A] md:border-transparent md:bg-transparent md:hover:bg-white"
                       }`}
                     >
-                      <span className="material-symbols-outlined text-[20px]">{t.icon}</span>
-                      <span className="text-center leading-tight md:hidden">{t.short}</span>
-                      <span className="hidden whitespace-nowrap md:inline">{t.label}</span>
+                      <span className="material-symbols-outlined text-[20px]">{item.icon}</span>
+                      <span className="text-center leading-tight md:hidden">{t(item.shortKey)}</span>
+                      <span className="hidden whitespace-nowrap md:inline">{t(item.labelKey)}</span>
                       {n > 0 && (
                         <span className={`ml-auto hidden rounded-full px-2 py-0.5 text-[11px] font-bold md:inline ${
                           active ? "bg-white/15 text-white" : "bg-[#F5F4EF] text-[#6B6A62]"

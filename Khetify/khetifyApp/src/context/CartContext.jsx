@@ -15,11 +15,26 @@ const CartContext = createContext(null);
 
 const keyFor = (id) => `${KEY_PREFIX}${id || "guest"}`;
 
+/**
+ * THE CART LINE KEY.
+ *
+ * A product with variants can sit in the cart more than once — Red AND Green
+ * are two different things at two possible prices, so listingId alone can no
+ * longer identify a line. Without a variant the key IS the listingId, so every
+ * existing line, every existing caller and every already-saved localStorage
+ * cart keeps working untouched.
+ */
+export const lineKey = (listingId, variantId) =>
+  (variantId ? `${listingId}::${variantId}` : String(listingId));
+
+/** Old carts were saved before lineId existed; derive it on read. */
+const withLineId = (i) => (i.lineId ? i : { ...i, lineId: lineKey(i.listingId, i.variantId) });
+
 function read(key) {
   try {
     const raw = localStorage.getItem(key);
     const arr = raw ? JSON.parse(raw) : [];
-    return Array.isArray(arr) ? arr : [];
+    return Array.isArray(arr) ? arr.map(withLineId) : [];
   } catch { return []; }
 }
 function write(key, items) {
@@ -40,14 +55,14 @@ function migrateLegacy() {
 
 // Merge two carts: sum quantities for the same line, clamp to available stock.
 function mergeCarts(base, extra) {
-  const map = new Map(base.map((i) => [i.listingId, { ...i }]));
+  const map = new Map(base.map((i) => [i.lineId, { ...i }]));
   for (const g of extra) {
-    const ex = map.get(g.listingId);
+    const ex = map.get(g.lineId);
     if (ex) {
       const cap = Number.isFinite(ex.availableStock) && ex.availableStock > 0 ? ex.availableStock : Infinity;
       ex.qty = Math.min((ex.qty || 0) + (g.qty || 0), cap);
     } else {
-      map.set(g.listingId, { ...g });
+      map.set(g.lineId, { ...g });
     }
   }
   return [...map.values()];
@@ -94,14 +109,22 @@ export function CartProvider({ children }) {
   }, []);
 
   // ── Public API (unchanged behaviour) ──
-  const addItem = useCallback((product, addQty = 1) => {
+  /**
+   * @param product  the catalog product
+   * @param addQty   quantity to add
+   * @param variant  OPTIONAL selected variant, as returned by the shop API.
+   *                 Omitted by every existing caller, which keeps their exact
+   *                 previous behaviour.
+   */
+  const addItem = useCallback((product, addQty = 1, variant = null) => {
     const inc = Math.max(1, Math.floor(Number(addQty) || 1));
     const max = Number.isFinite(product.availableStock) && product.availableStock > 0
       ? product.availableStock
       : Infinity;
+    const id = lineKey(product.listingId, variant?.id);
 
     setItems((prev) => {
-      const idx = prev.findIndex((i) => i.listingId === product.listingId);
+      const idx = prev.findIndex((i) => i.lineId === id);
       if (idx >= 0) {
         const next = [...prev];
         const cap = Number.isFinite(next[idx].availableStock) && next[idx].availableStock > 0
@@ -111,12 +134,20 @@ export function CartProvider({ children }) {
         return next;
       }
       return [...prev, {
+        lineId: id,
         listingId: product.listingId,
         productId: product.productId,
         sellerId: product.sellerId,
+        // The chosen variant travels with the line so the cart, the checkout
+        // summary and the order all show WHICH one. Price and image come from
+        // the variant when it has them; the server re-derives both at checkout,
+        // so these are for display only and can never set what is charged.
+        variantId: variant?.id || null,
+        variantLabel: variant?.label || null,
+        variantAttributes: variant?.attributes || null,
         name: product.name,
-        price: product.price,
-        image: product.images?.[0] || null,
+        price: variant?.mrp != null ? Number(variant.mrp) : product.price,
+        image: variant?.image || product.images?.[0] || null,
         unit: product.unit,
         sellerName: product.seller?.name,
         availableStock: Number.isFinite(product.availableStock) ? product.availableStock : null,
@@ -125,10 +156,12 @@ export function CartProvider({ children }) {
     });
   }, []);
 
-  const setQty = useCallback((listingId, qty) => {
+  // `id` is a lineId. For a product with no variant that IS its listingId, so
+  // callers that still pass a listingId keep working unchanged.
+  const setQty = useCallback((id, qty) => {
     setItems((prev) =>
       prev.flatMap((i) => {
-        if (i.listingId !== listingId) return [i];
+        if (i.lineId !== id) return [i];
         const cap = Number.isFinite(i.availableStock) && i.availableStock > 0 ? i.availableStock : Infinity;
         const n = Math.min(Math.max(0, Math.floor(Number(qty) || 0)), cap);
         return n <= 0 ? [] : [{ ...i, qty: n }];
@@ -136,8 +169,8 @@ export function CartProvider({ children }) {
     );
   }, []);
 
-  const removeItem = useCallback((listingId) => {
-    setItems((prev) => prev.filter((i) => i.listingId !== listingId));
+  const removeItem = useCallback((id) => {
+    setItems((prev) => prev.filter((i) => i.lineId !== id));
   }, []);
 
   const clearCart = useCallback(() => setItems([]), []);

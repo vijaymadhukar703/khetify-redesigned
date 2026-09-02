@@ -3,7 +3,7 @@ import Swal from 'sweetalert2';
 import { Modal, Field, inputCls, PrimaryBtn, GhostBtn, Th } from '../Company/ims/ImsUi';
 import { formatINR, fmtDate } from '../../lib/imsApi';
 import {
-  getSellerLink, getSellerOrders, createSellerOrder, updateSellerOrderStatus,
+  getSellerOrders, createSellerOrder, updateSellerOrderStatus,
   getSellerCustomers, getSellerProducts, getSellerOrderSourceOptions,
 } from '../../lib/sellerApi';
 
@@ -44,7 +44,6 @@ const addressLines = (o) => {
 };
 
 const SellerOutbound = () => {
-  const [approved, setApproved] = useState(null);
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -55,11 +54,11 @@ const SellerOutbound = () => {
     getSellerOrders().then((r) => setOrders(listOf(r))).catch(apiError).finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => {
-    getSellerLink()
-      .then((r) => { const ok = r?.data?.linkStatus === 'approved'; setApproved(ok); if (ok) refresh(); })
-      .catch(() => setApproved(false));
-  }, [refresh]);
+  // NOT gated by approval: this is how a seller sells their OWN stock, which
+  // belongs to no supplying company. routes/Seller/sellerOrderRoutes.js dropped
+  // requireApprovedSeller for the same reason; the order:create / order:update
+  // capabilities are unchanged.
+  useEffect(() => { refresh(); }, [refresh]);
 
   const advance = async (o, status) => {
     // Approving now goes through warehouse assignment — the seller picks WHICH
@@ -73,19 +72,6 @@ const SellerOutbound = () => {
     catch (err) { apiError(err); }
   };
 
-  if (approved === null) return <div className="flex-1 p-8 text-center text-stone-400 font-sora">Loading…</div>;
-  if (!approved) {
-    return (
-      <div className="flex-1 p-4 sm:p-8 bg-white font-sora">
-        <div className="max-w-xl mx-auto mt-10 bg-amber-50 border border-amber-200 rounded-2xl p-6 text-center">
-          <span className="material-symbols-outlined text-amber-500 text-4xl">lock</span>
-          <h2 className="text-lg font-bold text-amber-800 mt-2">Outbound Sales is locked</h2>
-          <p className="text-sm text-amber-700 mt-1">Available after your supplying company approves you.</p>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-white font-sora">
       <div className="max-w-7xl mx-auto space-y-6">
@@ -94,7 +80,7 @@ const SellerOutbound = () => {
             <h1 className="text-xl font-bold text-stone-900">Outbound Sales</h1>
             <p className="text-sm text-stone-500">Sell from your stock to customers and dealers. Shipping deducts stock FEFO.</p>
           </div>
-          <PrimaryBtn onClick={() => setCreating(true)}><span className="material-symbols-outlined text-base">add_shopping_cart</span> New Order</PrimaryBtn>
+          {/* <PrimaryBtn onClick={() => setCreating(true)}><span className="material-symbols-outlined text-base">add_shopping_cart</span> New Order</PrimaryBtn> */}
         </div>
 
         <div className="border border-stone-200 rounded-2xl shadow-sm bg-white overflow-hidden">

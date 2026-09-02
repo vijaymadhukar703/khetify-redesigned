@@ -11,7 +11,7 @@ import { Field, inputCls, PrimaryBtn } from '../Company/ims/ImsUi';
 import LotLabel from '../../Components/ims/LotLabel';
 import BulkPackageLabel from '../../Components/ims/BulkPackageLabel';
 import {
-  getSellerLink, getSellerLots, getSellerUnits, printSellerUnits, getSellerLotDetails,
+  getSellerLots, getSellerUnits, printSellerUnits, getSellerLotDetails,
 } from '../../lib/sellerApi';
 
 const toast = (icon, title) => Swal.fire({ icon, title, toast: true, position: 'top-end', timer: 2200, showConfirmButton: false });
@@ -121,7 +121,6 @@ const toLabelBox = (b) => ({
 // is created, moved or renumbered here; this only reads and groups.
 const SellerLabels = () => {
   const [params] = useSearchParams();
-  const [approved, setApproved] = useState(null);
   const [lots, setLots] = useState([]);
   const [lotId, setLotId] = useState('');
   const [units, setUnits] = useState([]);
@@ -133,20 +132,13 @@ const SellerLabels = () => {
   const [custom, setCustom] = useState({ cols: 4, w: 50, h: 30 });
 
   useEffect(() => {
-    getSellerLink()
-      .then((r) => {
-        const ok = r?.data?.linkStatus === 'approved';
-        setApproved(ok);
-        if (!ok) return;
-        getSellerLots().then((res) => {
-          const l = listOf(res);
-          setLots(l);
-          const wanted = params.get('lot');
-          const match = wanted && l.find((x) => x._id === wanted);
-          setLotId(match ? match._id : (l[0]?._id || ''));
-        }).catch(apiError);
-      })
-      .catch(() => setApproved(false));
+    getSellerLots().then((res) => {
+      const l = listOf(res);
+      setLots(l);
+      const wanted = params.get('lot');
+      const match = wanted && l.find((x) => x._id === wanted);
+      setLotId(match ? match._id : (l[0]?._id || ''));
+    }).catch(apiError);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -154,14 +146,14 @@ const SellerLabels = () => {
     if (!id) { setUnits([]); return; }
     getSellerUnits({ inventoryId: id, limit: 10000 }).then((r) => setUnits(listOf(r))).catch(apiError);
   };
-  useEffect(() => { if (approved && lotId) loadUnits(lotId); }, [lotId, approved]);
+  useEffect(() => { if (lotId) loadUnits(lotId); }, [lotId]);
 
   /* The packaging tree for the selected lot. Uses the EXISTING lot-details
      endpoint — no new API — which already returns the seller's bulk packages and
      now also states each one's level and parent. A lot with no boxes simply
      returns none and the flat layout is used. */
   useEffect(() => {
-    if (!approved || !lotId) { setBoxes([]); setMainBoxes([]); return undefined; }
+    if (!lotId) { setBoxes([]); setMainBoxes([]); return undefined; }
     let cancelled = false;
     getSellerLotDetails(lotId)
       .then((r) => {
@@ -174,7 +166,7 @@ const SellerLabels = () => {
       // falls back to the flat grid rather than showing nothing.
       .catch(() => { if (!cancelled) { setBoxes([]); setMainBoxes([]); } });
     return () => { cancelled = true; };
-  }, [lotId, approved]);
+  }, [lotId]);
 
   const lot = useMemo(() => lots.find((l) => l._id === lotId), [lots, lotId]);
   const lotLabel = (l) => `${l.productId?.productName || 'Item'} · ${l.lotNumber || l.batchNumber}`;
@@ -292,19 +284,6 @@ const SellerLabels = () => {
       </div>
     </div>
   );
-
-  if (approved === null) return <div className="flex-1 p-8 text-center text-stone-400 font-sora">Loading…</div>;
-  if (!approved) {
-    return (
-      <div className="flex-1 p-4 sm:p-8 bg-white font-sora">
-        <div className="max-w-xl mx-auto mt-10 bg-amber-50 border border-amber-200 rounded-2xl p-6 text-center">
-          <span className="material-symbols-outlined text-amber-500 text-4xl">lock</span>
-          <h2 className="text-lg font-bold text-amber-800 mt-2">Labels are locked</h2>
-          <p className="text-sm text-amber-700 mt-1">Available after your supplying company approves you.</p>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-white font-sora">

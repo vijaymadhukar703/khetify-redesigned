@@ -3,6 +3,8 @@ import { Link, useSearchParams, useNavigate } from "react-router-dom";
 import { getShopOrders } from "../../lib/shopApi";
 import { getProductImage } from "../../lib/productImage";
 import { rupee } from "../../Components/shop/ProductCard";
+import { useT } from "../../context/ShopLanguageContext";
+import { STATUS_LABEL_KEY } from "../../lib/orderStatus";
 
 /* ─────────────────────────────────────────────────────────────────────────────
  * Khetify — My Orders  (/customer-shop/orders)
@@ -25,15 +27,9 @@ import { rupee } from "../../Components/shop/ProductCard";
 
 const FLOW = ["pending", "confirmed", "packed", "shipped", "delivered"];
 
-const STATUS_LABEL = {
-  pending: "Order placed",
-  confirmed: "Confirmed",
-  packed: "Packed",
-  shipped: "Shipped",
-  delivered: "Delivered",
-  returned: "Returned",
-  cancelled: "Cancelled",
-};
+// The status vocabulary lives in lib/orderStatus.js and is SHARED with the
+// order detail page — this file used to keep its own duplicate copy, which is
+// exactly how two screens drift apart.
 
 const isDead = (s) => s === "cancelled" || s === "returned";
 
@@ -48,10 +44,10 @@ const fmtDate = (d) =>
   new Date(d).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
 
 const TABS = [
-  { key: "all", label: "All" },
-  { key: "active", label: "Active" },
-  { key: "delivered", label: "Delivered" },
-  { key: "cancelled", label: "Cancelled" },
+  { key: "all", labelKey: "orders.tabAll" },
+  { key: "active", labelKey: "orders.tabActive" },
+  { key: "delivered", labelKey: "orders.tabDelivered" },
+  { key: "cancelled", labelKey: "orders.tabCancelled" },
 ];
 
 const ACTIVE = ["pending", "confirmed", "packed", "shipped"];
@@ -95,6 +91,7 @@ function CardSkeleton() {
 }
 
 export default function ShopOrders() {
+  const t = useT();
   const navigate = useNavigate();
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -160,7 +157,7 @@ export default function ShopOrders() {
       <button
         type="button"
         onClick={() => navigate(-1)}
-        aria-label="Go back"
+        aria-label={t("orders.goBack")}
         className="no-print hidden sm:inline-flex absolute -left-9 shrink-0 items-center justify-center text-stone-900 transition-colors duration-150 hover:text-[#EA2831]"
       >
         <span className="material-symbols-outlined text-[24px] sm:text-[26px] font-bold leading-none">
@@ -170,13 +167,15 @@ export default function ShopOrders() {
 
       {/* Main Title */}
       <h1 className="font-heading text-xl font-black tracking-tight text-stone-900 sm:text-2xl leading-none">
-        My Orders
+        {t("orders.title")}
       </h1>
     </div>
 
     {/* Subtitle */}
     <p className="mt-1 text-xs text-stone-500 sm:text-sm">
-      {loading ? "Loading…" : `${orders.length} order${orders.length === 1 ? "" : "s"} so far`}
+      {loading
+        ? t("orders.loading")
+        : t(orders.length === 1 ? "orders.count" : "orders.countPlural", { count: orders.length })}
     </p>
   </div>
 </header>
@@ -192,14 +191,14 @@ export default function ShopOrders() {
               <input
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                placeholder="Search your orders"
-                aria-label="Search orders"
+                placeholder={t("orders.searchPlaceholder")}
+                aria-label={t("orders.searchAria")}
                 className="h-11 w-full rounded-xl border border-stone-200 bg-white pl-11 pr-10 text-sm text-stone-800 outline-none transition-all placeholder:text-stone-400 focus:border-[#EA2831] focus:ring-4 focus:ring-[#EA2831]/10"
               />
               {q && (
                 <button
                   onClick={() => setQ("")}
-                  aria-label="Clear search"
+                  aria-label={t("orders.clearSearch")}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-700"
                 >
                   <span className="material-symbols-outlined text-lg">close</span>
@@ -209,19 +208,21 @@ export default function ShopOrders() {
 
             {/* Tabs scroll horizontally only WITHIN their own strip, never the page. */}
             <div className="grid grid-cols-4 gap-1.5 sm:flex sm:flex-wrap sm:gap-2">
-              {TABS.map((t) => (
+              {/* The map param was named `t`, which would SHADOW the
+                  translator — renamed to `item`. */}
+              {TABS.map((item) => (
                 <button
-                  key={t.key}
-                  onClick={() => setTab(t.key)}
+                  key={item.key}
+                  onClick={() => setTab(item.key)}
                   className={`flex items-center justify-center gap-1 rounded-full px-1.5 py-2 text-[10px] font-bold uppercase tracking-tight transition-colors sm:px-4 sm:text-xs sm:tracking-wide ${
-                    tab === t.key
+                    tab === item.key
                       ? "bg-stone-900 text-white"
                       : "border border-stone-200 bg-white text-stone-500 hover:border-stone-300 hover:text-stone-800"
                   }`}
                 >
-                  {t.label}
-                  <span className={`hidden rounded-full px-1.5 py-0.5 text-[10px] sm:inline ${tab === t.key ? "bg-white/20" : "bg-stone-100 text-stone-500"}`}>
-                    {counts[t.key]}
+                  {t(item.labelKey)}
+                  <span className={`hidden rounded-full px-1.5 py-0.5 text-[10px] sm:inline ${tab === item.key ? "bg-white/20" : "bg-stone-100 text-stone-500"}`}>
+                    {counts[item.key]}
                   </span>
                 </button>
               ))}
@@ -238,7 +239,7 @@ export default function ShopOrders() {
               onClick={load}
               className="mt-4 rounded-xl bg-[#EA2831] px-5 py-2.5 text-xs font-bold uppercase tracking-wider text-white transition-colors hover:bg-[#c91e26]"
             >
-              Try again
+              {t("common.tryAgain")}
             </button>
           </div>
         )}
@@ -254,13 +255,13 @@ export default function ShopOrders() {
         {!loading && !error && orders.length === 0 && (
           <div className="rounded-3xl border border-stone-200 bg-white p-12 text-center shadow-sm">
             <span className="material-symbols-outlined text-5xl font-light text-stone-300">receipt_long</span>
-            <h3 className="mt-3 font-heading text-lg font-bold text-stone-800">No orders yet</h3>
-            <p className="mt-1 text-sm text-stone-500">Your orders will appear here after you check out.</p>
+            <h3 className="mt-3 font-heading text-lg font-bold text-stone-800">{t("orders.empty")}</h3>
+            <p className="mt-1 text-sm text-stone-500">{t("orders.emptySub")}</p>
             <Link
               to="/customer-shop/products"
               className="mt-5 inline-flex items-center gap-2 rounded-xl bg-[#EA2831] px-6 py-3 text-sm font-bold text-white shadow-md shadow-red-600/10 transition-colors hover:bg-[#c91e26]"
             >
-              Start shopping <span className="material-symbols-outlined text-sm">arrow_forward</span>
+              {t("orders.startShopping")} <span className="material-symbols-outlined text-sm">arrow_forward</span>
             </Link>
           </div>
         )}
@@ -269,7 +270,7 @@ export default function ShopOrders() {
         {!loading && !error && orders.length > 0 && visible.length === 0 && (
           <div className="rounded-2xl border border-dashed border-stone-200 bg-white p-12 text-center">
             <span className="material-symbols-outlined text-4xl font-light text-stone-300">search_off</span>
-            <h3 className="mt-2 font-heading text-base font-bold text-stone-800">No matching orders</h3>
+            <h3 className="mt-2 font-heading text-base font-bold text-stone-800">{t("orders.noMatching")}</h3>
             <p className="mt-1 text-sm text-stone-500">
               {q ? `Nothing matches "${q}".` : `You have no ${tab} orders.`}
             </p>
@@ -277,7 +278,7 @@ export default function ShopOrders() {
               onClick={() => { setQ(""); setTab("all"); }}
               className="mt-4 text-sm font-bold text-[#EA2831] hover:underline"
             >
-              Clear filters
+              {t("orders.clearFilters")}
             </button>
           </div>
         )}
@@ -304,7 +305,7 @@ export default function ShopOrders() {
                     <div className="min-w-0">
                       <p className="font-heading text-sm font-bold text-stone-900 sm:text-base">{o.orderNumber}</p>
                       <p className="mt-0.5 text-xs text-stone-400">
-                        Placed {fmtDate(o.placedAt || o.createdAt)}
+                        {t("orders.placed", { date: fmtDate(o.placedAt || o.createdAt) })}
                         {o.sellerName ? ` · ${o.sellerName}` : ""}
                       </p>
                     </div>
@@ -336,7 +337,7 @@ export default function ShopOrders() {
                     ))}
                     {more > 0 && (
                       <p className="pl-[60px] text-xs font-semibold text-stone-400">
-                        + {more} more item{more === 1 ? "" : "s"}
+                        {t(more === 1 ? "orders.moreItem" : "orders.moreItemPlural", { count: more })}
                       </p>
                     )}
                   </div>
@@ -344,7 +345,7 @@ export default function ShopOrders() {
                   {/* Status + action */}
                   <div className="mt-3.5 flex flex-wrap items-center justify-between gap-2 border-t border-stone-100 pt-3">
                     <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide ${statusTone(o.status)}`}>
-                      {STATUS_LABEL[o.status] || o.status}
+                      {STATUS_LABEL_KEY[o.status] ? t(STATUS_LABEL_KEY[o.status]) : o.status}
                     </span>
 
                     {/* Cancelled/returned → a clear dead-order line, NOT "buy it
@@ -352,14 +353,14 @@ export default function ShopOrders() {
                     {dead ? (
                       <span className="inline-flex items-center gap-1.5 text-[12px] font-bold text-[#EA2831]">
                         <span className="material-symbols-outlined text-[15px]">cancel</span>
-                        {o.status === "returned" ? "Order returned" : "Order cancelled"}
+                        {o.status === "returned" ? t("orders.orderReturned") : t("orders.orderCancelled")}
                       </span>
                     ) : (
                       <span className="inline-flex items-center gap-1.5 text-[12px] font-bold text-[#EA2831]">
                         <span className="material-symbols-outlined text-[15px]">
                           {delivered ? "refresh" : "local_shipping"}
                         </span>
-                        {delivered ? "Buy it again" : "Track order"}
+                        {delivered ? t("orders.buyAgain") : t("orders.trackOrder")}
                         <span className="material-symbols-outlined text-[15px]">
                           chevron_right
                         </span>

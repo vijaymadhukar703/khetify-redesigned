@@ -1,9 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getMyListings } from '../../lib/sellerApi';
-
-// Where the customer storefront lives — used to "view on storefront".
-const STOREFRONT_URL = (import.meta.env.VITE_CUSTOMER_STOREFRONT_URL || 'http://localhost:5174').replace(/\/$/, '');
+// Tolerates the two shapes productImages[] is stored in — see the helper.
+import { getProductImage } from '../../lib/productImage';
 
 const fmtDate = (d) => {
   if (!d) return '—';
@@ -20,6 +19,47 @@ const StatusPill = ({ status }) => {
     }`}>
       {published ? 'Published' : 'Unpublished'}
     </span>
+  );
+};
+
+/* Live sellable stock, from the SAME Inventory aggregate the storefront reads.
+   Colour-coded because the number alone buries the one case that needs acting
+   on: a PUBLISHED listing with nothing behind it is a shopper hitting
+   "out of stock" on a product the seller believes is live. */
+const StockPill = ({ qty }) => {
+  const n = Number(qty) || 0;
+  const tone = n === 0
+    ? 'bg-red-50 text-red-700 border-red-200'
+    : n <= 10
+      ? 'bg-amber-50 text-amber-700 border-amber-200'
+      : 'bg-stone-50 text-stone-700 border-stone-200';
+  return (
+    <span className={`inline-flex items-baseline gap-1 text-xs font-bold px-2.5 py-1 rounded-full border whitespace-nowrap ${tone}`}>
+      {n}
+      <span className="text-[10px] font-semibold opacity-70">{n === 1 ? 'unit' : 'units'}</span>
+    </span>
+  );
+};
+
+/* The product photo, with the placeholder kept as the fallback rather than the
+   default — a broken/absent image must not leave an empty box. */
+const ProductThumb = ({ src, alt }) => {
+  const [failed, setFailed] = useState(false);
+  const url = failed ? null : getProductImage(src);
+  return (
+    <div className="size-12 min-w-[48px] rounded-xl bg-stone-100 border border-stone-200 overflow-hidden flex items-center justify-center">
+      {url ? (
+        <img
+          src={url}
+          alt={alt || 'Product'}
+          loading="lazy"
+          className="size-full object-cover"
+          onError={() => setFailed(true)}
+        />
+      ) : (
+        <span className="material-symbols-outlined text-2xl text-stone-300 font-light">inventory_2</span>
+      )}
+    </div>
   );
 };
 
@@ -63,22 +103,22 @@ const SellerListings = () => {
                   <tr className="bg-stone-50/50 border-b border-stone-200">
                     <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Product</th>
                     <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Price (₹)</th>
+                    <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Quantity</th>
                     <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Status</th>
                     <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Published</th>
-                    <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest text-right">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-stone-100">
                   {!loading && listings.map((l) => {
                     const product = l.productId && typeof l.productId === 'object' ? l.productId : null;
-                    const productId = String(product?._id || l.productId);
                     return (
                       <tr key={l._id} className="hover:bg-stone-50/30 transition-colors">
                         <td data-label="Product" className="px-6 py-4">
                           <div className="flex items-center gap-4">
-                            <div className="size-12 min-w-[48px] rounded-xl bg-stone-100 border border-stone-200 overflow-hidden flex items-center justify-center">
-                              <span className="material-symbols-outlined text-2xl text-stone-300 font-light">inventory_2</span>
-                            </div>
+                            <ProductThumb
+                              src={(product?.productImages || [])[0]}
+                              alt={product?.productName}
+                            />
                             <div className="flex flex-col">
                               <span className="font-bold text-stone-900 text-sm">{product?.productName || 'Product'}</span>
                               <span className="text-[10px] text-stone-400 font-medium font-mono uppercase tracking-tighter">{product?.skuNumber || '---'}</span>
@@ -86,19 +126,9 @@ const SellerListings = () => {
                           </div>
                         </td>
                         <td data-label="Price (₹)" className="px-6 py-4 text-sm text-stone-900 font-black">₹{l.price ?? '—'}</td>
+                        <td data-label="Quantity" className="px-6 py-4"><StockPill qty={l.availableStock} /></td>
                         <td data-label="Status" className="px-6 py-4"><StatusPill status={l.status} /></td>
                         <td data-label="Published" className="px-6 py-4 text-xs text-stone-500 font-semibold">{fmtDate(l.publishedAt)}</td>
-                        <td className="px-6 py-4 text-right cell-actions">
-                          <a
-                            href={`${STOREFRONT_URL}/products/${productId}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 hover:text-blue-700"
-                          >
-                            View on storefront
-                            <span className="material-symbols-outlined text-sm">open_in_new</span>
-                          </a>
-                        </td>
                       </tr>
                     );
                   })}

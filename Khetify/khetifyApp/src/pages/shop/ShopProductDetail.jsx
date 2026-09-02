@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
-import { useParams, useNavigate, Link } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams, Link } from "react-router-dom";
 import { getShopProduct, getShopProducts } from "../../lib/shopApi";
 import { getProductImage } from "../../lib/productImage";
 import { toBuyNowItem, setBuyNowItem } from "../../lib/buyNow";
 import { useCart } from "../../context/CartContext";
 import { useWishlist } from "../../context/WishlistContext";
+import { useT, useShopLanguage } from "../../context/ShopLanguageContext";
 import { rupee } from "../../Components/shop/ProductCard";
 import { HomeProductCard } from "./ShopHome";
 
@@ -14,6 +15,18 @@ import { HomeProductCard } from "./ShopHome";
    image gallery (activeImg); back button; wishlist toggle (useWishlist);
    related products via getShopProducts({ category }). No API/business logic
    changed, and nothing is fabricated — every field is guarded. */
+
+/**
+ * The heading above a variant strip, derived from the DATA rather than assumed.
+ * When every variant varies on one attribute the page says "Colour" or "Size";
+ * when they combine several (Size + Colour) it falls back to a neutral word.
+ * Nothing is hardcoded to colour — the Company form allows any attribute.
+ */
+const variantLabelFor = (list = []) => {
+  const keys = new Set();
+  list.forEach((v) => Object.keys(v.attributes || {}).forEach((k) => keys.add(k)));
+  return keys.size === 1 ? [...keys][0] : "Options";
+};
 
 const Stars = ({ value = 0, size = "text-lg" }) => (
   <span className="inline-flex items-center gap-0.5 text-[#F0B429]">
@@ -38,24 +51,26 @@ const Panel = ({ title, icon, children, className = "" }) => (
 /* Compact trust strip — refined from the old four boxes. Used under the gallery
    on desktop (fills the empty space) and as a full-width band on smaller screens. */
 const TRUST = [
-  { icon: "local_shipping", title: "Delivered pan-India", sub: "To your doorstep" },
-  { icon: "verified_user", title: "Verified seller", sub: "Vetted before listing" },
-  { icon: "lock", title: "Secure checkout", sub: "Encrypted & protected" },
-  { icon: "eco", title: "Farm-grade quality", sub: "Sourced for Indian farms" },
+  { icon: "local_shipping", titleKey: "pdTrust.panIndia", subKey: "pdTrust.panIndiaSub" },
+  { icon: "verified_user", titleKey: "pdTrust.verifiedSeller", subKey: "pdTrust.verifiedSellerSub" },
+  { icon: "lock", titleKey: "pdTrust.secureCheckout", subKey: "pdTrust.secureCheckoutSub" },
+  { icon: "eco", titleKey: "pdTrust.quality", subKey: "pdTrust.qualitySub" },
 ];
 
 const TrustStrip = ({ className = "", variant = "grid" }) => {
+  const t = useT();
   const list = variant === "list";
   return (
     <div className={`grid gap-px overflow-hidden rounded-2xl bg-stone-200/70 ring-1 ring-stone-200/70 ${list ? "grid-cols-1" : "grid-cols-2 sm:grid-cols-4"} ${className}`}>
-      {TRUST.map((t) => (
-        <div key={t.title} className={`bg-white p-3.5 ${list ? "flex items-center gap-3" : "flex flex-col items-start gap-2"}`}>
+      {/* Map param renamed off `t` — it would shadow the translator. */}
+      {TRUST.map((item) => (
+        <div key={item.titleKey} className={`bg-white p-3.5 ${list ? "flex items-center gap-3" : "flex flex-col items-start gap-2"}`}>
           <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-red-50 text-[#EA2831]">
-            <span className="material-symbols-outlined text-[20px]">{t.icon}</span>
+            <span className="material-symbols-outlined text-[20px]">{item.icon}</span>
           </span>
           <div className="min-w-0">
-            <p className="text-[13px] font-bold leading-tight text-stone-900">{t.title}</p>
-            <p className="mt-0.5 text-[11px] leading-snug text-stone-500">{t.sub}</p>
+            <p className="text-[13px] font-bold leading-tight text-stone-900">{t(item.titleKey)}</p>
+            <p className="mt-0.5 text-[11px] leading-snug text-stone-500">{t(item.subKey)}</p>
           </div>
         </div>
       ))}
@@ -64,7 +79,15 @@ const TrustStrip = ({ className = "", variant = "grid" }) => {
 };
 
 export default function ShopProductDetail() {
+  const t = useT();
+  // The API returns catalogue text already localised, so the fetch effects
+  // below depend on `lang` — a language switch must refetch, not just re-render.
+  const { lang } = useShopLanguage();
+
+  // Catalogue data. lf/ll read Hindi FREE TEXT off the record (falling back to
+  // English); tt/tc/ta map ENUMERABLE values through the shared dictionary.
   const { listingId } = useParams();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { addItem, items } = useCart();
   const { isWishlisted, toggleItem } = useWishlist();
@@ -73,7 +96,16 @@ export default function ShopProductDetail() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [qty, setQty] = useState(1);
+  // Which of the selected variant's photos is showing.
+  const [variantSlide, setVariantSlide] = useState(0);
+  const swipeRef = useRef(null);
   const [activeImg, setActiveImg] = useState(0);
+  // SELECTED VARIANT id, or null for "no variant chosen" — the page then looks
+  // exactly as it does today. Never pre-selected, so the main product image and
+  // the product price stay in charge until the customer picks something.
+  // Seeded from ?variant= so a link from the cart or the wishlist reopens the
+  // exact option that was saved, not the product's default.
+  const [variantId, setVariantId] = useState(() => searchParams.get("variant") || null);
   const [descOpen, setDescOpen] = useState(false); // mobile "read more" (UI)
   const [related, setRelated] = useState([]);
   const [justAdded, setJustAdded] = useState(false); // add-to-cart feedback (UI)
@@ -86,6 +118,8 @@ export default function ShopProductDetail() {
     let alive = true;
     setLoading(true);
     setActiveImg(0);
+    // A different product means the previous product's variant id is meaningless.
+    setVariantId(searchParams.get("variant") || null);
     setJustAdded(false);
     window.scrollTo({ top: 0, behavior: "auto" });
     (async () => {
@@ -95,13 +129,15 @@ export default function ShopProductDetail() {
         setProduct(res.data);
         setQty(1); // default cart quantity is always 1
       } catch (e) {
-        if (alive) setError(e?.response?.data?.message || "Product not found");
+        // The SERVER's message passes through untouched; only the fallback is translated.
+        if (alive) setError(e?.response?.data?.message || t("pd.notFound"));
       } finally {
         if (alive) setLoading(false);
       }
     })();
     return () => { alive = false; };
-  }, [listingId]);
+    // `lang` too: the product text arrives from the API already localised.
+  }, [listingId, searchParams, lang]);
 
   // Similar products by category (existing API; additive, never blocks the page).
   useEffect(() => {
@@ -137,47 +173,174 @@ export default function ShopProductDetail() {
   if (error) return (
     <div className="py-20 text-center">
       <p className="font-heading text-[#EA2831]">{error}</p>
-      <Link to="/customer-shop/products" className="mt-3 inline-block font-medium text-stone-700 hover:text-[#EA2831]">← Back to products</Link>
+      <Link to="/customer-shop/products" className="mt-3 inline-block font-medium text-stone-700 hover:text-[#EA2831]">{t("pd.backToProducts")}</Link>
     </div>
   );
 
   const images = (product.images || []).map(getProductImage).filter(Boolean);
-  const off = product.mrp && product.mrp > product.price
+
+  /* ── VARIANTS (read-only, straight from the Company upload) ───────────────
+     The ROWS decide, not `variantType`: the upload form appends `variants` but
+     never appends `variantType`, so a product saved with variants still carries
+     the schema default "single". A product with no rows gets an empty array and
+     renders precisely as before — no empty selector, no extra markup. */
+  const variants = Array.isArray(product.variants) ? product.variants : [];
+  const hasVariants = variants.length > 0;
+  const selectedVariant = hasVariants ? variants.find((v) => v.id === variantId) || null : null;
+  // Variants that carry their own picture become thumbnails; ones that do not
+  // (a size or a weight, say) become labelled chips. Same data, two affordances.
+  const variantThumbs = variants.filter((v) => v.image);
+  const variantChips = variants.filter((v) => !v.image);
+  /* Picking a different variant resets the quantity to 1 AND rewinds its photo
+     gallery to the first image. Each variant has its own stock now, so a qty of
+     40 carried over from a well-stocked colour would sit above the next one's
+     maximum. Done in the click handler rather than an effect — it is a user
+     action, not a synchronisation. */
+  const chooseVariant = (id) => { setVariantId(id); setQty(1); setVariantSlide(0); };
+
+  const stepVariantSlide = (delta) =>
+    setVariantSlide((i) => {
+      const n = variantGallery.length;
+      if (n <= 1) return 0;
+      // Wraps, so the arrows never dead-end.
+      return (i + delta + n) % n;
+    });
+
+  /* Swipe, for touch. A horizontal drag past the threshold moves one photo;
+     anything shorter, or mostly vertical, is left alone so the page can still
+     be scrolled with a finger on the image. */
+  const onGalleryTouchStart = (e) => {
+    const t = e.touches[0];
+    swipeRef.current = { x: t.clientX, y: t.clientY };
+  };
+  const onGalleryTouchEnd = (e) => {
+    const start = swipeRef.current;
+    if (!start || variantGallery.length <= 1) return;
+    swipeRef.current = null;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy)) return;
+    stepVariantSlide(dx < 0 ? 1 : -1);
+  };
+  /* THE SELECTED VARIANT'S PHOTOS.
+
+     Three cases, in order, and the last two are what keep every existing
+     product working:
+       `images` has entries  → gallery, with arrows and thumbnails
+       only the single `image` → that one photo, no arrows, no thumbnails
+       no variant selected     → the product's own photos, untouched
+
+     A COMPANY product only ever has `image`, so it lands in the middle case
+     and looks exactly as it did before multi-image existed. Same for any
+     seller variant saved back when one photo was the limit. */
+  const variantGallery = selectedVariant
+    ? (selectedVariant.images?.length
+        ? selectedVariant.images
+        : (selectedVariant.image ? [selectedVariant.image] : []))
+      .filter(Boolean)
+      .map(getProductImage)
+    : [];
+  const hasVariantGallery = variantGallery.length > 0;
+  // Which one of them is on screen. Clamped, because switching from a variant
+  // with 3 photos to one with 2 would otherwise leave the index out of range.
+  const variantImg = hasVariantGallery
+    ? variantGallery[Math.min(variantSlide, variantGallery.length - 1)]
+    : null;
+  const selectedVariantImg = variantImg;
+  // Both halves translated: { Color: "Red" } → { "रंग": "लाल" }.
+  const attrEntries = Object.entries(selectedVariant?.attributes || {}).filter(([, val]) => val);
+
+  // The variant's own price when it has one; otherwise the product price is
+  // still what applies. NOTE: this is display only — cart, checkout and order
+  // totals are untouched and keep using the listing price.
+  const shownPrice = selectedVariant?.mrp != null ? Number(selectedVariant.mrp) : Number(product.price);
+  // The strike-through/discount only makes sense against the product's own MRP,
+  // so it is suppressed while a variant sets its own price.
+  const off = !selectedVariant && product.mrp && product.mrp > product.price
     ? Math.round(((product.mrp - product.price) / product.mrp) * 100) : 0;
   const save = off > 0 ? Number(product.mrp) - Number(product.price) : 0;
-  const inStock = product.inStock;
-  const maxQty = inStock ? product.availableStock : 0;
-  const lowStock = inStock && product.availableStock > 0 && product.availableStock <= 5;
-  const wished = isWishlisted(product.listingId);
+  /* THE STOCK THIS PAGE SHOWS.
+
+     When the API sends `variantStock` AND a variant is selected, the number is
+     that VARIANT's — picking Yellow used to show the whole product's total, so
+     Yellow and Red read identically however different their shelves were.
+
+     `variantStock` is NULL for a product whose stock is not tracked per
+     variant — every company product, and any seller product whose lots predate
+     variant tracking. Null must mean "use the product total", never "zero":
+     reading it as zero would mark the entire company catalogue out of stock.
+     Hence the explicit null check rather than `product.variantStock?.[...] ?? 0`.
+
+     A variant that IS tracked but has no entry genuinely has none left, so 0 is
+     the right answer there. The key is the variant's SKU, falling back to its
+     label — the same value the seller's Add Stock flow writes to the lot. */
+  const variantStock = product.variantStock || null;
+  const trackedByVariant = !!variantStock && !!selectedVariant;
+  const shownStock = trackedByVariant
+    ? (variantStock[selectedVariant.sku] ?? variantStock[selectedVariant.label] ?? 0)
+    : (Number(product.availableStock) || 0);
+
+  const inStock = trackedByVariant ? shownStock > 0 : product.inStock;
+  const maxQty = inStock ? shownStock : 0;
+  const lowStock = inStock && shownStock > 0 && shownStock <= 5;
+  // Per VARIANT, not per product: saving Red must not light up the heart on Green.
+  const wished = isWishlisted(product.listingId, variantId);
 
   // Cart membership is read from the existing cart state (keyed by listingId).
-  const inCart = items.some((i) => i.listingId === product.listingId);
-  const cartQty = items.find((i) => i.listingId === product.listingId)?.qty || 0;
+  // Per LINE, not per product: Red in the cart must not make Green look added.
+  const cartLineId = variantId ? `${product.listingId}::${variantId}` : String(product.listingId);
+  const inCart = items.some((i) => (i.lineId || i.listingId) === cartLineId);
+  const cartQty = items.find((i) => (i.lineId || i.listingId) === cartLineId)?.qty || 0;
 
   const rating = typeof product.rating === "number" ? product.rating
     : typeof product.averageRating === "number" ? product.averageRating : null;
   const reviewCount = product.reviewCount || product.numReviews || product.reviewsCount || 0;
   const reviews = Array.isArray(product.reviews) ? product.reviews : [];
 
-  const descLong = (product.description || "").length > 90; // gate the mobile "Read more"
-  const features = [product.features, product.keyFeatures, product.highlights].find(Array.isArray) || [];
-  const usage = product.usage || product.usageInstructions || product.howToUse || "";
+  const name = product.name;
+  const description = product.description || "";
+  const descLong = description.length > 90; // gate the mobile "Read more"
+  // The FIRST of these three that is an array is the feature list; the Hindi
+  // copy is looked up under that same field name.
+  const featureField = ["features", "keyFeatures", "highlights"].find((f) => Array.isArray(product[f]));
+  const features = featureField ? (product[featureField] || []) : [];
+  const usageField = ["usage", "usageInstructions", "howToUse"].find((f) => product[f]);
+  const usage = usageField ? (product[usageField] || "") : "";
+
+  /* THE SELECTED VARIANT BELONGS IN SPECIFICATIONS, not in a separate card
+     above the price. Its attributes are product details like any other, so they
+     are prepended to the existing spec rows and inherit that table's layout for
+     free. `variantSpecs` is empty when nothing is selected, so the table looks
+     exactly as it does today. */
+  const variantSpecs = selectedVariant
+    ? [
+        [variantLabelFor(variants), selectedVariant.label],
+        ...attrEntries.filter(([key]) => key !== variantLabelFor(variants)),
+        ...(selectedVariant.sku ? [[t("pd.specVariantSku"), selectedVariant.sku]] : []),
+      ]
+    : [];
 
   const specs = [
-    ["Category", product.category],
-    ["Brand", product.brand],
-    ["Brand owner", product.companyName],
-    ["Unit", product.unit],
-    ["SKU", product.sku],
-    ["Available stock", inStock && product.availableStock ? `${product.availableStock} ${product.unit || "units"}` : null],
-    ["GST", product.gstPercentage ? `${product.gstPercentage}%` : null],
-    ["Sold by", product.seller?.name],
-    ["Location", product.seller?.city ? `${product.seller.city}${product.seller.state ? ", " + product.seller.state : ""}` : null],
+    ...variantSpecs,
+    [t("pd.specCategory"), product.category],
+    [t("pd.specBrand"), product.brand],
+    [t("pd.specBrandOwner"), product.companyName],
+    [t("pd.specUnit"), product.unit],
+    // The variant carries its own SKU (shown above), so the product-level one
+    // would read as a contradiction next to it.
+    [t("pd.specSku"), selectedVariant ? null : product.sku],
+    [t("pd.specAvailableStock"), inStock && shownStock ? `${shownStock} ${product.unit || t("pd.units")}` : null],
+    [t("pd.specGst"), product.gstPercentage ? `${product.gstPercentage}%` : null],
+    [t("pd.specSoldBy"), product.seller?.name],
+    [t("pd.specLocation"), product.seller?.city ? `${product.seller.city}${product.seller.state ? ", " + product.seller.state : ""}` : null],
   ].filter(([, v]) => v != null && v !== "");
 
   // Same cart calls as before — only visual feedback is added around them.
   const addToCart = () => {
-    addItem(product, qty);
+    // The SELECTED variant goes into the cart — its price, its image, its
+    // attributes. Null when none is chosen, which is the original behaviour.
+    addItem(product, qty, selectedVariant);
     setJustAdded(true);
     clearTimeout(addedTimer.current);
     addedTimer.current = setTimeout(() => setJustAdded(false), 1800);
@@ -186,13 +349,13 @@ export default function ShopProductDetail() {
   //    product to checkout, so a shopper who wanted one item is charged for one
   //    item — and their existing cart is left completely untouched.
   const buyNow = () => {
-    const stored = setBuyNowItem(toBuyNowItem(product, qty));
+    const stored = setBuyNowItem(toBuyNowItem(product, qty, selectedVariant));
     if (stored) {
       navigate("/customer-shop/checkout?mode=buynow");
     } else {
       // sessionStorage unavailable (private mode) — fall back to the old
       // cart-based flow rather than dead-ending the shopper.
-      addItem(product, qty);
+      addItem(product, qty, selectedVariant);
       navigate("/customer-shop/checkout");
     }
   };
@@ -200,10 +363,10 @@ export default function ShopProductDetail() {
   // Add-to-cart button states: sold out → added (flash) → already in cart → add.
   const cartState = !inStock ? "sold" : justAdded ? "added" : inCart ? "incart" : "add";
   const cartBtn = {
-    add: { icon: "add_shopping_cart", label: "Add to cart", cls: "border-2 border-[#EA2831] bg-white text-[#EA2831] hover:bg-red-50" },
-    added: { icon: "check_circle", label: "Added to cart", cls: "border-2 border-[#EA2831] bg-[#EA2831] text-white" },
-    incart: { icon: "check_circle", label: "Already in cart", cls: "border-2 border-red-200 bg-red-50 text-[#EA2831]" },
-    sold: { icon: "block", label: "Sold out", cls: "border-2 border-stone-200 bg-white text-stone-400" },
+    add: { icon: "add_shopping_cart", label: t("pd.addToCart"), cls: "border-2 border-[#EA2831] bg-white text-[#EA2831] hover:bg-red-50" },
+    added: { icon: "check_circle", label: t("pd.addedToCart"), cls: "border-2 border-[#EA2831] bg-[#EA2831] text-white" },
+    incart: { icon: "check_circle", label: t("pd.alreadyInCart"), cls: "border-2 border-red-200 bg-red-50 text-[#EA2831]" },
+    sold: { icon: "block", label: t("pd.soldOut"), cls: "border-2 border-stone-200 bg-white text-stone-400" },
   }[cartState];
 
   const actionButtons = (
@@ -221,7 +384,7 @@ export default function ShopProductDetail() {
         disabled={!inStock}
         className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#EA2831] py-3.5 text-sm font-bold text-white shadow-lg shadow-[#EA2831]/20 transition-all hover:bg-[#c91e26] active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-stone-200 disabled:text-stone-400 disabled:shadow-none"
       >
-        <span className="material-symbols-outlined text-lg">bolt</span> Buy now
+        <span className="material-symbols-outlined text-lg">bolt</span> {t("pd.buyNow")}
       </button>
     </>
   );
@@ -244,14 +407,14 @@ export default function ShopProductDetail() {
         <button
           type="button"
           onClick={() => navigate(-1)}
-          aria-label="Go back"
+          aria-label={t("pd.goBack")}
           className="group inline-flex h-[42px] items-center gap-2 rounded-full border-[1.5px] border-stone-200 bg-white px-4 text-sm font-bold text-stone-800 transition-colors duration-150 hover:border-stone-300 hover:bg-stone-50 hover:text-[#EA2831]"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="h-[19px] w-[19px] shrink-0 transition-transform duration-150 group-hover:-translate-x-0.5">
             <line x1="19" y1="12" x2="5" y2="12" />
             <polyline points="12 19 5 12 12 5" />
           </svg>
-          <span className="leading-none">Back</span>
+          <span className="leading-none">{t("pd.back")}</span>
         </button>
       </div>
 
@@ -260,33 +423,123 @@ export default function ShopProductDetail() {
         {/* Gallery */}
         <div className="lg:sticky lg:top-24 lg:self-start">
           <div className="relative flex aspect-square items-center justify-center overflow-hidden rounded-3xl bg-transparent ring-0 sm:bg-stone-50 sm:ring-1 sm:ring-stone-200/70">
-            {images.length ? (
-              <img src={images[activeImg]} alt={product.name} className="h-full w-full object-contain p-6 sm:p-8" />
+            {/* The MAIN IMAGE is unchanged until a variant with a picture is
+                chosen; picking one swaps this frame, deselecting restores it. */}
+            {selectedVariantImg ? (
+              <img
+                src={selectedVariantImg}
+                alt={`${name} — ${selectedVariant.label}`}
+                className="h-full w-full object-contain p-6 sm:p-8"
+                onTouchStart={onGalleryTouchStart}
+                onTouchEnd={onGalleryTouchEnd}
+              />
+            ) : images.length ? (
+              <img src={images[activeImg]} alt={name} className="h-full w-full object-contain p-6 sm:p-8" />
             ) : (
               <span className="material-symbols-outlined text-7xl font-light text-stone-300">inventory_2</span>
             )}
+            {/* PREV / NEXT — only for a variant that actually has several
+                photos. A single-image variant (and every company product) gets
+                no arrows at all, exactly as before. */}
+            {variantGallery.length > 1 && (
+              <>
+                <button
+                  onClick={() => stepVariantSlide(-1)}
+                  aria-label="Previous image"
+                  className="absolute left-2 top-1/2 flex size-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/90 shadow-sm ring-1 ring-stone-200/70 backdrop-blur transition-all hover:scale-110 active:scale-95"
+                >
+                  <span className="material-symbols-outlined text-xl text-stone-600">chevron_left</span>
+                </button>
+                <button
+                  onClick={() => stepVariantSlide(1)}
+                  aria-label="Next image"
+                  className="absolute right-2 top-1/2 flex size-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/90 shadow-sm ring-1 ring-stone-200/70 backdrop-blur transition-all hover:scale-110 active:scale-95"
+                >
+                  <span className="material-symbols-outlined text-xl text-stone-600">chevron_right</span>
+                </button>
+                {/* <span className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-stone-900/70 px-2.5 py-0.5 text-[11px] font-bold text-white">
+                  {Math.min(variantSlide, variantGallery.length - 1) + 1} / {variantGallery.length}
+                </span> */}
+              </>
+            )}
             {off > 0 && (
-              <span className="absolute left-4 top-4 rounded-full bg-[#EA2831] px-3 py-1 text-xs font-extrabold uppercase tracking-wide text-white shadow-sm">{off}% off</span>
+              <span className="absolute left-4 top-4 rounded-full bg-[#EA2831] px-3 py-1 text-xs font-extrabold uppercase tracking-wide text-white shadow-sm">{t("pd.percentOff", { percent: off })}</span>
             )}
             <button
-              onClick={() => toggleItem(product)}
-              aria-label={wished ? "Remove from wishlist" : "Add to wishlist"}
+              onClick={() => toggleItem(product, selectedVariant)}
+              aria-label={wished ? t("pd.removeFromWishlist") : t("pd.addToWishlist")}
               className="absolute right-4 top-4 flex size-11 items-center justify-center rounded-full bg-white/90 shadow-sm ring-1 ring-stone-200/70 backdrop-blur transition-all hover:scale-110 active:scale-95"
             >
               <span className={`material-symbols-outlined text-2xl transition-colors ${wished ? "text-[#EA2831]" : "text-stone-400 hover:text-[#EA2831]"}`} style={{ fontVariationSettings: wished ? "'FILL' 1" : "'FILL' 0" }}>favorite</span>
             </button>
           </div>
+          {/* THIS VARIANT's photos — click one to jump straight to it. Rendered
+              only when the variant has more than one, so a single-image variant
+              looks exactly as it did before. */}
+          {variantGallery.length > 1 && (
+            <div className="mt-3 flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              {/* {variantGallery.map((src, i) => (
+                <button
+                  key={`v-${i}`}
+                  onClick={() => setVariantSlide(i)}
+                  className={`size-16 shrink-0 overflow-hidden rounded-xl bg-stone-50 ring-2 transition-all sm:size-[72px] ${i === Math.min(variantSlide, variantGallery.length - 1) ? "ring-[#EA2831]" : "ring-stone-200 hover:ring-stone-300"}`}
+                >
+                  <img src={src} alt="" className="h-full w-full object-contain p-1.5" />
+                </button>
+              ))} */}
+            </div>
+          )}
+
           {images.length > 1 && (
             <div className="mt-3 flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {images.map((src, i) => (
                 <button
                   key={i}
-                  onClick={() => setActiveImg(i)}
-                  className={`size-16 shrink-0 overflow-hidden rounded-xl bg-stone-50 ring-2 transition-all sm:size-[72px] ${i === activeImg ? "ring-[#EA2831]" : "ring-stone-200 hover:ring-stone-300"}`}
+                  // Going back to a product photo drops the variant image, so
+                  // the two thumbnail rows can never both look selected.
+                  onClick={() => { setActiveImg(i); setVariantId(null); }}
+                  className={`size-16 shrink-0 overflow-hidden rounded-xl bg-stone-50 ring-2 transition-all sm:size-[72px] ${!selectedVariantImg && i === activeImg ? "ring-[#EA2831]" : "ring-stone-200 hover:ring-stone-300"}`}
                 >
                   <img src={src} alt="" className="h-full w-full object-contain p-1.5" />
                 </button>
               ))}
+            </div>
+          )}
+
+          {/* VARIANT THUMBNAILS — their own row, below the product photos, so
+              the main gallery keeps its meaning and a variant picture is never
+              mistaken for another angle of the same item. */}
+          {variantThumbs.length > 0 && (
+            <div className="mt-4">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-stone-400">
+                {variantLabelFor(variants)}
+              </p>
+              <div className="mt-2 flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {variantThumbs.map((v) => {
+                  const on = v.id === variantId;
+                  return (
+                    <button
+                      key={v.id}
+                      onClick={() => chooseVariant(on ? null : v.id)}
+                      title={v.label}
+                      aria-pressed={on}
+                      className={`group relative size-16 shrink-0 overflow-hidden rounded-xl bg-stone-50 ring-2 transition-all sm:size-[72px] ${on ? "ring-[#EA2831]" : "ring-stone-200 hover:ring-stone-300"}`}
+                    >
+                      <img src={getProductImage(v.image)} alt={v.label} className="h-full w-full object-contain p-1.5" />
+                      {on && (
+                        <span className="absolute bottom-0 left-0 right-0 bg-[#EA2831] py-0.5 text-center text-[9px] font-bold uppercase tracking-wide text-white">
+                          {t("pd.selected")}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+              {/* The label sits under the strip rather than on each tile, where
+                  "Red / 500g" would be clipped at 72px. */}
+              {selectedVariant?.label && (
+                <p className="mt-1.5 text-xs font-semibold text-stone-700">{selectedVariant.label}</p>
+              )}
             </div>
           )}
         </div>
@@ -298,7 +551,7 @@ export default function ShopProductDetail() {
               <span className="material-symbols-outlined text-sm">eco</span> {product.category}
             </p>
           )}
-          <h1 className="mt-2 font-heading text-2xl font-extrabold leading-tight tracking-tight text-stone-900 sm:text-[32px]">{product.name}</h1>
+          <h1 className="mt-2 font-heading text-2xl font-extrabold leading-tight tracking-tight text-stone-900 sm:text-[32px]">{name}</h1>
 
           <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
             {rating != null ? (
@@ -308,9 +561,9 @@ export default function ShopProductDetail() {
                 {reviewCount > 0 && <span className="text-stone-400">({reviewCount})</span>}
               </span>
             ) : (
-              <span className="text-xs text-stone-400">No ratings yet</span>
+              <span className="text-xs text-stone-400">{t("pd.noRatings")}</span>
             )}
-            {product.sku && <span className="font-mono text-xs uppercase text-stone-400">SKU: {product.sku}</span>}
+            {product.sku && <span className="font-mono text-xs uppercase text-stone-400">{t("pd.skuInline", { sku: product.sku })}</span>}
           </div>
 
           {product.description && (
@@ -318,7 +571,7 @@ export default function ShopProductDetail() {
               {/* Mobile: clamp to ~2 lines with Read more; desktop shows it all.
                   The toggle only appears when the text is actually long. */}
               <p className={`whitespace-pre-line text-[14px] leading-relaxed text-stone-600 sm:line-clamp-none ${descLong && !descOpen ? "line-clamp-2" : ""}`}>
-                {product.description}
+                {description}
               </p>
               {descLong && (
                 <button
@@ -326,22 +579,49 @@ export default function ShopProductDetail() {
                   onClick={() => setDescOpen((o) => !o)}
                   className="mt-1 text-xs font-bold text-[#EA2831] hover:underline sm:hidden"
                 >
-                  {descOpen ? "Read less" : "Read more"}
+                  {descOpen ? t("pd.readLess") : t("pd.readMore")}
                 </button>
               )}
+            </div>
+          )}
+
+          {/* VARIANTS WITHOUT AN IMAGE — size, weight, grade and so on. Chips
+              rather than thumbnails, because there is nothing to show. */}
+          {variantChips.length > 0 && (
+            <div className="mt-5">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-stone-400">
+                {variantLabelFor(variantChips)}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {variantChips.map((v) => {
+                  const on = v.id === variantId;
+                  return (
+                    <button
+                      key={v.id}
+                      onClick={() => chooseVariant(on ? null : v.id)}
+                      aria-pressed={on}
+                      className={`rounded-xl px-3.5 py-2 text-sm font-semibold ring-1 transition-all ${on
+                        ? "bg-[#EA2831] text-white ring-[#EA2831]"
+                        : "bg-white text-stone-700 ring-stone-200 hover:ring-stone-300"}`}
+                    >
+                      {v.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           )}
 
           {/* Price */}
           <div className="mt-5 rounded-2xl bg-stone-50 p-4 ring-1 ring-stone-200/60 sm:p-5">
             <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-              <span className="font-heading text-3xl font-extrabold text-stone-900 sm:text-4xl">{rupee(product.price)}</span>
+              <span className="font-heading text-3xl font-extrabold text-stone-900 sm:text-4xl">{rupee(shownPrice)}</span>
               {off > 0 && <span className="text-lg text-stone-400 line-through">{rupee(product.mrp)}</span>}
-              {off > 0 && <span className="rounded-md bg-red-100 px-2 py-0.5 text-sm font-bold text-[#EA2831]">{off}% off</span>}
+              {off > 0 && <span className="rounded-md bg-red-100 px-2 py-0.5 text-sm font-bold text-[#EA2831]">{t("pd.percentOff", { percent: off })}</span>}
               {product.unit && <span className="text-sm text-stone-400">/ {product.unit}</span>}
             </div>
-            {save > 0 && <p className="mt-1.5 text-sm font-semibold text-emerald-700">You save {rupee(save)}</p>}
-            {product.gstPercentage > 0 && <p className="mt-1 text-xs text-stone-400">+ {product.gstPercentage}% GST at checkout</p>}
+            {save > 0 && <p className="mt-1.5 text-sm font-semibold text-emerald-700">{t("pd.youSave", { amount: rupee(save) })}</p>}
+            {product.gstPercentage > 0 && <p className="mt-1 text-xs text-stone-400">{t("pd.gstAtCheckout", { percent: product.gstPercentage })}</p>}
           </div>
 
           {/* Stock + seller + brand */}
@@ -349,34 +629,34 @@ export default function ShopProductDetail() {
             {inStock ? (
               <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-700">
                 <span className="material-symbols-outlined text-lg">check_circle</span>
-                In stock
-                {lowStock && <span className="ml-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-bold text-amber-700">Only {product.availableStock} left</span>}
+                {t("common.inStock")}
+                {lowStock && <span className="ml-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-bold text-amber-700">{t("pd.onlyLeft", { count: shownStock })}</span>}
               </span>
             ) : (
               <span className="inline-flex items-center gap-1.5 font-semibold text-[#EA2831]">
-                <span className="material-symbols-outlined text-lg">block</span> Out of stock
+                <span className="material-symbols-outlined text-lg">block</span> {t("pd.outOfStock")}
               </span>
             )}
             {product.seller?.name && (
               <p className="flex flex-wrap items-center gap-1.5 text-stone-500">
                 <span className="material-symbols-outlined text-base text-[#023020]">verified</span>
-                Sold by <span className="font-semibold text-stone-700">{product.seller.name}</span>
+                {t("pd.soldByInline")} <span className="font-semibold text-stone-700">{product.seller.name}</span>
                 {product.seller.city ? ` · ${product.seller.city}${product.seller.state ? ", " + product.seller.state : ""}` : ""}
               </p>
             )}
-            {product.brand && <p className="text-stone-500">Brand: <span className="font-medium text-stone-700">{product.brand}</span></p>}
+            {product.brand && <p className="text-stone-500">{t("pd.brandLabel")} <span className="font-medium text-stone-700">{product.brand}</span></p>}
           </div>
 
           {/* Quantity */}
           {inStock && (
             <div className="mt-6 flex flex-wrap items-center gap-3">
-              <span className="text-sm font-semibold text-stone-700">Quantity</span>
+              <span className="text-sm font-semibold text-stone-700">{t("pd.quantity")}</span>
               <div className="inline-flex items-center overflow-hidden rounded-xl border border-stone-200 bg-white">
-                <button onClick={() => setQty((q) => Math.max(1, q - 1))} aria-label="Decrease" className="flex size-10 items-center justify-center text-stone-600 transition-colors hover:bg-stone-100 hover:text-[#EA2831]">
+                <button onClick={() => setQty((q) => Math.max(1, q - 1))} aria-label={t("pd.decrease")} className="flex size-10 items-center justify-center text-stone-600 transition-colors hover:bg-stone-100 hover:text-[#EA2831]">
                   <span className="material-symbols-outlined">remove</span>
                 </button>
                 <span className="w-12 text-center text-base font-bold text-stone-900">{qty}</span>
-                <button onClick={() => setQty((q) => Math.min(maxQty, q + 1))} disabled={qty >= maxQty} aria-label="Increase" className="flex size-10 items-center justify-center text-stone-600 transition-colors hover:bg-stone-100 hover:text-[#EA2831] disabled:text-stone-300 disabled:hover:bg-transparent">
+                <button onClick={() => setQty((q) => Math.min(maxQty, q + 1))} disabled={qty >= maxQty} aria-label={t("pd.increase")} className="flex size-10 items-center justify-center text-stone-600 transition-colors hover:bg-stone-100 hover:text-[#EA2831] disabled:text-stone-300 disabled:hover:bg-transparent">
                   <span className="material-symbols-outlined">add</span>
                 </button>
               </div>
@@ -388,8 +668,8 @@ export default function ShopProductDetail() {
           {inCart && (
             <p className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-[#EA2831]">
               <span className="material-symbols-outlined text-base">shopping_cart</span>
-              {cartQty} {cartQty === 1 ? "unit" : "units"} already in your cart
-              <Link to="/customer-shop/cart" className="underline underline-offset-2 hover:text-[#c91e26]">View cart</Link>
+              {t(cartQty === 1 ? "pd.unitsInCart" : "pd.unitsInCartPlural", { count: cartQty })}
+              <Link to="/customer-shop/cart" className="underline underline-offset-2 hover:text-[#c91e26]">{t("pd.viewCart")}</Link>
             </p>
           )}
 
@@ -405,7 +685,7 @@ export default function ShopProductDetail() {
       {(features.length > 0 || specs.length > 0 || usage) && (
         <div className="mt-8 grid gap-5 lg:grid-cols-2">
           {features.length > 0 && (
-            <Panel title="Key features" icon="checklist" className={specs.length === 0 ? "lg:col-span-2" : ""}>
+            <Panel title={t("pd.keyFeatures")} icon="checklist" className={specs.length === 0 ? "lg:col-span-2" : ""}>
               <ul className="space-y-2.5">
                 {features.map((f, i) => (
                   <li key={i} className="flex items-start gap-2.5 text-sm text-stone-600">
@@ -418,7 +698,7 @@ export default function ShopProductDetail() {
           )}
 
           {specs.length > 0 && (
-            <Panel title="Specifications" icon="list_alt" className={features.length === 0 ? "lg:col-span-2" : ""}>
+            <Panel title={t("pd.specifications")} icon="list_alt" className={features.length === 0 ? "lg:col-span-2" : ""}>
               <dl className={features.length === 0 ? "grid gap-x-10 sm:grid-cols-2" : ""}>
                 {specs.map(([label, value]) => (
                   <div key={label} className="flex justify-between gap-4 border-b border-stone-100 py-2.5 text-sm last:border-0">
@@ -431,7 +711,7 @@ export default function ShopProductDetail() {
           )}
 
           {usage && (
-            <Panel title="Usage information" icon="menu_book" className="lg:col-span-2">
+            <Panel title={t("pd.usageInformation")} icon="menu_book" className="lg:col-span-2">
               <p className="whitespace-pre-line text-sm leading-relaxed text-stone-600">{usage}</p>
             </Panel>
           )}
@@ -440,7 +720,7 @@ export default function ShopProductDetail() {
 
       {/* ── Reviews ── */}
       <div className="mt-5">
-        <Panel title="Ratings & reviews" icon="reviews">
+        <Panel title={t("pd.ratingsReviews")} icon="reviews">
           {rating != null ? (
             <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
               <div className="text-center">
@@ -467,7 +747,7 @@ export default function ShopProductDetail() {
               <span className="flex size-12 items-center justify-center rounded-full bg-stone-50 text-stone-300">
                 <span className="material-symbols-outlined text-2xl">reviews</span>
               </span>
-              <p className="text-sm text-stone-500">No reviews yet — be the first to try this product.</p>
+              <p className="text-sm text-stone-500">{t("pd.noReviews")}</p>
             </div>
           )}
         </Panel>
@@ -479,18 +759,18 @@ export default function ShopProductDetail() {
           <div className="mb-5 flex items-end justify-between gap-4">
             <div>
               <p className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-widest text-[#EA2831]">
-                <span className="material-symbols-outlined text-sm">eco</span> You may also like
+                <span className="material-symbols-outlined text-sm">eco</span> {t("pd.youMayAlsoLike")}
               </p>
-              <h2 className="mt-1 font-heading text-2xl font-extrabold tracking-tight text-stone-900 sm:text-3xl">Similar products</h2>
+              <h2 className="mt-1 font-heading text-2xl font-extrabold tracking-tight text-stone-900 sm:text-3xl">{t("pd.similarProducts")}</h2>
             </div>
             {/* Rail arrows — only when the rail actually overflows (more items
                 than fit in one view). Otherwise they'd do nothing. */}
             {railItems.length > 4 && (
             <div className="hidden shrink-0 gap-2 sm:flex">
-              <button onClick={() => scrollRail(-1)} aria-label="Scroll left" className="flex size-10 items-center justify-center rounded-full bg-white text-stone-600 ring-1 ring-stone-200 transition-colors hover:text-[#EA2831] hover:ring-[#EA2831]">
+              <button onClick={() => scrollRail(-1)} aria-label={t("pd.scrollLeft")} className="flex size-10 items-center justify-center rounded-full bg-white text-stone-600 ring-1 ring-stone-200 transition-colors hover:text-[#EA2831] hover:ring-[#EA2831]">
                 <span className="material-symbols-outlined">chevron_left</span>
               </button>
-              <button onClick={() => scrollRail(1)} aria-label="Scroll right" className="flex size-10 items-center justify-center rounded-full bg-white text-stone-600 ring-1 ring-stone-200 transition-colors hover:text-[#EA2831] hover:ring-[#EA2831]">
+              <button onClick={() => scrollRail(1)} aria-label={t("pd.scrollRight")} className="flex size-10 items-center justify-center rounded-full bg-white text-stone-600 ring-1 ring-stone-200 transition-colors hover:text-[#EA2831] hover:ring-[#EA2831]">
                 <span className="material-symbols-outlined">chevron_right</span>
               </button>
             </div>

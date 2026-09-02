@@ -3,22 +3,39 @@
 // (Warehouses is free; its plan LIMIT, not the module, is what's enforced).
 // `cap` (when set) is the RBAC capability required to see/use the module —
 // gated via the seller member's role (context/SellerPermissionContext). `feature`
-// marks a PAID module gated by the subscription. Both combine with approval.
+// marks a PAID module gated by the subscription.
+//
+// APPROVAL IS NO LONGER A GATE, ANYWHERE ON THE SELLER SIDE. A module now opens
+// on its SUBSCRIPTION (and the member's capability); waiting on a supplying
+// company's Principal Certificate is gone from the sidebar, the Hub, the page
+// lock screens and the routes (requireApprovedSeller is off every seller route
+// that carried it — the middleware file itself is kept, unused).
+//
+// A PC still means something where it actually certifies something: publishing
+// a COMPANY's product needs an active PC for that company (routes/Seller/
+// sellerPcRoutes.js → pcGateWhenCompanyProduct). That is untouched.
+//
+// `noApproval: true` is kept as the record of which modules were always meant to
+// work for a brand-new seller — My Products (their OWN catalog), the Warehouses
+// its Add stock form needs, Outbound Sales that sells that stock, the Dashboard
+// over it and the Marketplace Listings it publishes to. Nothing reads it as a
+// gate any more, because there is no approval gate left to skip.
 // Ordered to mirror the company sidebar sequence. `customers` is tagged
 // admin (SELLER_ADMIN_MODULE_KEYS) so the sidebar nests it under the
 // Administration group; it stays a normal module here (same route/gating) and
 // still renders as a Hub card. Order/grouping only — nothing renamed/removed.
 export const SELLER_MODULES = [
-  { key: "dashboard", label: "Dashboard", icon: "dashboard", phase: 2, desc: "KPIs, alerts and stock health at a glance.", path: "/seller/dashboard", live: true, cap: "report:read" },
+  { key: "dashboard", label: "Dashboard", icon: "dashboard", phase: 2, desc: "KPIs, alerts and stock health at a glance.", path: "/seller/dashboard", live: true, cap: "report:read", noApproval: true },
   { key: "inventory", label: "Inventory", icon: "inventory", phase: 4, desc: "Stock, lots & expiry batches.", path: "/seller/inventory", live: true, feature: "inventory_view", cap: "inventory:read" },
-  { key: "inbound", label: "Inbound Supply", icon: "local_shipping", phase: 3, desc: "Request & track bulk supply from your company.", path: "/seller/supply", live: true, cap: "supply:read" },
-  { key: "catalog", label: "Product Catalog", icon: "inventory_2", phase: 2, desc: "Products supplied by your company.", path: "/seller/products", live: true, cap: "catalog:read" },
-  { key: "listings", label: "Marketplace Listings", icon: "storefront", phase: 2, desc: "Products you've published on the Khetify storefront.", path: "/seller/listings", live: true, cap: "catalog:read" },
-  { key: "warehouses", label: "Warehouses", icon: "warehouse", phase: 2, desc: "Your storage locations.", path: "/seller/warehouses", live: true, cap: "warehouse:read" },
-  { key: "operations", label: "Stock Transfers", icon: "sync_alt", phase: 4, desc: "Receive, send, transfer & trace stock.", path: "/seller/operations", live: true, cap: "transfer:read" },
+  { key: "inbound", label: "Inbound Supply", icon: "local_shipping", phase: 3, desc: "Request & track bulk supply from your company.", path: "/seller/supply", live: true, feature: "supply_workflow", cap: "supply:read" },
+  { key: "catalog", label: "Product Catalog", icon: "inventory_2", phase: 2, desc: "Products supplied by your company.", path: "/seller/products", live: true, feature: "basic_catalog", cap: "catalog:read" },
+  { key: "myproducts", label: "My Products", icon: "shopping_bag", phase: 2, desc: "Your own products and their stock.", path: "/seller/my-products", live: true, cap: "myproduct:manage", noApproval: true },
+  { key: "listings", label: "Marketplace Listings", icon: "storefront", phase: 2, desc: "Products you've published on the Khetify storefront.", path: "/seller/listings", live: true, cap: "catalog:read", noApproval: true },
+  { key: "warehouses", label: "Warehouses", icon: "warehouse", phase: 2, desc: "Your storage locations.", path: "/seller/warehouses", live: true, cap: "warehouse:read", noApproval: true },
+  { key: "operations", label: "Stock Transfers", icon: "sync_alt", phase: 4, desc: "Receive, send, transfer & trace stock.", path: "/seller/operations", live: true, feature: "stock_transfers", cap: "transfer:read" },
   { key: "labels", label: "Barcodes & Labels", icon: "qr_code_2", phase: 4, desc: "Print & scan your unit barcodes.", path: "/seller/labels", live: true, feature: "unit_labels", cap: "label:read" },
-  { key: "outbound", label: "Outbound Sales", icon: "point_of_sale", phase: 5, desc: "Sell to customers and dealers.", path: "/seller/outbound", live: true, cap: "order:read" },
-  { key: "analytics", label: "Analytics", icon: "monitoring", phase: 4, desc: "Stock, aging, expiry & movement reports.", path: "/seller/analytics", live: true, feature: "inventory_view", cap: "report:read" },
+  { key: "outbound", label: "Sales", icon: "point_of_sale", phase: 5, desc: "Sell to customers and dealers.", path: "/seller/outbound", live: true, cap: "order:read", noApproval: true },
+  { key: "analytics", label: "Stock Valuation", icon: "monitoring", phase: 4, desc: "Stock, aging, expiry & movement reports.", path: "/seller/analytics", live: true, feature: "inventory_view", cap: "report:read" },
   { key: "customers", label: "Customers & Dealers", icon: "groups", phase: 5, desc: "Your end customers and dealers.", path: "/seller/customers", live: true, cap: "customer:read" },
 ];
 

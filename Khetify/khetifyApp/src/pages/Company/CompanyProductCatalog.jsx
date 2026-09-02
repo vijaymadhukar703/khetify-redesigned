@@ -4,6 +4,101 @@ import axios from 'axios';
 import Swal from 'sweetalert2';
 import { usePermission } from '../../context/PermissionContext';
 import { getProductImage } from '../../lib/productImage';
+import { ChevronDown } from 'lucide-react';
+
+// Catalog pagination. Client-side on purpose: /api/product/all already returns
+// the company's full (search + category filtered) list, and the Status filter
+// below is applied in the browser — paging on the server would need a backend
+// change and would slice the list BEFORE that filter runs.
+const PAGE_SIZE = 10;
+
+/**
+ * The page numbers to render. Short lists show every page; long ones show a
+ * window around the current page with the first/last always reachable and an
+ * ellipsis ('…') standing in for the gap, so the control never overflows.
+ */
+const pageWindow = (current, total) => {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const pages = [1];
+  const from = Math.max(2, current - 1);
+  const to = Math.min(total - 1, current + 1);
+  if (from > 2) pages.push('start-gap');
+  for (let n = from; n <= to; n += 1) pages.push(n);
+  if (to < total - 1) pages.push('end-gap');
+  pages.push(total);
+  return pages;
+};
+
+// The catalog's search box and both dropdowns are the SAME control as every
+// other filter in the app — white fill, stone border, rounded-lg, and the
+// #EA2831/30 focus ring from the shared `inputCls` token in ims/ImsUi.jsx.
+// Written out here rather than imported so this page keeps its own imports.
+const fieldCls = 'w-full h-11 border border-stone-200 rounded-lg text-sm bg-white text-stone-700 focus:outline-none focus:ring-2 focus:ring-[#EA2831]/30 focus:border-[#EA2831] transition-colors';
+// `appearance-none` drops the native arrow (a Material chevron is drawn over
+// it, so the control looks identical in every browser); `truncate` keeps a long
+// option like "Growth Promoters" from running under that chevron.
+
+
+const selectCls = `${fieldCls} pl-3.5 pr-9 min-w-0 appearance-none truncate cursor-pointer`;
+
+// Custom dropdown replacing native <select> — same fieldCls look, but the open
+// menu is styled to match the theme (red accent) instead of the browser default.
+const CustomFilterSelect = ({ value, options, onChange, placeholder }) => {
+  const [open, setOpen] = useState(false);
+  const ref = React.useRef(null);
+
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const currentLabel = options.find((o) => o.value === value)?.label || placeholder;
+
+  return (
+    <div className="relative min-w-0" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className={`${fieldCls} pl-3.5 pr-9 min-w-0 flex items-center text-left transition-colors ${
+          open ? 'ring-2 ring-[#EA2831]/30 border-[#EA2831]' : ''
+        } ${value !== placeholder ? 'text-stone-700' : 'text-stone-500'}`}
+      >
+        <span className="truncate">{currentLabel}</span>
+      </button>
+      <span className={`material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-stone-400 text-[20px] pointer-events-none transition-transform ${open ? 'rotate-180' : ''}`}>
+        expand_more
+      </span>
+
+      {open && (
+        <ul
+          role="listbox"
+          className="absolute z-20 mt-1.5 w-full min-w-[160px] rounded-xl border border-stone-200 bg-white py-1.5 shadow-lg shadow-stone-900/10 max-h-64 overflow-y-auto"
+        >
+          {options.map((opt) => {
+            const selected = opt.value === value;
+            return (
+              <li key={opt.value} role="option" aria-selected={selected}>
+                <button
+                  type="button"
+                  onClick={() => { onChange(opt.value); setOpen(false); }}
+                  className={`flex w-full items-center px-3.5 py-2 text-left text-sm font-medium transition-colors ${
+                    selected ? 'text-[#EA2831] bg-[#EA2831]/5 font-bold' : 'text-stone-600 hover:bg-stone-50'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+};
+
 
 const CompanyProductCatalog = () => {
   const navigate = useNavigate();
@@ -20,11 +115,13 @@ const CompanyProductCatalog = () => {
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [currentImgIndex, setCurrentImgIndex] = useState(0);
+  const [page, setPage] = useState(1); // 1-based catalog page
 
   // Base origin for this page's product API calls. (Image URL building moved to
   // the shared getProductImage helper, which also fixes legacy absolute paths.)
-  const BASE_URL = "http://localhost:5000";
-
+  //const BASE_URL = "http://localhost:5000";
+  const BASE_URL = import.meta.env.VITE_API_URL;
+  
   // 1. Fetch Products logic
   const fetchProducts = async () => {
     try {
@@ -97,6 +194,9 @@ const CompanyProductCatalog = () => {
 
   useEffect(() => {
     fetchProducts();
+    // A new search/filter result is a NEW list — start it at the top, otherwise
+    // a narrower result set would land the user on an empty page 4.
+    setPage(1);
   }, [searchTerm, categoryFilter, statusFilter]);
 
   useEffect(() => {
@@ -136,99 +236,227 @@ const CompanyProductCatalog = () => {
     return new Date(dateString).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
   };
 
+  // ── PAGINATION (derived, never stored) ────────────────────────────────────
+  // `products` stays the single source of truth — exactly the list the existing
+  // fetch + filters produce. Only the SLICE rendered below changes.
+  const totalPages = Math.max(1, Math.ceil(products.length / PAGE_SIZE));
+  // Clamped, so deleting the last row of the last page can never strand the
+  // table on a page that no longer exists.
+  const currentPage = Math.min(page, totalPages);
+  const rangeStart = products.length === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1;
+  const rangeEnd = Math.min(currentPage * PAGE_SIZE, products.length);
+  const pagedProducts = products.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+
   return (
     <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-stone-50/50 font-sora">
-      <div className="max-w-7xl mx-auto space-y-6 text-left">
+      <div className="max-w-7xl mx-auto space-y-5 text-left">
         
-        {/* Header Actions */}
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 flex-1 max-w-3xl">
-            <div className="relative">
-              <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-xl">search</span>
-              <input className="pl-10 w-full border-stone-200 rounded-xl focus:ring-[#EA2831] focus:border-[#EA2831] text-sm py-2.5 outline-none" placeholder="Search by name or product code..." type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
-            </div>
-            <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} className="border-stone-200 rounded-xl text-sm py-2.5 bg-white outline-none">
-              <option>Category</option>
-              <option value="fertilizers">Fertilizers</option>
-              <option value="pesticides">Pesticides</option>
-              <option value="seeds">Seeds</option>
-              <option value="tools">Tools</option>
-              <option value="growth_promoters">Growth Promoters</option>
-            </select>
-            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="border-stone-200 rounded-xl text-sm py-2.5 bg-white outline-none">
-              <option>Status</option>
-              <option value="Active">Active</option>
-              <option value="Inactive">Inactive</option>
-            </select>
+        {/* Page heading — names the screen and reports how many products the
+            current search/filters matched. */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h1 className="text-[26px] leading-tight font-black tracking-tight text-stone-900">Product Catalog</h1>
+            <p className="text-[11px] font-bold uppercase tracking-widest text-stone-400 mt-1">
+              {loading ? 'Loading products…' : `${products.length} product${products.length === 1 ? '' : 's'} in your catalog`}
+            </p>
           </div>
-          {canManageProducts && (<button onClick={() => navigate('/upload-product')} className="bg-[#EA2831] text-white px-6 py-3 rounded-xl font-bold text-sm hover:bg-black transition-all flex items-center justify-center gap-2 shadow-md">
+          {canManageProducts && (<button onClick={() => navigate('/upload-product')} className="bg-[#EA2831] text-white px-5 py-3 rounded-xl font-bold text-sm hover:bg-[#C91E26] transition-colors flex items-center justify-center gap-2 shadow-sm shrink-0">
             <span className="material-symbols-outlined text-lg font-bold">add</span>Add new product
           </button>)}
         </div>
 
-        {/* Table Section */}
-        <div className="border border-stone-200 rounded-3xl overflow-hidden shadow-sm bg-white">
+        {/* ONE PANEL — filters and the table share a card, so the toolbar reads
+            as the table's header instead of floating as a separate box. */}
+        <div className="border border-stone-200 rounded-2xl overflow-hidden shadow-sm bg-white">
+
+          {/* Header Actions */}
+          <div className="border-b border-stone-200 bg-white px-5 py-4">
+            {/* Search takes TWO of the four columns — its placeholder is far longer
+                than the two dropdown labels, so an equal third was clipping it. */}
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 w-full">
+              <div className="relative sm:col-span-2 min-w-0">
+                <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-[20px] pointer-events-none">search</span>
+                <input className={`${fieldCls} pl-10 pr-3 text-ellipsis`} placeholder="Search by name or product code..." type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+              </div>
+              {/* The browser's default select arrow is a different shape and
+                  weight in every browser, so it is hidden (appearance-none) and
+                  a Material chevron is drawn in its place — matching the search
+                  icon and the pagination chevrons. `pr-9` reserves its room. */}
+             <CustomFilterSelect
+  value={categoryFilter}
+  onChange={setCategoryFilter}
+  placeholder="Category"
+  options={[
+    { value: 'Category', label: 'Category' },
+    { value: 'fertilizers', label: 'Fertilizers' },
+    { value: 'pesticides', label: 'Pesticides' },
+    { value: 'seeds', label: 'Seeds' },
+    { value: 'tools', label: 'Tools' },
+    { value: 'growth_promoters', label: 'Growth Promoters' },
+  ]}
+/>
+             <CustomFilterSelect
+  value={statusFilter}
+  onChange={setStatusFilter}
+  placeholder="Status"
+  options={[
+    { value: 'Status', label: 'Status' },
+    { value: 'Active', label: 'Active' },
+    { value: 'Inactive', label: 'Inactive' },
+  ]}
+/>
+            </div>
+          </div>
+
+          {/* Table Section */}
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse min-w-[900px] resp-table">
+            <table className="w-full text-left border-collapse min-w-[880px] resp-table">
               <thead>
-                <tr className="bg-stone-50/50 border-b border-stone-200">
-                  <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Product Details</th>
-                  <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Product Code</th>
-                  <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Category</th>
+                {/* Column widths are fixed so the eye tracks straight down each
+                    column — the product name absorbs the slack, not the gaps. */}
+                <tr className="bg-stone-50/80 border-b border-stone-200">
+                  <th className="px-5 py-3 text-[10px] font-black text-stone-400 uppercase tracking-widest whitespace-nowrap">Product Details</th>
+                  <th className="px-5 py-3 w-[130px] text-[10px] font-black text-stone-400 uppercase tracking-widest whitespace-nowrap">Code</th>
+                  <th className="px-5 py-3 w-[150px] text-[10px] font-black text-stone-400 uppercase tracking-widest whitespace-nowrap">Category</th>
                   {/* <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">SKU Number</th> */}
-                  <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Status</th>
-                  <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Cost Price (₹)</th>
-                  <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">MRP (₹)</th>
-                  <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest text-right">Actions</th>
+                  <th className="px-5 py-3 w-[110px] text-[10px] font-black text-stone-400 uppercase tracking-widest whitespace-nowrap">Status</th>
+                  {/* Money right-aligns so the digits line up column-wise. */}
+                  <th className="px-5 py-3 w-[120px] text-[10px] font-black text-stone-400 uppercase tracking-widest whitespace-nowrap text-right">Cost Price</th>
+                  <th className="px-5 py-3 w-[120px] text-[10px] font-black text-stone-400 uppercase tracking-widest whitespace-nowrap text-right">MRP</th>
+                  <th className="px-5 py-3 w-[130px] text-[10px] font-black text-stone-400 uppercase tracking-widest whitespace-nowrap text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-stone-100">
-                {!loading && products.map((product) => (
-                  <tr key={product._id} className="hover:bg-stone-50/30 transition-colors">
-                    <td data-label="Product Details" className="px-6 py-4">
-                      <div className="flex items-center gap-4">
-                        <div className="size-12 min-w-[48px] rounded-xl bg-stone-100 border border-stone-200 overflow-hidden flex items-center justify-center">
+                {!loading && pagedProducts.map((product) => (
+                  <tr key={product._id} className="hover:bg-stone-50/60 transition-colors">
+                    <td data-label="Product Details" className="px-5 py-3">
+                      <div className="flex items-center gap-3">
+                        <div className="size-11 min-w-[44px] rounded-lg bg-stone-50 border border-stone-200 overflow-hidden flex items-center justify-center">
                           {product.productImages && product.productImages[0] ? (
                             <img src={getProductImage(product.productImages[0])} className="w-full h-full object-cover" alt="product" onError={(e) => { e.target.src = "https://via.placeholder.com/150?text=No+Image"; }} />
                           ) : (
-                            <span className="material-symbols-outlined text-2xl text-stone-300 font-light">image</span>
+                            <span className="material-symbols-outlined text-xl text-stone-300 font-light">image</span>
                           )}
                         </div>
-                        <div className="flex flex-col">
-                          <span className="font-bold text-stone-900 text-sm">{product.productName}</span>
-                          <span className="text-[10px] text-stone-400 font-medium uppercase tracking-tighter">{product.unit}</span>
+                        <div className="flex flex-col min-w-0">
+                          <span className="font-bold text-stone-900 text-sm truncate">{product.productName}</span>
+                          <span className="text-[10px] text-stone-400 font-bold uppercase tracking-wider">{product.unit}</span>
                         </div>
                       </div>
                     </td>
-                    <td data-label="Product Code" className="px-6 py-4">
+                    <td data-label="Product Code" className="px-5 py-3">
                       {/* Server-generated, immutable identifier (3 letters + 3 digits). */}
-                      <span className="inline-block font-mono text-[11px] font-black tracking-widest text-stone-700 bg-stone-100 px-2.5 py-1 rounded-lg">
+                      <span className="inline-block font-mono text-[11px] font-bold tracking-wider text-stone-600 bg-stone-100 px-2 py-1 rounded-md">
                         {product.product_code || '---'}
                       </span>
                     </td>
-                    <td data-label="Category" className="px-6 py-4 text-xs text-stone-500 font-bold uppercase">{product.category}</td>
-                    {/* <td data-label="SKU Number" className="px-6 py-4 text-[11px] font-bold font-mono text-stone-400 uppercase">{product.skuNumber || '---'}</td> */}
-                    <td data-label="Status" className="px-6 py-4">
-                      <span className={`inline-flex items-center px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider ${product.productStatus.toLowerCase() === 'active' ? 'bg-emerald-50 text-emerald-600' : 'bg-stone-100 text-stone-400'}`}>{product.productStatus}</span>
+                    <td data-label="Category" className="px-5 py-3">
+                      <span className="text-[11px] font-bold capitalize text-stone-600">{String(product.category || '').replace(/_/g, ' ')}</span>
                     </td>
-                    <td data-label="Cost Price (₹)" className="px-6 py-4 text-sm text-stone-900 font-black">₹{product.costPrice ?? 0}</td>
-                    <td data-label="MRP (₹)" className="px-6 py-4 text-sm text-stone-900 font-black">₹{product.mrp}</td>
-                    <td className="px-6 py-4 text-right cell-actions">
+                    {/* <td data-label="SKU Number" className="px-6 py-4 text-[11px] font-bold font-mono text-stone-400 uppercase">{product.skuNumber || '---'}</td> */}
+                    <td data-label="Status" className="px-5 py-3">
+                      {/* A coloured dot carries the state at a glance; the word
+                          stays for anyone who needs it spelled out. */}
+                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-wider ${product.productStatus.toLowerCase() === 'active' ? 'bg-emerald-50 text-emerald-700' : 'bg-stone-100 text-stone-500'}`}>
+                        <span className={`size-1.5 rounded-full ${product.productStatus.toLowerCase() === 'active' ? 'bg-emerald-500' : 'bg-stone-400'}`} />
+                        {product.productStatus}
+                      </span>
+                    </td>
+                    <td data-label="Cost Price (₹)" className="px-5 py-3 text-sm text-stone-600 font-bold tabular-nums text-right whitespace-nowrap">₹{product.costPrice ?? 0}</td>
+                    <td data-label="MRP (₹)" className="px-5 py-3 text-sm text-stone-900 font-black tabular-nums text-right whitespace-nowrap">₹{product.mrp}</td>
+                    <td className="px-5 py-3 text-right cell-actions">
                       <div className="flex justify-end gap-1">
-                        <button onClick={() => { setSelectedProduct(product); setIsModalOpen(true); setCurrentImgIndex(0); }} className="p-2 text-stone-400 hover:text-blue-500 transition-colors"><span className="material-symbols-outlined text-xl">visibility</span></button>
+                        <button title="View details" onClick={() => { setSelectedProduct(product); setIsModalOpen(true); setCurrentImgIndex(0); }} className="size-8 inline-flex items-center justify-center rounded-lg text-stone-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"><span className="material-symbols-outlined text-[19px]">visibility</span></button>
                         {canManageProducts && (
                           <>
-                            <button onClick={() => navigate(`/edit-product/${product._id}`)} className="p-2 text-stone-400 hover:text-amber-500 transition-colors"><span className="material-symbols-outlined text-xl">edit</span></button>
-                            <button onClick={() => handleDelete(product._id)} className="p-2 text-stone-400 hover:text-[#EA2831] transition-colors"><span className="material-symbols-outlined text-xl">delete</span></button>
+                            <button title="Edit product" onClick={() => navigate(`/edit-product/${product._id}`)} className="size-8 inline-flex items-center justify-center rounded-lg text-stone-400 hover:text-amber-600 hover:bg-amber-50 transition-colors"><span className="material-symbols-outlined text-[19px]">edit</span></button>
+                            <button title="Delete product" onClick={() => handleDelete(product._id)} className="size-8 inline-flex items-center justify-center rounded-lg text-stone-400 hover:text-[#EA2831] hover:bg-red-50 transition-colors"><span className="material-symbols-outlined text-[19px]">delete</span></button>
                           </>
                         )}
                       </div>
                     </td>
                   </tr>
                 ))}
+
+                {/* LOADING — skeleton rows keep the table at a steady height
+                    instead of collapsing to nothing between fetches. */}
+                {loading && Array.from({ length: 5 }).map((_, i) => (
+                  <tr key={`skeleton-${i}`} className="animate-pulse">
+                    <td className="px-5 py-3">
+                      <div className="flex items-center gap-3">
+                        <div className="size-11 min-w-[44px] rounded-lg bg-stone-100" />
+                        <div className="flex flex-col gap-2">
+                          <div className="h-3 w-40 rounded bg-stone-100" />
+                          <div className="h-2 w-16 rounded bg-stone-100" />
+                        </div>
+                      </div>
+                    </td>
+                    {Array.from({ length: 6 }).map((__, c) => (
+                      <td key={c} className="px-5 py-3"><div className="h-3 w-20 rounded bg-stone-100" /></td>
+                    ))}
+                  </tr>
+                ))}
+
+                {/* EMPTY — the filters matched nothing (or there is no catalog yet). */}
+                {!loading && products.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="px-5 py-16 text-center">
+                      <span className="material-symbols-outlined text-5xl text-stone-200 font-light">inventory_2</span>
+                      <p className="text-sm font-bold text-stone-500 mt-2">No products found</p>
+                      <p className="text-xs text-stone-400 mt-1">Try a different search term or clear the filters.</p>
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
+
+          {/* PAGINATION — 10 products per page. Hidden while loading and when a
+              single page holds everything, so a short catalog stays uncluttered. */}
+          {!loading && products.length > 0 && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-5 py-3.5 border-t border-stone-200 bg-stone-50/60">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-stone-400">
+                Showing {rangeStart}–{rangeEnd} of {products.length} products
+              </p>
+              {totalPages > 1 && (
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setPage((n) => Math.max(1, n - 1))}
+                    disabled={currentPage <= 1}
+                    className="inline-flex items-center gap-1 text-xs font-bold px-3 py-2 rounded-lg border border-stone-200 bg-white text-stone-600 hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    <span className="material-symbols-outlined text-base">chevron_left</span>
+                    <span className="hidden sm:inline">Previous</span>
+                  </button>
+                  {pageWindow(currentPage, totalPages).map((n) => (
+                    typeof n === 'string' ? (
+                      <span key={n} className="px-1 text-xs font-bold text-stone-300 select-none">…</span>
+                    ) : (
+                      <button
+                        key={n}
+                        onClick={() => setPage(n)}
+                        className={`min-w-[36px] text-xs font-bold px-3 py-2 rounded-lg border transition-colors ${
+                          n === currentPage
+                            ? 'bg-[#EA2831] border-[#EA2831] text-white'
+                            : 'border-stone-200 bg-white text-stone-600 hover:bg-stone-50'
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    )
+                  ))}
+                  <button
+                    onClick={() => setPage((n) => Math.min(totalPages, n + 1))}
+                    disabled={currentPage >= totalPages}
+                    className="inline-flex items-center gap-1 text-xs font-bold px-3 py-2 rounded-lg border border-stone-200 bg-white text-stone-600 hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    <span className="hidden sm:inline">Next</span>
+                    <span className="material-symbols-outlined text-base">chevron_right</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 

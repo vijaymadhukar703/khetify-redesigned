@@ -1,8 +1,0 @@
-NEW_RELIC_LICENSE_KEY=2b46fce059e9fe84e07bac89fba2701cFFFFNRAL
-NEW_RELIC_APP_NAME=Khetify Backend
-PORT=5000
-# MONGO_URI=mongodb://localhost:27017/khetify_application   
-MONGO_URI = mongodb+srv://db_user:common_users_12345@cluster0.5vfmrsz.mongodb.net/khetify_redesigned?retryWrites=true&w=majority&appName=Cluster0
-
-
-JWT_SECRET=khetify@123123

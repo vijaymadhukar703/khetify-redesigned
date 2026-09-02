@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useShopAuth } from "../../context/ShopAuthContext";
+import { useT } from "../../context/ShopLanguageContext";
 import { shopVerifyOtp, shopResendOtp } from "../../lib/shopApi";
 import { Icon, TextField, PasswordField, PrimaryButton, ErrorNote, AuthShell } from "../../Components/shop/authUi";
 
@@ -9,8 +10,14 @@ import { Icon, TextField, PasswordField, PrimaryButton, ErrorNote, AuthShell } f
    register({ name, email, phone, password }) → email-OTP step
    (shopVerifyOtp / shopResendOtp / skip) or a direct redirect. */
 
+// The SAME shapes the backend checks (services/shopAuthService.js, which in
+// turn matches validators/customerValidators.js).
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PHONE_RE = /^[0-9]{10}$/;
+
 export default function ShopRegister() {
   const navigate = useNavigate();
+  const t = useT();
   const { register } = useShopAuth();
   // Always land on the customer dashboard after registering / verifying — never
   // a previous page. The ?redirect= param is intentionally ignored.
@@ -31,10 +38,15 @@ export default function ShopRegister() {
 
   const submit = async (e) => {
     e.preventDefault();
-    if (!agree) { setError("Please accept the Terms & Conditions to continue."); return; }
-    // ⚡ CORRECTION: Check phone validation explicitly since it's mandatory now
-    if (!form.name || !form.email || !form.phone) { setError("All fields (Name, Email, and Phone) are required."); return; }
-    if (form.phone.length !== 10) { setError("Please enter a valid 10-digit phone number."); return; }
+    if (!agree) { setError(t("register.errAgree")); return; }
+    // PHONE IS THE REQUIRED IDENTIFIER, EMAIL IS OPTIONAL. The same shapes the
+    // backend enforces (services/shopAuthService.js), so anything accepted here
+    // is never rejected on submit.
+    if (!form.name.trim()) { setError(t("register.errName")); return; }
+    if (!form.phone.trim()) { setError(t("register.errPhoneRequired")); return; }
+    if (!PHONE_RE.test(form.phone.trim())) { setError(t("register.errPhoneInvalid")); return; }
+    // Only validated when something was actually typed — an empty box is fine.
+    if (form.email.trim() && !EMAIL_RE.test(form.email.trim())) { setError(t("register.errEmail")); return; }
     setError(""); setBusy(true);
     try {
       const res = await register({ name: form.name, email: form.email, phone: form.phone, password: form.password });
@@ -84,7 +96,7 @@ export default function ShopRegister() {
         <div className="mb-4 inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-[#FDECEC] text-[#EA2831]">
           <Icon.MailCheck className="h-6 w-6" />
         </div>
-        <h1 className="mb-1.5 font-heading text-2xl font-extrabold tracking-tight text-[#14201A] sm:text-3xl">Verify your email</h1>
+        <h1 className="mb-1.5 font-heading text-2xl font-extrabold tracking-tight text-[#14201A] sm:text-3xl">{t("register.verifyTitle")}</h1>
         {notice && <p className="mb-6 text-[14px] leading-normal text-[#6B6A62] sm:text-[15px]">{notice}</p>}
 
         <form onSubmit={verify} className="flex flex-col gap-[18px]">
@@ -95,16 +107,16 @@ export default function ShopRegister() {
             placeholder="______"
             maxLength={6}
             inputMode="numeric"
-            aria-label="6-digit code"
+            aria-label={t("register.otpAria")}
             className="h-[54px] w-full rounded-[14px] border-[1.5px] border-[#E2E0D6] bg-white px-4 text-center text-lg tracking-[0.4em] text-[#14201A] outline-none transition-all focus:border-[#EA2831] focus:ring-4 focus:ring-[#EA2831]/10 sm:h-[56px] sm:text-xl sm:tracking-[0.5em]"
           />
           <PrimaryButton type="submit" disabled={busy || otp.length < 4}>
-            {busy ? "Verifying…" : "Verify & continue"}
+            {busy ? t("register.verifying") : t("register.verify")}
           </PrimaryButton>
         </form>
 
         <div className="mt-5 flex justify-between text-sm">
-          <button onClick={resend} className="font-semibold text-[#EA2831] hover:text-[#c91e26]">Resend code</button>
+          <button onClick={resend} className="font-semibold text-[#EA2831] hover:text-[#c91e26]">{t("register.resend")}</button>
           {/* <button onClick={skip} className="text-[#6B6A62] hover:text-[#14201A]">Skip for now →</button> */}
         </div>
       </AuthShell>
@@ -114,41 +126,43 @@ export default function ShopRegister() {
   return (
     <AuthShell variant="register">
       <h1 className="mb-2 font-heading text-2xl font-extrabold tracking-tight text-[#14201A] sm:text-3xl md:text-4xl">
-        Create your account
+        {t("register.title")}
       </h1>
       <p className="mb-6 text-[15px] leading-normal text-[#6B6A62] sm:mb-7 sm:text-base">
-        Join thousands of Indian growers and buyers. Sign up to place your order.
+        {t("register.subtitle")}
       </p>
 
       <form onSubmit={submit} className="flex flex-col gap-[18px]">
         {error && <ErrorNote>{error}</ErrorNote>}
 
         <TextField
-          label="Full name" icon={Icon.User} type="text" required
+          label={t("register.nameLabel")} icon={Icon.User} type="text" required
           value={form.name} onChange={set("name")}
-          placeholder="Enter your name" autoComplete="name"
+          placeholder={t("register.namePlaceholder")} autoComplete="name"
         />
 
-        {/* Email + phone: each on its own line. */}
+        {/* Phone + email: each on its own line. Phone leads because it is the
+            required identifier; `required` is dropped from Email so the browser
+            stops blocking submit on an empty box. */}
         <TextField
-          label="Email" icon={Icon.Mail} type="email" required
-          value={form.email} onChange={set("email")}
-          placeholder="Enter your email" autoComplete="email"
+          label={t("register.phoneLabel")} icon={Icon.Phone} type="tel" required
+          value={form.phone} onChange={onPhone}
+          placeholder={t("register.phonePlaceholder")} autoComplete="tel"
+          inputMode="numeric" maxLength={10}
         />
         <TextField
-          label="Phone" icon={Icon.Phone} type="tel" required
-          value={form.phone} onChange={onPhone}
-          placeholder="Enter your phone number" autoComplete="tel"
-          inputMode="numeric" maxLength={10}
+          label={t("register.emailLabel")} icon={Icon.Mail} type="email"
+          value={form.email} onChange={set("email")}
+          placeholder={t("register.emailPlaceholder")} autoComplete="email"
         />
 
         <p className="-mt-2 flex items-center gap-1.5 text-[13px] text-[#9B9A92]">
-          <Icon.Info className="h-[13px] w-[13px] shrink-0" /> Please provide both a valid email and phone number.
+          <Icon.Info className="h-[13px] w-[13px] shrink-0" /> {t("register.phoneEmailNote")}
         </p>
 
         <PasswordField
           required value={form.password} onChange={set("password")}
-          placeholder="Enter your password" autoComplete="new-password"
+          placeholder={t("register.passwordPlaceholder")} autoComplete="new-password"
         />
 
         <label className="flex cursor-pointer select-none items-start gap-2.5">
@@ -159,19 +173,19 @@ export default function ShopRegister() {
             className="mt-0.5 h-[18px] w-[18px] shrink-0 cursor-pointer accent-[#EA2831]"
           />
           <span className="text-sm leading-normal text-[#6B6A62]">
-            I agree to Khetify's <span className="font-semibold text-[#EA2831]">Terms &amp; Conditions</span> and{" "}
-            <span className="font-semibold text-[#EA2831]">Privacy Policy</span>.
+            {t("register.agreePrefix")} <span className="font-semibold text-[#EA2831]">{t("register.terms")}</span> {t("register.and")}{" "}
+            <span className="font-semibold text-[#EA2831]">{t("register.privacy")}</span>.
           </span>
         </label>
 
         <PrimaryButton type="submit" disabled={busy || !agree}>
-          {busy ? "Please wait…" : "Create account"}
+          {busy ? t("register.pleaseWait") : t("register.submit")}
         </PrimaryButton>
       </form>
 
       <p className="mt-6 text-center text-[15px] text-[#6B6A62]">
-        Already have an account?{" "}
-        <Link to={loginHref} className="font-bold text-[#EA2831] hover:text-[#c91e26]">Login</Link>
+        {t("register.haveAccount")}{" "}
+        <Link to={loginHref} className="font-bold text-[#EA2831] hover:text-[#c91e26]">{t("register.login")}</Link>
       </p>
     </AuthShell>
   );

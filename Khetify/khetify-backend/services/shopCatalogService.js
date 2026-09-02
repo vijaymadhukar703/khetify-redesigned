@@ -4,6 +4,7 @@ const Product = require("../model/Company/productModel");
 const Seller = require("../model/Seller/Seller");
 const Company = require("../model/Company/Company");
 const Inventory = require("../model/Inventory/Inventory");
+const i18n = require("./translationService");
 
 /**
  * Public storefront catalog (customer-shop). Surfaces every seller's PUBLISHED
@@ -33,7 +34,51 @@ function listingPrice(listing, product) {
   return product?.mrp ?? product?.price ?? 0;
 }
 
-/** Sum a seller's live availableStock for a set of (sellerId, productId) pairs.
+/* ── EXPIRED STOCK IS NOT SELLABLE ────────────────────────────────────────
+   A lot whose expiry has passed is still ON THE SHELF — it just cannot be
+   sold. Counting it made the storefront advertise stock a customer must never
+   be able to order: 200 good + 600 expired read as "800 available", and
+   checkout let all 800 through. For agricultural inputs that is not a
+   rounding error.
+
+   THE RULE: a row counts when it has NO expiry date, or its expiry is today
+   or later. A null expiry is VALID, deliberately — batch/expiry tracking is a
+   premium feature, so most company products carry no expiry at all, and
+   treating null as expired would zero the entire catalogue.
+
+   asOf is MIDNIGHT TODAY, so a lot expiring today stays sellable for the
+   whole day rather than vanishing at whatever instant the request runs.
+
+   Applied as a CONDITIONAL SUM rather than a $match filter, on purpose: both
+   call sites fall back to the product's own availableStock when a product has
+   NO inventory rows at all (that is how a company product with no seller
+   stock keeps showing). Filtering the rows out would make an ALL-EXPIRED
+   product look like a product with no rows and hit that fallback — reading as
+   in stock again, which is the very bug being fixed. Summing zero for expired
+   rows keeps the group present and correctly reports 0. */
+const startOfToday = () => {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d;
+};
+
+const sellableStockSum = (asOf) => ({
+  $sum: {
+    $cond: [
+      {
+        $or: [
+          { $eq: [{ $ifNull: ["$expiryDate", null] }, null] },
+          { $gte: ["$expiryDate", asOf] },
+        ],
+      },
+      "$availableStock",
+      0,
+    ],
+  },
+});
+
+/** Sum a seller's live SELLABLE availableStock for a set of (sellerId,
+ * productId) pairs — expired lots excluded, see sellableStockSum above.
  * Returns a Map keyed by `${sellerId}:${productId}` → number. */
 async function stockMap(pairs) {
   if (!pairs.length) return new Map();
@@ -41,21 +86,105 @@ async function stockMap(pairs) {
   const sellerIds = [...new Set(pairs.map((p) => String(p.sellerId)))].map((id) => new mongoose.Types.ObjectId(id));
   const rows = await Inventory.aggregate([
     { $match: { ownerType: "seller", ownerId: { $in: sellerIds }, productId: { $in: productIds } } },
-    { $group: { _id: { ownerId: "$ownerId", productId: "$productId" }, avail: { $sum: "$availableStock" } } },
+    { $group: { _id: { ownerId: "$ownerId", productId: "$productId" }, avail: sellableStockSum(startOfToday()) } },
   ]);
   const map = new Map();
   for (const r of rows) map.set(`${r._id.ownerId}:${r._id.productId}`, r.avail);
   return map;
 }
 
+/**
+ * Sellable stock PER VARIANT for one (seller, product) — the product detail
+ * page only, so picking Yellow shows Yellow's stock instead of the whole
+ * product's.
+ *
+ * A SEPARATE function rather than a change to stockMap(): that one feeds the
+ * catalogue grid, the search results and checkout, all of which want the
+ * product TOTAL. Grouping it by variant there would change every one of them.
+ *
+ * SELLER-OWN PRODUCTS ONLY, by construction. `variantSku` is written solely by
+ * the seller's Add Stock flow; a company product's Inventory rows have no such
+ * field, so `$ne: null` (which also excludes a missing field) matches nothing
+ * for them and this returns NULL — the signal the client uses to keep showing
+ * the product total exactly as before. Returning {} instead would read as
+ * "every variant has zero" and mark the whole company catalogue out of stock.
+ *
+ * Same expiry rule as everywhere else: a lot with no expiry, or one expiring
+ * today or later, counts.
+ */
+async function variantStockMap(sellerId, productId) {
+  const rows = await Inventory.aggregate([
+    {
+      $match: {
+        ownerType: "seller",
+        ownerId: new mongoose.Types.ObjectId(String(sellerId)),
+        productId: new mongoose.Types.ObjectId(String(productId)),
+        // Rows with no variant stay OUT of this map on purpose — they are
+        // already counted in the product total, which is what the page falls
+        // back to.
+        variantSku: { $ne: null },
+      },
+    },
+    { $group: { _id: "$variantSku", avail: sellableStockSum(startOfToday()) } },
+  ]);
+  if (!rows.length) return null;
+  const out = {};
+  for (const r of rows) out[String(r._id)] = r.avail;
+  return out;
+}
+
+/**
+ * The product's variants, READ-ONLY, exactly as the Company upload form stored
+ * them (model/Company/productModel.js → variantSchema). Nothing is computed or
+ * invented here — the storefront simply could not see this data before.
+ *
+ * GATED ON THE ARRAY, NOT ON `variantType`. The Company upload form appends
+ * `variants` but never appends `variantType`, so a product saved WITH variants
+ * still carries the schema default "single" — checking that field returned []
+ * for every real product. The rows themselves are the honest signal, so a
+ * product with no variants still yields [] and shows no variant UI.
+ *
+ * `attributes` is a Mongoose Map. Through .lean() it arrives as a plain object,
+ * but a hydrated document would hand back a real Map — which JSON.stringify
+ * flattens to {}. Both are normalised so the shape the client receives is the
+ * same either way.
+ */
+function toShopVariants(product) {
+  const list = Array.isArray(product?.variants) ? product.variants : [];
+  return list
+    .filter((v) => v && (v.label || v.image || v.mrp != null))
+    .map((v) => ({
+      id: String(v._id),
+      label: v.label || "",
+      attributes: v.attributes instanceof Map
+        ? Object.fromEntries(v.attributes)
+        : { ...(v.attributes || {}) },
+      sku: v.sku || null,
+      // ALL of this variant's photos, for the detail page's gallery. Empty for
+      // a company product and for any variant saved before multi-image was
+      // added — the page then falls back to the single `image` below, so
+      // nothing that worked before changes.
+      images: Array.isArray(v.images) ? v.images.filter(Boolean) : [],
+      // The variant's own price as entered on upload. Null when it was left
+      // blank, and the page then falls back to the product price.
+      mrp: v.mrp ?? null,
+      stock: v.stock ?? null,
+      image: v.image || null,
+    }));
+}
+
 /** Shape one listing+product+seller into the card/detail payload sent to the UI. */
-function toShopProduct(listing, product, seller, company, availableStock) {
+// `variantStock` is null for every caller but the detail page — see
+// variantStockMap. The catalogue grid passes nothing and is unaffected.
+function toShopProduct(listing, product, seller, company, availableStock, variantStock = null) {
   const price = listingPrice(listing, product);
   const stock = Number.isFinite(availableStock) ? availableStock : (product.availableStock ?? 0);
   return {
     listingId: String(listing._id),
     sellerId: String(listing.sellerId),
-    companyId: String(listing.companyId),
+    // NULL-SAFE: a seller-own listing has no company, and String(null) would
+    // ship the literal text "null" to the storefront as a company id.
+    companyId: listing.companyId ? String(listing.companyId) : null,
     productId: String(product._id),
     name: product.productName,
     brand: product.brandName,
@@ -75,6 +204,15 @@ function toShopProduct(listing, product, seller, company, availableStock) {
     availableStock: stock,
     inStock: stock > 0,
     minimumOrderQuantity: product.minimumOrderQuantity || 1,
+    // ADDITIVE. "single" for every product uploaded without variants, and
+    // variants: [] alongside it — so nothing that reads this payload today sees
+    // a changed field, only two new ones.
+    variantType: product.variantType || "single",
+    variants: toShopVariants(product),
+    // { "ABC-YELLO": 200, "ABC-RED": 50 } — per-variant sellable stock, or
+    // NULL when this product's stock is not tracked per variant. Null means
+    // "use availableStock", NOT "zero".
+    variantStock,
     seller: seller
       ? {
           id: String(seller._id),
@@ -140,8 +278,17 @@ const many = (v) => {
 let categoryCache = { at: 0, list: [] };
 const CATEGORY_TTL_MS = 5 * 60 * 1000;
 
-async function listCategories() {
-  if (Date.now() - categoryCache.at < CATEGORY_TTL_MS) return categoryCache.list;
+/**
+ * The catalogue's category list.
+ *
+ * The CACHE stays English — one shared list, no per-language duplication — and
+ * localisation happens on the way out, so adding a language never multiplies
+ * the cache.
+ */
+async function listCategories(lang = "en") {
+  if (Date.now() - categoryCache.at < CATEGORY_TTL_MS) {
+    return i18n.localizeStrings(categoryCache.list, i18n.pickLang(lang));
+  }
 
   const rows = await SellerListing.aggregate([
     { $match: { status: "published" } },
@@ -154,7 +301,7 @@ async function listCategories() {
   ]);
 
   categoryCache = { at: Date.now(), list: rows.map((r) => r._id) };
-  return categoryCache.list;
+  return i18n.localizeStrings(categoryCache.list, i18n.pickLang(lang));
 }
 
 /**
@@ -162,18 +309,31 @@ async function listCategories() {
  * collection per entity instead of scanning the whole join graph.
  * Returns null when there is no search (caller then skips the id filter).
  */
-async function searchToIds(search) {
-  const rx = new RegExp(escapeRx(search), "i");
+/**
+ * Resolve a search to ids, optionally widened with the ENGLISH the query stands
+ * for in another language (see translationService.expandSearch).
+ *
+ * PURELY ADDITIVE. `terms` always starts with the user's own string, so an
+ * English query matches exactly what it matched before; extra terms can only
+ * add rows, never remove them.
+ */
+async function searchToIds(search, extraTerms = []) {
+  const terms = [search, ...extraTerms];
+  const rxs = terms.map((tm) => new RegExp(escapeRx(tm), "i"));
+  // 4 fields × at most 4 terms — bounded by MAX_EXPANSIONS in the service.
+  const productOr = rxs.flatMap((rx) => [
+    { productName: rx }, { brandName: rx }, { category: rx }, { skuNumber: rx },
+  ]);
 
   const [products, sellers] = await Promise.all([
     Product.find({
       productStatus: "active",
-      $or: [{ productName: rx }, { brandName: rx }, { category: rx }, { skuNumber: rx }],
+      $or: productOr,
     })
       .select("_id")
       .limit(SEARCH_PRODUCT_CAP)
       .lean(),
-    Seller.find({ "sellerInfo.businessName": rx })
+    Seller.find({ $or: rxs.map((rx) => ({ "sellerInfo.businessName": rx })) })
       .select("_id")
       .limit(SEARCH_SELLER_CAP)
       .lean(),
@@ -192,16 +352,24 @@ async function listProducts(q = {}) {
 
   const match = { status: "published" };
 
+  // Requested storefront language. Unknown / absent → "en", which short-circuits
+  // every i18n call below, so the English path is unchanged.
+  const lang = i18n.pickLang(q.lang);
+
   // 1. Search → ids, from indexed single-collection queries.
   const search = (q.search || "").trim();
   if (search) {
-    const { productIds, sellerIds } = await searchToIds(search);
+    /* A Hindi query cannot regex-match English product data, so ask the
+       translation cache what English the query stands for and search BOTH.
+       Additive: the user's own string is always term #1. */
+    const extra = await i18n.expandSearch(search, lang);
+    const { productIds, sellerIds } = await searchToIds(search, extra);
     if (!productIds.length && !sellerIds.length) {
       return {
         items: [], total: 0, page, limit, pages: 1, sort: q.sort || "relevance",
         priceRange: { min: 0, max: 0 },
         facets: { categories: [], brands: [], sellers: [], discounts: [] },
-        categories: await listCategories(),
+        categories: await listCategories(lang),
       };
     }
     const or = [];
@@ -260,6 +428,9 @@ async function listProducts(q = {}) {
 
   // 3. Live seller stock. This runs AFTER the search/category filters, so it
   //    only touches the survivors — not the whole catalogue like before.
+  //    ONE clock reading for the whole response, so two rows in one page can
+  //    never be judged expired against different "todays".
+  const asOf = startOfToday();
   pipeline.push(
     {
       $lookup: {
@@ -277,7 +448,7 @@ async function listProducts(q = {}) {
               },
             },
           },
-          { $group: { _id: null, avail: { $sum: "$availableStock" } } },
+          { $group: { _id: null, avail: sellableStockSum(asOf) } },
         ],
         as: "_inv",
       },
@@ -460,7 +631,9 @@ async function listProducts(q = {}) {
   const range = res?.priceRange?.[0];
 
   return {
-    items,
+    // Localised in ONE batched cache lookup for the whole page of results.
+    // Anything without a translation keeps its English original.
+    items: await i18n.localize(items, lang),
     total,
     page,
     limit,
@@ -472,14 +645,21 @@ async function listProducts(q = {}) {
 
     // 🔍 The refinement sidebar — describes THESE RESULTS, not the catalogue.
     facets: {
-      categories: res?.categories || [],
+      /* Facet VALUES stay English — they are what the filter posts back and
+         what the URL carries. Only the LABEL the customer reads is localised,
+         in one batched lookup rather than a query per row. */
+      categories: await (async () => {
+        const rows = res?.categories || [];
+        const labels = await i18n.localizeStrings(rows.map((c) => c.label ?? c.value), lang);
+        return rows.map((c, i) => ({ ...c, label: labels[i] }));
+      })(),
       brands: res?.brands || [],
       sellers: sellerFacet,
       discounts: discountFacetOut,
     },
 
     // Full catalogue category list — for the BROWSE page's nav, not for search.
-    categories: await listCategories(),
+    categories: await listCategories(lang),
   };
 }
 
@@ -491,15 +671,21 @@ async function listProducts(q = {}) {
  * business joining sellers, companies or running a stock aggregation. Two small
  * indexed queries, no aggregation, ~8 rows.
  */
-async function suggest(term, limit = 8) {
+async function suggest(term, limit = 8, lang = "en") {
   const q = String(term || "").trim();
   if (q.length < 2) return []; // one letter matches half the shop — not useful
 
   const cap = Math.min(12, Math.max(1, Number(limit) || 8));
-  const rx = new RegExp(escapeRx(q), "i");
+  /* Same additive widening as the full search: the dropdown must not go empty
+     just because the customer typed the query in Hindi. */
+  const extra = await i18n.expandSearch(q, i18n.pickLang(lang));
+  const rxs = [q, ...extra].map((tm) => new RegExp(escapeRx(tm), "i"));
 
   // Match on the product name only — that is what people actually type.
-  const products = await Product.find({ productStatus: "active", productName: rx })
+  const products = await Product.find({
+    productStatus: "active",
+    $or: rxs.flatMap((rx) => [{ productName: rx }, { category: rx }]),
+  })
     .select("productName")
     .limit(50)
     .lean();
@@ -530,19 +716,22 @@ async function suggest(term, limit = 8) {
   return out;
 }
 
-async function getProduct(listingId) {
+async function getProduct(listingId, lang = "en") {
   if (!mongoose.isValidObjectId(listingId)) throw httpErr("Product not found", 404);
   const listing = await SellerListing.findOne({ _id: listingId, status: "published" }).lean();
   if (!listing) throw httpErr("Product not found", 404);
-  const [product, seller, company, stocks] = await Promise.all([
+  const [product, seller, company, stocks, variantStock] = await Promise.all([
     Product.findOne({ _id: listing.productId, productStatus: "active" }).lean(),
     Seller.findById(listing.sellerId).select("sellerInfo contact").lean(),
     Company.findById(listing.companyId).select("companyInfo.companyName").lean(),
     stockMap([{ sellerId: listing.sellerId, productId: listing.productId }]),
+    // Per-variant breakdown. Null unless this seller's lots carry a variant.
+    variantStockMap(listing.sellerId, listing.productId),
   ]);
   if (!product) throw httpErr("Product not found", 404);
   const stock = stocks.get(`${listing.sellerId}:${listing.productId}`);
-  return toShopProduct(listing, product, seller, company, stock);
+  // Localised on the way out; untranslated strings stay English.
+  return i18n.localize(toShopProduct(listing, product, seller, company, stock, variantStock), i18n.pickLang(lang));
 }
 
 /**
@@ -568,7 +757,8 @@ async function resolveForCheckout(listingIds = []) {
     map.set(String(l._id), {
       listingId: String(l._id),
       sellerId: String(l.sellerId),
-      companyId: String(l.companyId),
+      // Null-safe for a seller-own listing — see toShopProduct.
+      companyId: l.companyId ? String(l.companyId) : null,
       productId: String(l.productId),
       name: product.productName,
       price: listingPrice(l, product),
@@ -578,6 +768,10 @@ async function resolveForCheckout(listingIds = []) {
       //    store it. An order should show what the shopper actually bought, even
       //    if the seller changes the product photo (or delists it) years later.
       image: product.productImages?.[0] || null,
+      // The product's variants, so buildLines() can price and snapshot the ONE
+      // the shopper picked. Trusted server data — the client sends only a
+      // variantId, never a price or an image.
+      variants: toShopVariants(product),
       availableStock: Number.isFinite(stock) ? stock : (product.availableStock ?? 0),
     });
   }

@@ -92,7 +92,22 @@ function buildLines(cartItems, resolved) {
     // Only published + in-stock products may be ordered.
     if (!(r.availableStock > 0)) throw httpErr(`"${r.name}" is out of stock`, 409);
     if (qty > r.availableStock) throw httpErr(`Only ${r.availableStock} unit(s) of "${r.name}" are available`, 409);
-    const price = r.price;
+
+    /* VARIANT, IF ONE WAS CHOSEN. The client sends only an id; the price, the
+       image and the attributes are read from the SERVER'S copy of the product,
+       so a tampered cart cannot buy Green at Red's price. An id that no longer
+       matches any variant (the company edited the product mid-session) is
+       rejected rather than silently falling back to the base price — the
+       shopper would otherwise be charged for something they did not choose. */
+    const variant = ci.variantId
+      ? (r.variants || []).find((v) => String(v.id) === String(ci.variantId))
+      : null;
+    if (ci.variantId && !variant) {
+      throw httpErr(`The selected option for "${r.name}" is no longer available`, 409);
+    }
+    // The variant's own price when it carries one; otherwise the listing price
+    // still applies, exactly as before.
+    const price = variant && variant.mrp != null ? Number(variant.mrp) : r.price;
     // The customer total is price × qty ONLY — the marketplace price (MRP) is
     // treated as tax-inclusive, so no GST is ADDED on top. This keeps cart,
     // checkout, order-success and order-history totals identical. We record the
@@ -107,8 +122,14 @@ function buildLines(cartItems, resolved) {
       //    purchasable listing later (a product may be sold by many sellers).
       listingId: r.listingId,
       name: r.name,
-      // 🖼️ what the shopper actually saw when they bought it
-      image: r.image || null,
+      // 🖼️ what the shopper actually saw when they bought it — the variant's
+      //    own picture when they picked one.
+      image: variant?.image || r.image || null,
+      // 🎨 Snapshot of the chosen variant, so the order, the invoice and the
+      //    seller's pick list all say WHICH one was sold.
+      variantId: variant?.id || undefined,
+      variantLabel: variant?.label || undefined,
+      variantAttributes: variant?.attributes || undefined,
       qty,
       price,
       taxes: { hsnCode: r.hsnCode, gstRate: r.gstPercentage || 0, taxable, cgst: 0, sgst: 0, igst: 0 },
@@ -119,13 +140,69 @@ function buildLines(cartItems, resolved) {
   return { lines, totalUnits, totalAmount, totalTax: 0 };
 }
 
+/* ─────────────────────────────────────────────────────────────────────────────
+ * 💳 PAYMENT METHODS
+ *
+ * "cod" is exactly what it always was: the order is created immediately and the
+ * money moves at the door, so payment.status starts "pending".
+ *
+ * "online" NEVER reaches this file from a client. The client that picks online
+ * payment goes to services/shopPaymentService.js first; only once the gateway
+ * has confirmed the money does that service call checkout() back, passing a
+ * `paymentContext`. So an order can only ever exist as COD-pending or
+ * online-PAID — there is no such thing as an unpaid online order sitting in a
+ * seller's queue.
+ * ───────────────────────────────────────────────────────────────────────────── */
+const PAYMENT_METHODS = ["cod", "online"];
+
 /**
- * Place order(s) from a cart.
- * @param {string} consumerId
- * @param {object} body { items:[{listingId, qty}], shippingAddressId?, shippingAddress?, paymentMode }
- * @returns {Promise<Array>} the created orders
+ * Build the Order.payment sub-document.
+ *
+ * @param {object} body            the checkout body (may carry paymentMethod)
+ * @param {object|null} paymentContext  ONLY supplied by shopPaymentService after
+ *        a confirmed gateway payment: { txnRef, provider, paidAt, paymentId }
  */
-async function checkout(consumerId, { items = [], shippingAddressId, shippingAddress } = {}) {
+function buildOrderPayment(body = {}, paymentContext = null) {
+  // Trusted path: the payment service has already verified the gateway.
+  if (paymentContext) {
+    return {
+      mode: "online",
+      status: "paid",
+      txnRef: paymentContext.txnRef,
+      provider: paymentContext.provider || "mock",
+      paidAt: paymentContext.paidAt || new Date(),
+      paymentId: paymentContext.paymentId,
+    };
+  }
+
+  const requested = String(body.paymentMethod || "cod").toLowerCase();
+
+  if (!PAYMENT_METHODS.includes(requested)) {
+    throw httpErr("Unsupported payment method", 400);
+  }
+
+  // Refusing this is the whole security of the online lane: without it a client
+  // could POST /checkout { paymentMethod: "online" } and mint a paid order.
+  if (requested === "online") {
+    throw httpErr("Online payment must be completed before the order is placed", 400);
+  }
+
+  // ── UNCHANGED COD BEHAVIOUR ── (provider is additive and informational)
+  return { mode: "cod", status: "pending", provider: "cod" };
+}
+
+/**
+ * Everything checkout() must work out BEFORE it writes anything: the shopper,
+ * the shipping address, the server-priced lines, and the per-seller split.
+ *
+ * Split out of checkout() (behaviour-identical) so the online-payment flow can
+ * PRICE a basket without creating orders. That matters: the amount shown on the
+ * payment screen and the amount the orders are finally created with now come
+ * from the same code path, so they cannot drift apart.
+ *
+ * Pure read — no writes, no counters burned, safe to call for a quote.
+ */
+async function prepareCheckout(consumerId, { items = [], shippingAddressId, shippingAddress } = {}) {
   if (!Array.isArray(items) || !items.length) throw httpErr("Your cart is empty");
 
   const consumer = await Consumer.findById(consumerId);
@@ -174,10 +251,67 @@ async function checkout(consumerId, { items = [], shippingAddressId, shippingAdd
     pincode: shipAddr.pincode,
   };
 
-  const created = [];
+  // Price each seller's slice ONCE. checkout() writes these exact lines.
+  const groups = [];
   for (const [sellerId, cartItems] of bySeller) {
+    const built = buildLines(cartItems, resolved);
+    groups.push({ sellerId, ...built });
+  }
+
+  const grandTotal = tax.round2(groups.reduce((sum, g) => sum + g.totalAmount, 0));
+  const totalUnits = groups.reduce((sum, g) => sum + g.totalUnits, 0);
+
+  return { consumer, shipAddr, orderShipAddress, groups, grandTotal, totalUnits };
+}
+
+/**
+ * 💳 Price a basket WITHOUT placing it — what the online-payment screen charges.
+ *
+ * Returns a display-safe summary only (no Mongoose documents), because it is
+ * serialised into the ShopPayment row and sent to the browser.
+ */
+async function quoteCheckout(consumerId, body = {}) {
+  const { orderShipAddress, groups, grandTotal, totalUnits } = await prepareCheckout(consumerId, body);
+  return {
+    amount: grandTotal,
+    currency: "INR",
+    totalUnits,
+    orderCount: groups.length,
+    shippingAddress: orderShipAddress,
+    sellers: groups.map((g) => ({
+      sellerId: String(g.sellerId),
+      amount: tax.round2(g.totalAmount),
+      units: g.totalUnits,
+      items: g.lines.map((l) => ({
+        name: l.name,
+        image: l.image || null,
+        variantLabel: l.variantLabel || null,
+        qty: l.qty,
+        price: l.price,
+      })),
+    })),
+  };
+}
+
+/**
+ * Place order(s) from a cart.
+ * @param {string} consumerId
+ * @param {object} body { items:[{listingId, qty, variantId}], shippingAddressId?, shippingAddress?, paymentMethod? }
+ * @param {object|null} paymentContext  set ONLY by shopPaymentService after a
+ *        verified online payment — see buildOrderPayment() above.
+ * @returns {Promise<Array>} the created orders
+ */
+async function checkout(consumerId, body = {}, paymentContext = null) {
+  const { consumer, shipAddr, orderShipAddress, groups } = await prepareCheckout(consumerId, body);
+
+  // Resolved BEFORE any write: an unsupported method must not leave half the
+  // cart ordered and half not.
+  const payment = buildOrderPayment(body, paymentContext);
+
+  const created = [];
+  for (const g of groups) {
+    const { sellerId, lines, totalUnits, totalAmount, totalTax } = g;
     const customer = await upsertSellerCustomer(sellerId, consumer, shipAddr);
-    const { lines, totalUnits, totalAmount, totalTax } = buildLines(cartItems, resolved);
     const orderNumber = await nextWebOrderNumber(sellerId);
 
     const order = await Order.create({
@@ -195,7 +329,8 @@ async function checkout(consumerId, { items = [], shippingAddressId, shippingAdd
       totalTax: tax.round2(totalTax),
       channel: "online",
       salesChannel: "website",
-      payment: { mode: "cod", status: "pending" },
+      // COD → { cod, pending }.  Online → { online, paid } (already collected).
+      payment,
       status: "pending",
     });
     created.push(order);
@@ -407,6 +542,8 @@ async function setDefaultAddress(consumerId, addressId) {
 
 module.exports = {
   checkout,
+  quoteCheckout, // 💳 ONLINE PAYMENT — price a basket without placing it
+  PAYMENT_METHODS, // 💳 ONLINE PAYMENT
   listOrders,
   getOrder,
   cancelOrder, // 🛒 STOREFRONT

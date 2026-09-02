@@ -5,7 +5,7 @@ import { getUsers, updateUser, deleteUser } from '../../lib/imsApi';
 import { roleLabel } from '../../lib/roles';
 import { GhostBtn, Th } from './ims/ImsUi';
 import Can from '../../Components/ims/Can';
-import BackButton from '../../Components/BackButton';
+
 
 const toast = (icon, title) =>
   Swal.fire({ icon, title, toast: true, position: 'top-end', timer: 2200, showConfirmButton: false });
@@ -66,7 +66,7 @@ const CompanyUsers = () => {
   return (
     <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-white font-sora">
       <div className="max-w-5xl mx-auto space-y-6">
-        <BackButton />
+       
         <div>
           <h2 className="text-xl font-bold text-stone-900">Team & Roles</h2>
           <p className="text-xs text-stone-400">{users.length} member(s)</p>

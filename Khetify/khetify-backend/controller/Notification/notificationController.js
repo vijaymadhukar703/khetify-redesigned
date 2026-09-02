@@ -25,6 +25,8 @@ exports.markRead = async (req, res) => {
       { read: true },
       { new: true }
     );
+
+    
     if (!n) return res.status(404).json({ success: false, message: "Not found" });
     res.json({ success: true, data: n });
   } catch (err) {

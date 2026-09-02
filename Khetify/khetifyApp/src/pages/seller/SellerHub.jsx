@@ -45,7 +45,9 @@ const SellerHub = () => {
   const [counts, setCounts] = useState({});
   const [supply, setSupply] = useState([]);
 
-  const approved = link?.linkStatus === "approved";
+  // NOTE: the supplying company's approval is deliberately NOT read here any
+  // more. Modules open on the subscription alone (see lib/sellerNav.js), so the
+  // Hub's KPIs, banners and cards no longer wait on it either.
 
   // Identity + supplying-company link (drives the greeting + the gate banner).
   const loadLink = () => {
@@ -63,7 +65,6 @@ const SellerHub = () => {
   // always renders. Lots/value need the paid Inventory feature; warehouses and
   // supply are free.
   useEffect(() => {
-    if (!approved) return undefined;
     let alive = true;
     (async () => {
       const [whs, lots, orders] = await Promise.all([
@@ -93,7 +94,7 @@ const SellerHub = () => {
       setSupply(orderRows);
     })();
     return () => { alive = false; };
-  }, [approved]);
+  }, []);
 
   // Supply ready to scan-receive — the seller's actionable banner (mirrors the
   // company's "Transfers needing you").
@@ -113,13 +114,12 @@ const SellerHub = () => {
 
   // Two gates, same as the company Hub:
   //  - HIDE (RBAC): a role without the capability never sees the card.
-  //  - LOCK (subscription/approval): a paid module the OWNER plan hasn't unlocked
-  //    (or anything before approval) is shown but gated.
+  //  - LOCK (subscription): a paid module the OWNER plan hasn't unlocked is
+  //    shown but gated. The supplying company's approval is not a gate.
   const visible = (m) => !(m.cap && !hasCap(m.cap));
   const cards = SELLER_MODULES.filter(visible);
 
   const openCard = (m, planLocked) => {
-    if (!approved) return;
     if (planLocked) {
       if (canBill) navigate("/seller/billing");
       else toast("info", "Ask your seller admin to upgrade the plan to unlock this.");
@@ -142,7 +142,7 @@ const SellerHub = () => {
       {!linkLoading && <SupplyingCompany link={link} canApply={hasCap("company:manage")} />}
 
       {/* Supply ready to receive — actionable banner (mirrors "Transfers needing you") */}
-      {approved && toReceive.length > 0 && (
+      {toReceive.length > 0 && (
         <div className="mt-6 mb-2 flex items-center gap-3 bg-[#EA2831]/5 border border-[#EA2831]/30 rounded-2xl p-4">
           <span className="material-symbols-outlined text-[#EA2831]">local_shipping</span>
           <div className="flex-1 min-w-0">
@@ -175,12 +175,10 @@ const SellerHub = () => {
         {cards.map((m) => {
           const meta = cardMeta[m.key] || {};
           const planOk = !subLoading && sellerCan(m.feature);
-          const unlocked = approved && planOk;
-          const planLocked = approved && !planOk;       // paid module not in owner's plan
-          const isLocked = !unlocked;                    // not approved OR plan-locked
-          const lockHint = !approved
-            ? "Available after your company approves you"
-            : planLocked && canBill ? "Upgrade your plan to unlock"
+          // The plan is the only lock — see lib/sellerNav.js.
+          const planLocked = !planOk;                    // paid module not in owner's plan
+          const isLocked = planLocked;
+          const lockHint = planLocked && canBill ? "Upgrade your plan to unlock"
             : planLocked ? "Ask your seller admin to upgrade"
             : "";
           return (
@@ -203,7 +201,7 @@ const SellerHub = () => {
                   <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-stone-500 bg-stone-100 rounded-full px-2.5 py-1">
                     <span className="material-symbols-outlined text-[13px]">lock</span> Pro
                   </span>
-                ) : unlocked && meta.pending ? (
+                ) : meta.pending ? (
                   <span className="text-[10px] font-bold uppercase tracking-wider text-[#EA2831] bg-[#EA2831]/10 rounded-full px-2.5 py-1">
                     {meta.pending}
                   </span>
@@ -213,9 +211,9 @@ const SellerHub = () => {
               <p className="text-sm text-stone-500 leading-snug mb-4">{m.desc}</p>
               <div className="flex items-center justify-between gap-2">
                 <span className="text-sm font-bold text-stone-700 truncate min-w-0">
-                  {unlocked
-                    ? meta.metric
-                    : <span className="text-stone-500 font-medium">{!approved ? "Locked until approval" : canBill ? "Upgrade to unlock" : "Ask your admin"}</span>}
+                  {planLocked
+                    ? <span className="text-stone-500 font-medium">{canBill ? "Upgrade to unlock" : "Ask your admin"}</span>
+                    : meta.metric}
                 </span>
                 <span className={`material-symbols-outlined shrink-0 ${isLocked ? "text-stone-300" : "text-stone-300 group-hover:text-[#EA2831] group-hover:translate-x-0.5 transition-all"}`}>
                   {isLocked ? "lock" : "arrow_forward"}
@@ -272,7 +270,7 @@ const SupplyingCompany = ({ link, canApply }) => {
         <span className="material-symbols-outlined text-amber-600">hourglass_top</span>
         <div>
           <p className="font-bold text-amber-800">Awaiting approval from {companyName}</p>
-          <p className="text-sm text-amber-700">You can use the portal once {companyName} approves your application.</p>
+          <p className="text-sm text-amber-700">Your portal is open in the meantime — approval is what lets you order and resell {companyName}&apos;s products.</p>
         </div>
       </div>
     );

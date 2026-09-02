@@ -150,19 +150,22 @@ exports.registerCompany = async (req, res) => {
     const { fullName, email, number, password } = req.body;
 
     // Every field is required. (Defense in depth — the UI blocks blank submits
-    // too.) Full name must be non-blank; an email (if given) must be valid and a
-    // number (if given) must be 10 digits; at least one of email/number; and a
+    // too.) Full name must be non-blank; email AND phone number are BOTH
+    // mandatory (not either/or) and must each pass format validation; and a
     // password of at least 6 characters.
     if (isBlank(fullName)) {
       return res.status(400).json({ message: "Full name is required" });
     }
-    if (!email && !number) {
-      return res.status(400).json({ message: "Email or phone number is required" });
+    if (isBlank(email)) {
+      return res.status(400).json({ message: "Email is required" });
     }
-    if (email && !isEmail(email)) {
+    if (!isEmail(email)) {
       return res.status(400).json({ message: "Please enter a valid email" });
     }
-    if (number && !isPhone10(number)) {
+    if (isBlank(number)) {
+      return res.status(400).json({ message: "Phone number is required" });
+    }
+    if (!isPhone10(number)) {
       return res.status(400).json({ message: "Phone number must be 10 digits" });
     }
     if (isBlank(password) || String(password).length < 6) {

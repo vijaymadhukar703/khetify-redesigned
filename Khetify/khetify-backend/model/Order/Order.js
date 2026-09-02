@@ -49,6 +49,15 @@ const orderItemSchema = new mongoose.Schema(
     //    shopper's order history was a wall of text. Snapshotted at checkout so
     //    it stays truthful even if the product is later edited or delisted.
     image: { type: String },
+    // 🎨 STOREFRONT VARIANT, AS SOLD. A product uploaded with variants (Colour,
+    //    Size, …) is bought as ONE of them, so the line records which — its id,
+    //    its label and the attribute map exactly as it was on the product. All
+    //    optional and additive: POS/company orders and every pre-existing order
+    //    simply leave them unset, and `price`/`image` above already carry the
+    //    variant's own values when one was chosen.
+    variantId: { type: mongoose.Schema.Types.ObjectId },
+    variantLabel: { type: String },
+    variantAttributes: { type: Map, of: String },
     qty: { type: Number, required: true },
     price: { type: Number, required: true }, // unit price at time of sale
     // 🏬 The warehouse assigned to fulfil THIS LINE, chosen by the seller when
@@ -100,9 +109,25 @@ const orderSchema = new mongoose.Schema(
     channel: { type: String, enum: ["online", "offline"], default: "online" }, // legacy
     salesChannel: { type: String, enum: ["pos", "website", "shopify", "amazon", "flipkart", "manual", "b2b"], default: "manual" },
     payment: {
-      mode: { type: String }, // cash | upi | card | credit | ...
+      mode: { type: String }, // cash | upi | card | credit | cod | online | ...
       status: { type: String, enum: ["pending", "paid", "partial", "refunded"], default: "pending" },
-      txnRef: { type: String },
+      txnRef: { type: String }, // gateway payment id once one exists
+
+      /* 💳 STOREFRONT ONLINE PAYMENT — all three additive and optional.
+         Every pre-existing order (and every COD order) simply leaves
+         paidAt/paymentId unset and behaves exactly as before.
+
+         `provider` is deliberately generic ("cod" | "mock" | later
+         "razorpay" | "stripe" | "payu"), so integrating a real gateway
+         does not need a schema change here — only
+         services/shopPaymentGateway.js changes.
+
+         `paymentId` points at the ShopPayment attempt that produced this
+         order, which is what makes a payment reconcilable to an order
+         (and, later, refundable) without scanning txnRefs. */
+      provider: { type: String },
+      paidAt: { type: Date },
+      paymentId: { type: mongoose.Schema.Types.ObjectId, ref: "ShopPayment" },
     },
 
     status: {

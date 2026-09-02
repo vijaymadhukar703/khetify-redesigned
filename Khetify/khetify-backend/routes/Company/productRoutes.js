@@ -15,7 +15,7 @@ const {
 // Products are company master data: WRITES are company_admin-only.
 // "product:manage" resolves only through the admin "*" wildcard, so
 // operations/sales managers get 403 here while reads stay unchanged.
-router.post("/create", auth, authorize("product:manage"), upload.array("productImages", 5), createProduct);
+router.post("/create", auth, authorize("product:manage"), upload.uploadProductFields, createProduct);
 
 // ✅ Get all products (scoped to the authenticated company)
 router.get("/all", auth, getAllProducts);
@@ -23,7 +23,7 @@ router.get("/all", auth, getAllProducts);
 // ✅ Get single product
 router.get("/:productId", getSingleProduct);
 
-router.put("/:productId", auth, authorize("product:manage"), upload.array("productImages", 5), updateProduct);
+router.put("/:productId", auth, authorize("product:manage"), upload.uploadProductFields, updateProduct);
 
 router.delete("/delete-product/:productId", auth, authorize("product:manage"), deleteProduct);
 

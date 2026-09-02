@@ -121,7 +121,7 @@ export const MODULES = [
   },
   {
     key: 'analytics',
-    title: 'Analytics',
+    title: 'Stock Valuation',
     path: '/analytics',
     icon: 'monitoring',
     description: 'Reports and business insights',

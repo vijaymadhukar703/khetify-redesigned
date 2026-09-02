@@ -1,10 +1,76 @@
 import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import config from '../../../config/config';
 import { useSubscription } from '../../context/SubscriptionContext';
 import { getBillingHistory, formatINR, fmtDate } from '../../lib/imsApi';
-import BackButton from '../../Components/BackButton';
+
+
+// Default header content — shown when Billing is opened directly (no locked
+// tab/feature to attribute), or for a module key we don't have copy for yet.
+const DEFAULT_HEADER = {
+  eyebrowIcon: 'lock_open',
+  eyebrow: 'Unlock the Khetify IMS',
+  heading: 'Manage your inventory like a pro',
+  description:
+    'Inventory management is a premium feature. Subscribe to unlock live stock ' +
+    'tracking, alerts, multi-warehouse and more for your company.',
+};
+
+// Per-module header content, keyed by the SAME `key` used in lib/nav.js's
+// MODULES list — so a locked tab/card can pass its module key and Billing
+// shows a message that actually matches what the person tried to open,
+// instead of always showing the Inventory copy.
+const LOCKED_FEATURE_HEADERS = {
+  inventory: {
+    eyebrowIcon: 'inventory_2',
+    eyebrow: 'Unlock Inventory',
+    heading: 'Manage your inventory like a pro',
+    description:
+      'Inventory is a premium feature. Subscribe to unlock live stock levels, ' +
+      'lot & batch tracking, low-stock alerts and more for your company.',
+  },
+  warehouses: {
+    eyebrowIcon: 'warehouse',
+    eyebrow: 'Unlock Warehouses',
+    heading: 'Run every warehouse from one place',
+    description:
+      'Multi-warehouse management is a premium feature. Subscribe to track ' +
+      'sites, capacity and stock across every warehouse your company operates.',
+  },
+  operations: {
+    eyebrowIcon: 'sync_alt',
+    eyebrow: 'Unlock Stock Transfers',
+    heading: 'Move stock with confidence',
+    description:
+      'Stock transfers are a premium feature. Subscribe to receive, send, ' +
+      'transfer and track stock between warehouses in real time.',
+  },
+  labels: {
+    eyebrowIcon: 'qr_code_2',
+    eyebrow: 'Unlock Barcodes & Labels',
+    heading: 'Print barcodes for every lot',
+    description:
+      'Barcode & label generation is a premium feature. Subscribe to generate ' +
+      'and print unit barcodes for every lot you receive.',
+  },
+  analytics: {
+    eyebrowIcon: 'monitoring',
+    eyebrow: 'Unlock Advanced Stock Valuation',
+    heading: 'See the trends behind your stock',
+    description:
+      'Advanced stock valuation is a premium feature. Subscribe to unlock sales ' +
+      'trends, movement history and inventory insights.',
+  },
+  admin: {
+    eyebrowIcon: 'settings',
+    eyebrow: 'Unlock Administration',
+    heading: 'Manage your company at scale',
+    description:
+      'Administration tools are a premium feature. Subscribe to manage ' +
+      'products, sellers, team and settings all in one place.',
+  },
+};
 
 // What subscribing to the IMS unlocks — plain-English version of config/plans.js
 const IMS_BENEFITS = [
@@ -14,7 +80,7 @@ const IMS_BENEFITS = [
   { icon: 'lock_clock',       title: 'Reserved Stock Workflow',    desc: 'Hold stock against pending orders so you never oversell.' },
   { icon: 'local_shipping',   title: 'Supply Orders',              desc: 'Raise and track restock orders to your suppliers.' },
   { icon: 'event_available',  title: 'Batch & Expiry Tracking',    desc: 'Manage batches and expiry dates for perishable goods.' },
-  { icon: 'monitoring',       title: 'Advanced Analytics',         desc: 'Sales trends, movement history and inventory insights.' },
+  { icon: 'monitoring',       title: 'Advanced Stock Valuation',   desc: 'Sales trends, movement history and inventory insights.' },
   { icon: 'sync',             title: 'Real-time Sync',             desc: 'Stock updates reflect instantly across the dashboard.' },
 ];
 
@@ -27,7 +93,7 @@ const PLANS = [
   },
   {
     key: 'pro', name: 'Pro', price: 999, tagline: 'Best for growing companies',
-    perks: ['Everything in Free', 'Full Inventory Management', 'Multi-warehouse + Reserved stock', 'Supply orders & batch/expiry', 'Advanced analytics', 'Up to 5,000 products'],
+    perks: ['Everything in Free', 'Full Inventory Management', 'Multi-warehouse + Reserved stock', 'Supply orders & batch/expiry', 'Advanced stock valuation', 'Up to 5,000 products'],
     highlight: true,
   },
   {
@@ -39,10 +105,18 @@ const PLANS = [
 
 const Billing = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { plan: currentPlan, refresh } = useSubscription();
   const [busyKey, setBusyKey] = useState(null);
   const [error, setError] = useState('');
   const [history, setHistory] = useState([]);
+
+  // Which locked tab/feature sent the person here (if any) — passed via
+  // navigate('/billing', { state: { fromKey, fromTitle } }) by the sidebar,
+  // the Hub cards, etc. Falls back to the default IMS copy when Billing is
+  // opened directly (no state) or the key has no dedicated message yet.
+  const fromKey = location.state?.fromKey;
+  const header = LOCKED_FEATURE_HEADERS[fromKey] || DEFAULT_HEADER;
 
   const loadHistory = () =>
     getBillingHistory().then((r) => r?.success && setHistory(r.data)).catch(() => {});
@@ -76,20 +150,20 @@ const Billing = () => {
   return (
     <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-[#f8f9fa] font-sora">
       <div className="max-w-6xl mx-auto space-y-10">
-        <BackButton />
+       
 
-        {/* Header */}
+        {/* Header — content varies by which locked tab/feature sent the
+            person here (see `header` above); identical layout/styling either way. */}
         <div className="text-center max-w-2xl mx-auto">
           <div className="inline-flex items-center gap-2 text-[#EA2831] font-bold text-xs uppercase tracking-widest mb-3">
-            <span className="material-symbols-outlined text-base">lock_open</span>
-            Unlock the Khetify IMS
+            <span className="material-symbols-outlined text-base">{header.eyebrowIcon}</span>
+            {header.eyebrow}
           </div>
           <h1 className="text-3xl sm:text-4xl font-bold text-stone-900 mb-3">
-            Manage your inventory like a pro
+            {header.heading}
           </h1>
           <p className="text-stone-500">
-            Inventory management is a premium feature. Subscribe to unlock live stock
-            tracking, alerts, multi-warehouse and more for your company.
+            {header.description}
           </p>
         </div>
 
