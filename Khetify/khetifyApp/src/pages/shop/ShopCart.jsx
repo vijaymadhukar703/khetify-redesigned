@@ -1,308 +1,341 @@
-import React, { memo, useEffect, useState } from "react";
+import React, { memo, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useCart } from "../../context/CartContext";
+import { useWishlist } from "../../context/WishlistContext";
 import { useT } from "../../context/ShopLanguageContext";
 import { getProductImage } from "../../lib/productImage";
+import { getShopProducts } from "../../lib/shopApi";
 import { rupee } from "../../Components/shop/ProductCard";
 
-/* ── Configurable values (dynamic-ready; change here or wire to API later) ── */
-const DELIVERY_ETA_DAYS = 3;      // estimated delivery = today + N days
+/* Khetify cart.
 
+   ── STYLED AS THE REST OF THE STOREFRONT ──
+   This page had its own look: a stone-100 page background nothing else uses,
+   `rounded-sm` corners against the 2xl radius everywhere else, and its own
+   greys. It now draws from the same short palette as the home page and the
+   wishlist — #EA2831 / #C91E26 for action, #FDECEC and #F5F4EF for tinted
+   surfaces, #16191B for ink, stone for everything muted. */
 
-// Dynamic estimated-delivery label (recomputed from today's date).
+/* Estimated delivery, recomputed from today. */
+const DELIVERY_ETA_DAYS = 3;
 const estimatedDeliveryLabel = (days = DELIVERY_ETA_DAYS) => {
   const d = new Date();
   d.setDate(d.getDate() + days);
   return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 };
 
-/* ── STEPPER COMPONENT ── */
 const QtyStepper = memo(function QtyStepper({ item, setQty }) {
   const atMax = Number.isFinite(item.availableStock) && item.availableStock > 0 && item.qty >= item.availableStock;
   return (
-    <div className="inline-flex items-center rounded border border-stone-300 bg-white">
+    <div className="inline-flex items-center overflow-hidden rounded-xl border border-stone-200 bg-white">
       <button
         onClick={() => setQty(item.lineId || item.listingId, item.qty - 1)}
-        className="flex size-7 items-center justify-center font-bold text-stone-600 hover:bg-stone-50"
+        className="flex size-9 items-center justify-center text-stone-600 transition-colors hover:bg-stone-50 hover:text-[#EA2831]"
       >
-        <span className="material-symbols-outlined text-sm">remove</span>
+        <span className="material-symbols-outlined text-[18px]">remove</span>
       </button>
-      <span className="w-8 text-center text-xs font-bold text-stone-900">{item.qty}</span>
+      <span className="w-9 text-center text-[13px] font-bold text-stone-900">{item.qty}</span>
       <button
         onClick={() => setQty(item.lineId || item.listingId, item.qty + 1)}
         disabled={atMax}
-        className="flex size-7 items-center justify-center font-bold text-stone-600 hover:bg-stone-50 disabled:opacity-30"
+        className="flex size-9 items-center justify-center text-stone-600 transition-colors hover:bg-stone-50 hover:text-[#EA2831] disabled:text-stone-300 disabled:hover:bg-transparent"
       >
-        <span className="material-symbols-outlined text-sm">add</span>
+        <span className="material-symbols-outlined text-[18px]">add</span>
       </button>
     </div>
   );
 });
 
-/* ── INDIVIDUAL ITEM CARD (Separated Boxes Style) ── */
-const CartLine = memo(function CartLine({ item, setQty, removeItem }) {
+const CartLine = memo(function CartLine({ item, setQty, removeItem, onSaveForLater, saved }) {
   const t = useT();
   const img = getProductImage(item.image);
   // Carry the variant into the link, so clicking the name reopens the option
   // that is IN THE CART rather than the product's default.
   const href = `/customer-shop/product/${item.listingId}${item.variantId ? `?variant=${item.variantId}` : ""}`;
   const hasDiscount = item.mrp && item.mrp > item.price;
-  const offPercentage = hasDiscount ? Math.round(((item.mrp - item.price) / item.mrp) * 100) : 0;
+  const off = hasDiscount ? Math.round(((item.mrp - item.price) / item.mrp) * 100) : 0;
 
   return (
-    <div className="bg-white border border-stone-200 shadow-sm rounded-sm p-4 sm:p-6">
-      <div className="flex gap-4 items-start">
-        {/* Product Visual Container */}
-        <div className="flex flex-col items-center shrink-0 gap-3">
-          <Link to={href} className="flex size-20 items-center justify-center border border-stone-100 rounded bg-white">
-            {img ? <img src={img} alt={item.name} className="h-full w-full object-contain p-1" /> : <span className="material-symbols-outlined text-2xl text-stone-300">eco</span>}
-          </Link>
-          <QtyStepper item={item} setQty={setQty} />
-        </div>
+    <div className="rounded-2xl border border-stone-200/80 bg-white p-4 transition-colors hover:border-[#F3C6C8] sm:p-5">
+      <div className="flex items-start gap-4">
+        <Link to={href} className="size-[92px] shrink-0 overflow-hidden rounded-xl bg-stone-100 sm:size-[104px]">
+          {img ? (
+            <img src={img} alt={item.name} className="h-full w-full object-cover" />
+          ) : (
+            <span className="flex h-full w-full items-center justify-center text-stone-300">
+              <span className="material-symbols-outlined text-3xl">eco</span>
+            </span>
+          )}
+        </Link>
 
-        {/* Info & Details */}
-        <div className="flex-1 min-w-0">
-          <div className="flex flex-col sm:flex-row sm:justify-between gap-1">
-            <Link to={href} className="text-sm text-stone-900 hover:text-[#EA2831] line-clamp-2 leading-tight pr-2 font-normal">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+            <Link to={href} className="line-clamp-2 text-[14px] font-semibold leading-snug text-stone-900 transition-colors hover:text-[#EA2831]">
               {item.name}
             </Link>
-            <span className="text-xs text-stone-500 whitespace-nowrap mt-1 sm:mt-0">{t("cart.deliveryBy", { date: estimatedDeliveryLabel() })}</span>
+            <span className="whitespace-nowrap text-[11.5px] text-stone-400">
+              {t("cart.deliveryBy", { date: estimatedDeliveryLabel() })}
+            </span>
           </div>
 
           {/* WHICH OPTION was bought. Without it two lines of the same product
               at two prices look like a duplicate-row bug. */}
           {item.variantLabel && (
-            <span className="mt-1 inline-block rounded bg-stone-100 px-2 py-0.5 text-[11px] font-semibold text-stone-600">
+            <span className="mt-1.5 inline-block rounded bg-[#F5F4EF] px-2 py-0.5 text-[10.5px] font-semibold text-stone-600">
               {item.variantLabel}
             </span>
           )}
 
           {item.sellerName && (
-            <p className="text-xs text-stone-400 mt-1 flex items-center gap-1">
-              {t("cart.seller")} <span className="text-stone-700">{item.sellerName}</span>
-              <span className="bg-emerald-600 text-white rounded px-1 py-0.2 text-[8px] font-bold uppercase scale-90 origin-left">{t("cart.kAssured")}</span>
+            <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11.5px] text-stone-400">
+              {t("cart.seller")} <span className="font-semibold text-stone-700">{item.sellerName}</span>
+              <span className="rounded bg-emerald-700 px-1.5 py-[1px] text-[9px] font-bold uppercase tracking-wide text-white">
+                {t("cart.kAssured")}
+              </span>
             </p>
           )}
 
-          <div className="mt-2 flex items-baseline gap-2">
-            {hasDiscount && <span className="text-xs text-stone-400 line-through">{rupee(item.mrp * item.qty)}</span>}
-            <span className="text-base font-bold text-stone-900">{rupee(item.price * item.qty)}</span>
-            {hasDiscount && <span className="text-xs text-emerald-600 font-semibold">{t("cart.off", { percent: offPercentage })}</span>}
+          <div className="mt-2.5 flex flex-wrap items-baseline gap-x-2">
+            <span className="font-heading text-[17px] font-bold text-stone-900">{rupee(item.price * item.qty)}</span>
+            {hasDiscount && <span className="text-[12px] text-stone-400 line-through">{rupee(item.mrp * item.qty)}</span>}
+            {hasDiscount && <span className="text-[12px] font-bold text-emerald-700">{t("cart.off", { percent: off })}</span>}
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <QtyStepper item={item} setQty={setQty} />
+
+            {/* SAVE FOR LATER NOW DOES SOMETHING. It was a button with no
+                onClick — it looked live, changed nothing, and the shopper had
+                no way to tell. It moves the line to the wishlist, which is the
+                feature that already exists for exactly this. */}
+            {/* <button
+              type="button"
+              onClick={() => onSaveForLater(item)}
+              disabled={saved}
+              className="text-[11.5px] font-bold uppercase tracking-wide text-stone-500 transition-colors hover:text-[#EA2831] disabled:text-stone-300 disabled:hover:text-stone-300"
+            >
+              {t("cart.saveForLater")}
+            </button> */}
+
+            <button
+              type="button"
+              onClick={() => removeItem(item.lineId || item.listingId)}
+              className="text-[11.5px] font-bold uppercase tracking-wide text-stone-500 transition-colors hover:text-[#EA2831]"
+            >
+              {t("cart.remove")}
+            </button>
           </div>
         </div>
-      </div>
-
-      {/* Footer Actions inside Card */}
-      <div className="mt-4 pt-3 border-t border-stone-100 flex gap-6 items-center">
-        <button className="text-xs font-bold text-stone-700 uppercase tracking-wide hover:text-[#EA2831]">{t("cart.saveForLater")}</button>
-        <button onClick={() => removeItem(item.lineId || item.listingId)} className="text-xs font-bold text-stone-700 uppercase tracking-wide hover:text-[#EA2831]">{t("cart.remove")}</button>
       </div>
     </div>
   );
 });
 
-/* ── MAIN SHOP CART FUNCTION ── */
 export default function ShopCart() {
-  const { items, setQty, removeItem, subtotal, count } = useCart();
+  const { items, setQty, removeItem, addItem, subtotal, count } = useCart();
+  const { toggleItem, isWishlisted } = useWishlist();
   const t = useT();
   const navigate = useNavigate();
   const [suggestions, setSuggestions] = useState([]);
-  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
 
-  // Price Calculations
   const totalMrp = items.reduce((sum, it) => sum + (it.mrp || it.price) * it.qty, 0);
   const totalSavings = totalMrp - subtotal;
-  
   const grandTotal = subtotal;
 
-  /* ── DYNAMIC API CALL FOR RELATED SUGGESTIONS ── */
+  /* Categories already in the cart, as a stable string. `items` is a new array
+     on every render, so depending on it directly re-ran this fetch in a loop —
+     the effect set state, the state re-rendered, the array changed identity,
+     and round it went. */
+  const cartCategories = useMemo(
+    () => [...new Set(items.map((it) => it.category).filter(Boolean))].join(","),
+    [items]
+  );
+  const cartIds = useMemo(() => items.map((it) => it.listingId), [items]);
+
+  /* SUGGESTIONS COME FROM THE REAL CATALOGUE API.
+     This used to `fetch("/api/products?categories=…")` directly — a path that
+     is not the storefront's API (shopApi is mounted at BASE_URL + "shop/"),
+     with a parameter the endpoint does not take and a response shape it does
+     not return. It could never have loaded anything; the section simply never
+     appeared. getShopProducts is the same call the rest of the storefront
+     uses, so it also carries the language header. */
   useEffect(() => {
-    if (items.length === 0) return;
+    if (!cartCategories) { setSuggestions([]); return undefined; }
+    let alive = true;
+    const firstCategory = cartCategories.split(",")[0];
 
-    // Cart me jo items hain unki unique categories nikalna (e.g., ['Seeds', 'Fertilizer'])
-    const categoriesInCart = [...new Set(items.map(item => item.category).filter(Boolean))];
+    getShopProducts({ category: firstCategory, limit: 12 })
+      .then((res) => {
+        if (!alive) return;
+        const rows = (res?.data || []).filter((p) => !cartIds.includes(p.listingId));
+        setSuggestions(rows.slice(0, 4));
+      })
+      // Suggestions are a nicety; a failure leaves the section hidden rather
+      // than putting an error on a page the shopper is trying to check out from.
+      .catch(() => { if (alive) setSuggestions([]); });
 
-    if (categoriesInCart.length === 0) return;
+    return () => { alive = false; };
+  }, [cartCategories, cartIds]);
 
-    const fetchRelatedProducts = async () => {
-      setLoadingSuggestions(true);
-      try {
-        // Aapki Backend API URL jahan category wise products filter hote hon
-        // Example: /api/products?categories=Seeds,Fertilizer
-        const queryParams = categoriesInCart.join(",");
-        const response = await fetch(`/api/products?categories=${queryParams}`);
-        if (response.ok) {
-          const data = await response.json();
-          
-          // Cart me already added products ko suggestions list se remove karna
-          const cartItemIds = items.map(item => item.listingId);
-          const filteredSuggestions = data.filter(prod => !cartItemIds.includes(prod.listingId));
-          
-          // Max 4 suggestions hi show karenge layout ke hissab se
-          setSuggestions(filteredSuggestions.slice(0, 4));
-        }
-      } catch (error) {
-        console.error("Error fetching related products suggestions:", error);
-      } finally {
-        setLoadingSuggestions(false);
-      }
-    };
-
-    fetchRelatedProducts();
-  }, [items]); // Jab bhi cart items change honge, suggestions update honge
+  const saveForLater = (item) => {
+    const variant = item.variantId
+      ? { id: item.variantId, label: item.variantLabel, attributes: item.variantAttributes, image: item.image, mrp: item.mrp }
+      : null;
+    toggleItem(item, variant);
+    removeItem(item.lineId || item.listingId);
+  };
 
   if (items.length === 0) {
     return (
-      <div className="mx-auto max-w-4xl px-4 py-12 text-center">
-        <div className="bg-white border border-stone-200 rounded p-8 shadow-sm">
-          <h1 className="text-lg font-medium text-stone-800">{t("cart.empty")}</h1>
-          <Link to="/customer-shop/products" className="mt-4 inline-block bg-[#EA2831] text-white text-xs font-bold tracking-wide uppercase px-8 py-3 rounded">{t("cart.shopNow")}</Link>
+      <div className="mx-auto w-full max-w-[1360px] px-3 py-10 sm:px-6 lg:px-8">
+        <div className="rounded-[20px] bg-[#F5F4EF] px-6 py-16 text-center">
+          <span className="mb-4 inline-flex size-16 items-center justify-center rounded-full bg-white text-[#EA2831]">
+            <span className="material-symbols-outlined text-[30px]">shopping_cart</span>
+          </span>
+          <h1 className="font-heading text-xl font-bold tracking-tight text-stone-900 sm:text-2xl">{t("cart.empty")}</h1>
+          <Link
+            to="/customer-shop/products"
+            className="mt-6 inline-flex items-center gap-1.5 rounded-[10px] bg-[#EA2831] px-5 py-2.5 text-[13px] font-bold text-white transition-colors duration-300 hover:bg-[#C91E26]"
+          >
+            {t("cart.shopNow")}
+            <span className="material-symbols-outlined text-[17px]">arrow_forward</span>
+          </Link>
         </div>
       </div>
     );
   }
 
   return (
-<div className="bg-stone-100 min-h-[50vh] pb-6">
-        <div className="mx-auto max-w-6xl px-2 py-6 sm:px-4">
-        
-        {/* Top Header Block — With Integrated Back Button */}
-{/* ── ⚡ FIXED ROW: Cart page ke liye button extreme left aur heading fixed ── */}
-{/* Top Header Block — Standardized Icon-Only Back Button */}
-<div className="mb-4 flex items-center">
-  
-  {/* 🛠️ sm:pl-28 Container: Right side shift + 100% vertical alignment */}
-  <div className="min-w-0 sm:pl-1">
-    <div className="relative flex items-center gap-2.5">
-      
-      {/* Back Arrow Icon: Textless, floating at -left-9 before 'M' */}
-      <button
-        type="button"
-        onClick={() => navigate(-1)}
-        aria-label={t("cart.goBack")}
-        className="no-print hidden sm:inline-flex absolute -left-9 shrink-0 items-center justify-center text-stone-800 transition-colors duration-150 hover:text-[#EA2831]"
-      >
-        <span className="material-symbols-outlined text-[24px] sm:text-[26px] font-bold leading-none">
-          arrow_back
-        </span>
-      </button>
+    <div className="mx-auto w-full max-w-[1360px] px-3 py-6 sm:px-6 lg:px-8 lg:py-10">
 
-      {/* Main Heading Content */}
-      <h1 className="text-lg font-bold text-stone-800 sm:text-xl leading-none">
-        {t("cart.title", { count })}
-      </h1>
-      
-    </div>
-  </div>
+      {/* Page head. The back control sits INSIDE the row — it used to be
+          absolutely positioned at -left-9, outside the page gutter, where a
+          narrow window clipped it first. */}
+      <div className="mb-5 flex items-center gap-2 sm:mb-7">
+        <button
+          type="button"
+          onClick={() => navigate(-1)}
+          aria-label={t("cart.goBack")}
+          className="hidden size-8 shrink-0 items-center justify-center rounded-full text-stone-500 transition-colors hover:bg-stone-100 hover:text-[#EA2831] sm:inline-flex"
+        >
+          <span className="material-symbols-outlined text-[22px]">arrow_back</span>
+        </button>
+        <h1 className="font-heading text-[22px] font-bold -tracking-[0.022em] text-stone-900 sm:text-2xl lg:text-[30px]">
+          {t("cart.title", { count })}
+        </h1>
+      </div>
 
-</div>
+      <div className="grid items-start gap-4 lg:grid-cols-3 lg:gap-6">
 
-        <div className="grid gap-4 lg:grid-cols-3 items-start">
-          
-          {/* LEFT CONTAINER LAYER */}
-          <div className="lg:col-span-2 space-y-4">
-            
-            
+        <div className="space-y-3.5 lg:col-span-2">
+          {items.map((it) => (
+            <CartLine
+              key={it.lineId || it.listingId}
+              item={it}
+              setQty={setQty}
+              removeItem={removeItem}
+              onSaveForLater={saveForLater}
+              saved={isWishlisted(it.listingId, it.variantId)}
+            />
+          ))}
 
-            {/* PRODUCT BOXES WITH SEPARATED SPACING */}
-            <div className="space-y-4">
-              {items.map((it) => (
-                <CartLine key={it.lineId || it.listingId} item={it} setQty={setQty} removeItem={removeItem} />
-              ))}
-              
-              {/* PLACE ORDER Button Inside Left Section at the exact Bottom */}
-              {/* <div className="flex justify-end p-4 border border-stone-200 rounded-sm bg-white shadow-sm">
-                <button
-                  onClick={() => navigate("/customer-shop/checkout")}
-                  className="bg-[#EA2831] text-white text-sm font-bold uppercase tracking-wider px-12 py-3 rounded-sm shadow-md hover:bg-[#c91e26] transition-all active:scale-95"
-                >
-                  {t("cart.placeOrder")}
-                </button>
-              </div> */}
-            </div>
+          {suggestions.length > 0 && (
+            <div className="rounded-2xl border border-stone-200/80 bg-white p-4 sm:p-5">
+              <h2 className="font-heading text-[15px] font-bold tracking-tight text-stone-900">{t("cart.missed")}</h2>
 
-            {/* DYNAMIC SUGGESTION SECTION (Items you may have missed) */}
-            {suggestions.length > 0 && !loadingSuggestions && (
-              <div className="bg-white border border-stone-200 rounded-sm shadow-sm p-4 mt-6">
-                <h2 className="text-sm font-semibold text-stone-800 mb-4">{t("cart.missed")}</h2>
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                  {suggestions.map((prod) => {
-                    const sImg = getProductImage(prod.image);
-                    const sHasDiscount = prod.mrp && prod.mrp > prod.price;
-                    const sDisc = sHasDiscount ? Math.round(((prod.mrp - prod.price) / prod.mrp) * 100) : 0;
-                    
-                    return (
-                      <div key={prod.listingId} className="border border-stone-200 rounded p-3 flex flex-col justify-between bg-white text-center group">
-                        <div className="size-24 mx-auto flex items-center justify-center bg-stone-50 rounded mb-2 overflow-hidden">
-                          {sImg ? <img src={sImg} alt={prod.name} className="h-full w-full object-contain p-1" /> : <span className="material-symbols-outlined text-3xl text-stone-300">eco</span>}
+              <div className="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-4 lg:gap-3.5">
+                {suggestions.map((prod) => {
+                  const sImg = getProductImage(prod.images?.[0]);
+                  const sOff = prod.mrp && prod.mrp > prod.price
+                    ? Math.round(((prod.mrp - prod.price) / prod.mrp) * 100)
+                    : 0;
+
+                  return (
+                    <div key={prod.listingId} className="group flex flex-col overflow-hidden rounded-xl border border-stone-200/80 bg-white transition-colors hover:border-[#F3C6C8]">
+                      <Link to={`/customer-shop/product/${prod.listingId}`} className="block aspect-[4/3] overflow-hidden bg-stone-100">
+                        {sImg ? (
+                          <img src={sImg} alt={prod.name} loading="lazy" className="h-full w-full object-cover transition-transform duration-500 motion-safe:group-hover:scale-105" />
+                        ) : (
+                          <span className="flex h-full w-full items-center justify-center text-stone-300">
+                            <span className="material-symbols-outlined text-3xl">eco</span>
+                          </span>
+                        )}
+                      </Link>
+
+                      <div className="flex flex-1 flex-col gap-1 p-2.5">
+                        <Link to={`/customer-shop/product/${prod.listingId}`}>
+                          <p className="line-clamp-2 min-h-[32px] text-[12px] font-semibold leading-[1.3] text-stone-900 transition-colors group-hover:text-[#EA2831]">
+                            {prod.name}
+                          </p>
+                        </Link>
+                        <div className="flex flex-wrap items-baseline gap-x-1.5">
+                          <span className="font-heading text-[14px] font-bold text-stone-900">{rupee(prod.price)}</span>
+                          {sOff > 0 && <span className="text-[10.5px] text-stone-400 line-through">{rupee(prod.mrp)}</span>}
+                          {sOff > 0 && <span className="text-[10.5px] font-bold text-emerald-700">{t("common.percentOff", { percent: sOff })}</span>}
                         </div>
-                        <div>
-                          <p className="text-xs text-stone-800 font-medium line-clamp-2 text-left leading-tight h-8">{prod.name}</p>
-                          <div className="mt-2 flex items-center gap-1 justify-start flex-wrap">
-                            <span className="text-xs font-bold text-stone-900">{rupee(prod.price)}</span>
-                            {sHasDiscount && <span className="text-[10px] text-stone-400 line-through">{rupee(prod.mrp)}</span>}
-                            {sHasDiscount && <span className="text-[10px] text-emerald-600 font-bold">{t("common.percentOff", { percent: sDisc })}</span>}
-                          </div>
-                        </div>
-                        {/* Add To Cart functionality can be wired up with your custom context handler */}
-                        <button className="mt-3 w-full border border-stone-200 py-1.5 rounded text-xs font-bold text-stone-700 bg-white hover:bg-stone-50 transition-colors">
+
+                        {/* This button was inert too — no handler at all. It adds
+                            one to the cart, the same call every other Add to
+                            cart on the storefront makes. */}
+                        <button
+                          type="button"
+                          onClick={() => addItem(prod, 1)}
+                          className="mt-auto w-full rounded-lg border border-[#EA2831] bg-[#EA2831] px-2.5 py-[9px] text-[11.5px] font-bold text-white transition-colors duration-300 hover:border-[#C91E26] hover:bg-[#C91E26]"
+                        >
                           {t("common.addToCart")}
                         </button>
                       </div>
-                    );
-                  })}
-                </div>
+                    </div>
+                  );
+                })}
               </div>
-            )}
+            </div>
+          )}
+        </div>
 
-          </div>
+        {/* Summary. Sticky on desktop so the total and the button stay put
+            while the shopper works down a long cart. */}
+        <div className="space-y-3.5 lg:sticky lg:top-20">
+          <div className="rounded-2xl border border-stone-200/80 bg-white p-4 sm:p-5">
+            <h2 className="border-b border-stone-100 pb-3 text-[10.5px] font-extrabold uppercase tracking-[0.16em] text-stone-400">
+              {t("cart.priceDetails")}
+            </h2>
 
-          {/* RIGHT COLUMN PANEL */}
-          <div className="lg:col-span-1 lg:sticky lg:top-4 space-y-4">
-            <div className="bg-white border border-stone-200 rounded-sm shadow-sm p-4">
-              <h2 className="text-xs font-bold text-stone-400 tracking-wider uppercase border-b border-stone-100 pb-3">{t("cart.priceDetails")}</h2>
-              
-              <div className="mt-4 space-y-4 text-sm border-b border-stone-100 pb-4">
-                <div className="flex justify-between text-stone-700">
-                  <span>{t("cart.priceCount", { count })}</span>
-                  <span>{rupee(totalMrp)}</span>
-                </div>
-                {totalSavings > 0 && (
-                  <div className="flex justify-between text-emerald-600">
-                    <span>{t("cart.discount")}</span>
-                    <span>− {rupee(totalSavings)}</span>
-                  </div>
-                )}
-               
-                <div className="flex justify-between text-stone-700">
-                  <span>{t("cart.deliveryCharges")}</span>
-                  <span className="text-emerald-600">{t("cart.free")}</span>
-                </div>
+            <div className="space-y-3 border-b border-stone-100 py-4 text-[13.5px]">
+              <div className="flex justify-between text-stone-600">
+                <span>{t("cart.priceCount", { count })}</span>
+                <span className="font-semibold text-stone-900">{rupee(totalMrp)}</span>
               </div>
-
-              <div className="mt-4 flex justify-between items-center text-base font-bold text-stone-900 border-b border-stone-100 border-dashed pb-4">
-                <span>{t("cart.totalAmount")}</span>
-                <span className="text-lg">{rupee(grandTotal)}</span>
-              </div>
-
               {totalSavings > 0 && (
-                <p className="mt-3 text-xs text-emerald-600 font-bold tracking-wide">
-                  {t("cart.savings", { amount: rupee(totalSavings) })}
-                </p>
+                <div className="flex justify-between text-emerald-700">
+                  <span>{t("cart.discount")}</span>
+                  <span className="font-semibold">− {rupee(totalSavings)}</span>
+                </div>
               )}
-              
+              <div className="flex justify-between text-stone-600">
+                <span>{t("cart.deliveryCharges")}</span>
+                <span className="font-semibold text-emerald-700">{t("cart.free")}</span>
+              </div>
             </div>
 
-            <button
-    onClick={() => navigate("/customer-shop/checkout")}
-    className="w-full bg-[#EA2831] text-white text-sm font-bold uppercase tracking-wider py-3.5 rounded-sm shadow-md hover:bg-[#c91e26] transition-all text-center block"
-  >
-    {t("cart.placeOrder")}
-  </button>
+            <div className="flex items-baseline justify-between pt-4">
+              <span className="text-[14px] font-bold text-stone-900">{t("cart.totalAmount")}</span>
+              <span className="font-heading text-[22px] font-extrabold text-stone-900">{rupee(grandTotal)}</span>
+            </div>
 
-  
+            {totalSavings > 0 && (
+              <p className="mt-3 rounded-lg bg-[#FDECEC] px-3 py-2 text-[12px] font-bold text-[#B3121A]">
+                {t("cart.savings", { amount: rupee(totalSavings) })}
+              </p>
+            )}
           </div>
 
+          <button
+            onClick={() => navigate("/customer-shop/checkout")}
+            className="w-full rounded-xl bg-[#EA2831] py-3.5 text-[13.5px] font-bold uppercase tracking-wide text-white transition-all duration-300 hover:bg-[#C91E26] active:scale-[0.99]"
+          >
+            {t("cart.placeOrder")}
+          </button>
         </div>
       </div>
     </div>

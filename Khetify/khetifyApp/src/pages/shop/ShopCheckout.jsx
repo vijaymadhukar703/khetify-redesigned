@@ -16,6 +16,7 @@ import { setPendingOrder } from "../../lib/pendingOrder";
 import { rupee } from "../../Components/shop/ProductCard";
 import { getProductImage } from "../../lib/productImage";
 import { getBuyNowItem, clearBuyNowItem } from "../../lib/buyNow";
+import { lookupPincode } from "../../lib/pincodeLookup";
 
 /* ─────────────────────────────────────────────────────────────────────────────
  * Khetify — Checkout  (/customer-shop/checkout)
@@ -117,9 +118,44 @@ function AddressForm({ initial, onSave, onCancel, busy, canCancel }) {
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   // Digits-only guards — previously maxLength alone let letters through.
   const onPhone = (e) => setForm((f) => ({ ...f, phone: e.target.value.replace(/\D/g, "").slice(0, 10) }));
-  const onPin = (e) => setForm((f) => ({ ...f, pincode: e.target.value.replace(/\D/g, "").slice(0, 6) }));
+  // Changing the pincode invalidates whatever district/state came from the
+  // PREVIOUS one — clearing them here means a stale auto-filled value can
+  // never survive under a pincode it no longer matches, whether the new one
+  // resolves to something different or doesn't resolve at all.
+  const onPin = (e) => setForm((f) => ({ ...f, pincode: e.target.value.replace(/\D/g, "").slice(0, 6), district: "", state: "" }));
 
   const [err, setErr] = useState("");
+  // idle → nothing typed yet | loading → checking the PIN | done → district/state
+  // filled from the lookup | not_found / error → PIN not recognised, falls back
+  // to the person typing district/state themselves.
+  const [pinLookup, setPinLookup] = useState({ status: "idle" });
+
+  // The moment a valid 6-digit PIN is typed, resolve its district/state — see
+  // lib/pincodeLookup.js for the two sources and why there are two. City is
+  // filled ONLY if the person hasn't already typed one; district and state are
+  // always taken from the PIN once it resolves, since those two are exactly
+  // what a PIN code determines and shouldn't be typed by hand.
+  useEffect(() => {
+    if (!/^\d{6}$/.test(form.pincode)) { setPinLookup({ status: "idle" }); return undefined; }
+    let alive = true;
+    setPinLookup({ status: "loading" });
+    lookupPincode(form.pincode).then((result) => {
+      if (!alive) return;
+      if (!result) { setPinLookup({ status: "not_found" }); return; }
+      setForm((f) => ({
+        ...f,
+        state: result.state || f.state,
+        district: result.district || f.district,
+        // City is intentionally left alone — the pincode lookup no longer
+        // suggests one, only district and state.
+        city: f.city,
+      }));
+      setPinLookup({ status: "done" });
+    });
+    return () => { alive = false; };
+  }, [form.pincode]);
+
+  const districtStateLocked = pinLookup.status === "done";
 
   const submit = (e) => {
     e.preventDefault();
@@ -154,14 +190,56 @@ function AddressForm({ initial, onSave, onCancel, busy, canCancel }) {
         </p>
       )}
 
-      <input required value={form.fullName} onChange={set("fullName")} placeholder={t("co.fullName")} className={inputCls} autoComplete="name" />
-      <input required value={form.phone} onChange={onPhone} placeholder={t("co.phone")} className={inputCls} inputMode="numeric" maxLength={10} autoComplete="tel" />
-      <input required value={form.line1} onChange={set("line1")} placeholder={t("co.line1")} className={`${inputCls} sm:col-span-2`} />
-      <input value={form.line2} onChange={set("line2")} placeholder={t("co.line2")} className={`${inputCls} sm:col-span-2`} />
-      <input required value={form.city} onChange={set("city")} placeholder={t("co.city")} className={inputCls} />
-      <input value={form.district} onChange={set("district")} placeholder={t("co.district")} className={inputCls} />
-      <input value={form.state} onChange={set("state")} placeholder={t("co.state")} className={inputCls} />
-      <input required value={form.pincode} onChange={onPin} placeholder={t("co.pincode")} className={inputCls} inputMode="numeric" maxLength={6} />
+      <label className="flex flex-col gap-1.5">
+        <span className="text-xs font-bold uppercase tracking-wide text-stone-500">Full name</span>
+        <input required value={form.fullName} onChange={set("fullName")} placeholder={t("co.fullName")} className={inputCls} autoComplete="name" />
+      </label>
+      <label className="flex flex-col gap-1.5">
+        <span className="text-xs font-bold uppercase tracking-wide text-stone-500">Phone number</span>
+        <input required value={form.phone} onChange={onPhone} placeholder={t("co.phone")} className={inputCls} inputMode="numeric" maxLength={10} autoComplete="tel" />
+      </label>
+      <label className="flex flex-col gap-1.5 sm:col-span-2">
+        <span className="text-xs font-bold uppercase tracking-wide text-stone-500">Address</span>
+        <input required value={form.line1} onChange={set("line1")} placeholder={t("co.line1")} className={inputCls} />
+      </label>
+      <label className="flex flex-col gap-1.5 sm:col-span-2">
+        <span className="text-xs font-bold uppercase tracking-wide text-stone-500">Landmark</span>
+        <input value={form.line2} onChange={set("line2")} placeholder={t("co.line2")} className={inputCls} />
+      </label>
+
+      <label className="flex flex-col gap-1.5">
+        <span className="text-xs font-bold uppercase tracking-wide text-stone-500">Pincode</span>
+        <input required value={form.pincode} onChange={onPin} placeholder={t("co.pincode")} className={inputCls} inputMode="numeric" maxLength={6} autoComplete="postal-code" />
+        {pinLookup.status === "loading" && <p className="mt-1 text-xs text-stone-400">Checking pincode…</p>}
+        {pinLookup.status === "done" && <p className="mt-1 text-xs text-emerald-600">District and state filled automatically.</p>}
+        {pinLookup.status === "not_found" && (
+          <p className="mt-1 text-xs text-amber-600">Couldn't auto-fill for this pincode — please enter district and state manually.</p>
+        )}
+      </label>
+      <label className="flex flex-col gap-1.5">
+        <span className="text-xs font-bold uppercase tracking-wide text-stone-500">City</span>
+        <input required value={form.city} onChange={set("city")} placeholder={t("co.city")} className={inputCls} />
+      </label>
+      <label className="flex flex-col gap-1.5">
+        <span className="text-xs font-bold uppercase tracking-wide text-stone-500">District</span>
+        <input
+          value={form.district}
+          onChange={set("district")}
+          placeholder={t("co.district")}
+          className={`${inputCls} ${districtStateLocked ? "cursor-not-allowed bg-stone-100 text-stone-500" : ""}`}
+          readOnly={districtStateLocked}
+        />
+      </label>
+      <label className="flex flex-col gap-1.5">
+        <span className="text-xs font-bold uppercase tracking-wide text-stone-500">State</span>
+        <input
+          value={form.state}
+          onChange={set("state")}
+          placeholder={t("co.state")}
+          className={`${inputCls} ${districtStateLocked ? "cursor-not-allowed bg-stone-100 text-stone-500" : ""}`}
+          readOnly={districtStateLocked}
+        />
+      </label>
 
       <div className="flex items-center gap-2.5 pt-2 sm:col-span-2">
         <button
@@ -241,7 +319,7 @@ function AddressCard({ a, selected, onSelect, onEdit, onDefault, onDelete, busy,
               disabled={busy}
               className="rounded-lg bg-[#EA2831] px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide text-white disabled:opacity-60"
             >
-              Yes, delete
+              {t("co.delete")}
             </button>
             <button
               onClick={() => setConfirming(false)}
@@ -291,7 +369,7 @@ function SummaryItem({ i, onQty, onRemove, flagged }) {
   const atCap = i.qty >= cap;
 
   return (
-    <div className={`flex gap-3 py-3 ${flagged ? "-mx-2 rounded-xl bg-red-50/60 px-2 ring-1 ring-red-200" : ""}`}>
+    <div className={`flex gap-3 py-3 ${flagged ? "-mx-2 rounded-xl bg-[#FDECEC] px-2 ring-1 ring-[#F3C6C8]" : ""}`}>
       <Link to={`/customer-shop/product/${i.listingId}${i.variantId ? `?variant=${i.variantId}` : ""}`} className="size-14 shrink-0 overflow-hidden rounded-xl border border-stone-200 bg-stone-50">
         {img ? (
           <img src={img} alt={i.name} className="size-full object-contain" loading="lazy" />
@@ -613,51 +691,53 @@ export default function ShopCheckout() {
   }
 
   return (
-    <div className="min-h-screen bg-stone-50/40 pb-28 pt-8 lg:pb-8">
-      <div className="mx-auto max-w-[1240px] px-4 sm:px-6">
+    <div className="pb-28 lg:pb-10">
+      <div className="mx-auto w-full max-w-[1360px] px-3 py-6 sm:px-6 lg:px-8 lg:py-10">
 
-        {/* ── Header ── */}
+        {/* ── Header ──
+            REBUILT. The markup here had drifted: the back button opened a flex
+            row that then wrapped the badge in a nested div, and the </div> that
+            closed it left the <h1> outside the block it was meant to sit in.
+            It rendered, but the indentation no longer described the structure,
+            which is how the next edit goes wrong.
+
+            The button is also the inline arrow the cart and wishlist use,
+            rather than an 44px bordered card — one back control across the
+            storefront, not three. */}
         <div className="mb-6">
-         
-          {/* ── 🛠️ FIXED: Premium Screenshot-Matching Arrow Button inline with Secure Checkout ── */}
-<div className="mb-4 flex items-center gap-3">
-  {/* Button par hidden sm:flex laga diya */}
-  <button
-    type="button"
-    onClick={() => navigate(-1)}
-    aria-label={t("co.goBack")}
-    className="hidden sm:flex size-11 shrink-0 items-center justify-center rounded-2xl border border-stone-200 bg-white text-stone-700 shadow-[0_2px_8px_rgba(0,0,0,0.04)] transition-all duration-200 hover:border-stone-300 hover:bg-stone-50 hover:text-[#EA2831]"
-  >
-    <svg 
-      viewBox="0 0 24 24" 
-      fill="none" 
-      stroke="currentColor" 
-      strokeWidth="2.2" 
-      strokeLinecap="round" 
-      strokeLinejoin="round" 
-      className="h-[18px] w-[18px]"
-    >
-      <line x1="19" y1="12" x2="5" y2="12" />
-      <polyline points="12 19 5 12 12 5" />
-    </svg>
-  </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => navigate(-1)}
+              aria-label={t("co.goBack")}
+              className="hidden size-8 shrink-0 items-center justify-center rounded-full text-stone-500 transition-colors hover:bg-stone-100 hover:text-[#EA2831] sm:inline-flex"
+            >
+              <span className="material-symbols-outlined text-[22px]">arrow_back</span>
+            </button>
 
-          <div className="mb-1 flex flex-wrap items-center gap-2">
-            <span className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-widest text-[#EA2831]">
-              <span className="material-symbols-outlined text-sm">lock</span> {t("co.secureCheckout")}
+            <span className="inline-flex items-center gap-1.5 text-[10.5px] font-extrabold uppercase tracking-[0.2em] text-[#EA2831]">
+              <span className="material-symbols-outlined text-sm">lock</span>
+              {t("co.secureCheckout")}
             </span>
+
             {isBuyNow && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900">
-                <span className="material-symbols-outlined text-sm">bolt</span> {t("co.buyingNow")}
+              <span className="inline-flex items-center gap-1 rounded-full bg-[#FDECEC] px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#B3121A]">
+                <span className="material-symbols-outlined text-sm">bolt</span>
+                {t("co.buyingNow")}
               </span>
             )}
           </div>
-          </div>
-          <h1 className="font-heading text-2xl font-black tracking-tight text-stone-900 sm:text-3xl">{t("co.title")}</h1>
+
+          <h1 className="mt-1.5 font-heading text-[22px] font-bold -tracking-[0.022em] text-stone-900 sm:text-2xl lg:text-[30px]">
+            {t("co.title")}
+          </h1>
+
           {isBuyNow && (
-            <p className="mt-1 text-[13px] text-stone-500">
+            <p className="mt-1.5 text-[13px] text-stone-500">
               {t("co.buyNowNote")}{" "}
-              <Link to="/customer-shop/cart" className="font-bold text-[#EA2831] hover:underline">{t("co.checkoutCartInstead")}</Link>.
+              <Link to="/customer-shop/cart" className="font-bold text-[#EA2831] hover:underline">
+                {t("co.checkoutCartInstead")}
+              </Link>.
             </p>
           )}
         </div>
@@ -670,10 +750,10 @@ export default function ShopCheckout() {
           <div className="space-y-5 lg:col-span-2">
 
             {/* ── 1. Delivery address ── */}
-            <section className="rounded-2xl border border-stone-200/80 bg-white p-5 shadow-[0_4px_20px_-4px_rgba(20,32,26,0.02)] sm:p-6">
+            <section className="rounded-2xl border border-stone-200/80 bg-white p-5 sm:p-6">
               <div className="mb-4 flex items-center justify-between border-b border-stone-100 pb-4">
                 <h2 className="flex items-center gap-2.5 font-heading text-base font-extrabold text-stone-900">
-                  <span className="flex size-8 items-center justify-center rounded-xl bg-red-50 text-[#EA2831]">
+                  <span className="flex size-8 items-center justify-center rounded-xl bg-[#FDECEC] text-[#EA2831]">
                     <span className="material-symbols-outlined text-lg font-bold">location_on</span>
                   </span>
                   {t("co.deliveryAddress")}
@@ -681,7 +761,7 @@ export default function ShopCheckout() {
                 {mode === null && (
                   <button
                     onClick={() => setMode("add")}
-                    className="inline-flex items-center gap-1 rounded-xl border border-red-100 bg-red-50/30 px-3 py-1.5 text-xs font-bold uppercase tracking-wide text-[#EA2831] transition-colors hover:bg-red-50"
+                    className="inline-flex items-center gap-1 rounded-xl border border-[#F3C6C8] bg-[#FDECEC] px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide text-[#B3121A] transition-colors hover:bg-[#F3C6C8]"
                   >
                     {t("co.addNew")}
                   </button>
@@ -736,7 +816,7 @@ export default function ShopCheckout() {
             </section>
 
             {/* ── 2. Payment ── */}
-            <section className="rounded-2xl border border-stone-200/80 bg-white p-5 shadow-[0_4px_20px_-4px_rgba(20,32,26,0.02)] sm:p-6">
+            <section className="rounded-2xl border border-stone-200/80 bg-white p-5 sm:p-6">
               <h2 className="mb-4 flex items-center gap-2.5 border-b border-stone-100 pb-4 font-heading text-base font-extrabold text-stone-900">
                 <span className="flex size-8 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700">
                   <span className="material-symbols-outlined text-lg font-bold">payments</span>
@@ -757,7 +837,7 @@ export default function ShopCheckout() {
                       key={opt.id}
                       className={`flex cursor-pointer gap-3.5 rounded-2xl border p-4 transition-all ${
                         active
-                          ? "border-[#EA2831] bg-red-50/20 shadow-sm ring-1 ring-[#EA2831]"
+                          ? "border-[#EA2831] bg-[#FDECEC]"
                           : "border-stone-200 bg-white hover:border-stone-300"
                       }`}
                     >
@@ -771,7 +851,7 @@ export default function ShopCheckout() {
                       />
                       <span
                         className={`flex size-9 shrink-0 items-center justify-center rounded-xl ${
-                          active ? "bg-red-50 text-[#EA2831]" : "bg-stone-100 text-stone-500"
+                          active ? "bg-white text-[#EA2831]" : "bg-stone-100 text-stone-500"
                         }`}
                       >
                         <span className="material-symbols-outlined text-lg">{opt.icon}</span>
@@ -781,7 +861,7 @@ export default function ShopCheckout() {
                           {t(opt.labelKey)}
                           <span
                             className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
-                              active ? "bg-red-100 text-[#EA2831]" : "bg-stone-100 text-stone-500"
+                              active ? "bg-white text-[#B3121A]" : "bg-stone-100 text-stone-500"
                             }`}
                           >
                             {t(opt.badgeKey)}
@@ -810,7 +890,7 @@ export default function ShopCheckout() {
             </section>
 
             {/* ── 3. Items, grouped by seller (this is how they'll actually be ordered) ── */}
-            <section className="rounded-2xl border border-stone-200/80 bg-white p-5 shadow-[0_4px_20px_-4px_rgba(20,32,26,0.02)] sm:p-6">
+            <section className="rounded-2xl border border-stone-200/80 bg-white p-5 sm:p-6">
               <h2 className="mb-4 flex items-center gap-2.5 border-b border-stone-100 pb-4 font-heading text-base font-extrabold text-stone-900">
                 <span className="flex size-8 items-center justify-center rounded-xl bg-stone-100 text-stone-700">
                   <span className="material-symbols-outlined text-lg font-bold">inventory_2</span>
@@ -823,14 +903,15 @@ export default function ShopCheckout() {
 
               {/* The server splits the cart by seller — say so BEFORE they pay, not after. */}
               {sellerGroups.length > 1 && (
-                <p className="mb-4 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-[13px] font-medium leading-normal text-amber-900">
+                <p className="mb-4 flex items-start gap-2 rounded-xl border border-[#F3C6C8] bg-[#FDECEC] px-3.5 py-2.5 text-[12.5px] font-medium leading-relaxed text-[#B3121A]">
                   <span className="material-symbols-outlined text-base">local_shipping</span>
                   <span>
-                    These items come from <strong>{sellerGroups.length} different sellers</strong>, so they'll be placed as{" "}
-                    <strong>{sellerGroups.length} separate orders</strong> and may arrive at different times.{" "}
-                    {paymentMethod === PAYMENT_METHODS.ONLINE
-                      ? "You'll pay once, now, for all of them."
-                      : "You'll pay once, on delivery."}
+                    {t(
+                      paymentMethod === PAYMENT_METHODS.ONLINE
+                        ? "co.multiSellerNoteOnline"
+                        : "co.multiSellerNote",
+                      { count: sellerGroups.length }
+                    )}
                   </span>
                 </p>
               )}
@@ -865,7 +946,7 @@ export default function ShopCheckout() {
 
           {/* ══════════ RIGHT: sticky summary ══════════ */}
           <div className="lg:col-span-1">
-            <div className="sticky top-24 rounded-2xl border border-stone-200/80 bg-white p-5 shadow-[0_10px_35px_-10px_rgba(20,32,26,0.06)] sm:p-6">
+            <div className="sticky top-20 rounded-2xl border border-stone-200/80 bg-white p-5 sm:p-6">
               <h2 className="mb-4 font-heading text-base font-extrabold text-stone-900">{t("co.orderSummary")}</h2>
 
               <div className="space-y-2 border-b border-stone-100 pb-3.5 text-sm">
@@ -887,7 +968,7 @@ export default function ShopCheckout() {
 
               <div className="mt-4 flex items-baseline justify-between">
                 <span className="font-heading text-base font-bold text-stone-900">{t("co.grandTotal")}</span>
-                <span className="font-heading text-2xl font-black tracking-tight text-stone-900">{rupee(subtotal)}</span>
+                <span className="font-heading text-[22px] font-extrabold tracking-tight text-stone-900">{rupee(subtotal)}</span>
               </div>
               <p className="mt-1 text-[11px] leading-normal text-stone-400">
                 {t("co.taxNote")}
@@ -909,7 +990,7 @@ export default function ShopCheckout() {
               {error && (
                 <div
                   ref={errorRef}
-                  className="mt-4 flex items-start gap-1.5 rounded-xl border border-red-100 bg-red-50 px-3.5 py-2.5 text-xs font-semibold text-[#EA2831]"
+                  className="mt-4 flex items-start gap-1.5 rounded-xl border border-[#F3C6C8] bg-[#FDECEC] px-3.5 py-2.5 text-xs font-semibold text-[#B3121A]"
                 >
                   <span className="material-symbols-outlined shrink-0 text-base">error</span>
                   <span>{error}</span>
@@ -919,7 +1000,7 @@ export default function ShopCheckout() {
               <button
                 onClick={placeOrder}
                 disabled={placing || busy || !selectedId}
-                className="mt-5 hidden w-full rounded-xl bg-[#EA2831] py-3.5 text-sm font-bold uppercase tracking-wider text-white shadow-lg shadow-red-600/10 transition-all hover:bg-[#c91e26] hover:shadow-red-600/20 active:scale-[0.99] disabled:pointer-events-none disabled:opacity-60 lg:block"
+                className="mt-5 hidden w-full rounded-xl bg-[#EA2831] py-3.5 text-[13.5px] font-bold uppercase tracking-wide text-white transition-colors duration-300 hover:bg-[#C91E26] active:scale-[0.99] disabled:pointer-events-none disabled:bg-stone-200 disabled:text-stone-400 lg:block"
               >
                 {/* The CTA must say what the tap DOES. "Confirm Order (COD)"
                     on a card payment would be a small lie. */}
@@ -953,12 +1034,12 @@ export default function ShopCheckout() {
         <div className="mx-auto flex max-w-[1240px] items-center gap-3">
           <div className="min-w-0">
             <p className="text-[10px] font-bold uppercase tracking-wide text-stone-400">{t("co.grandTotal")}</p>
-            <p className="font-heading text-lg font-black leading-tight text-stone-900">{rupee(subtotal)}</p>
+            <p className="font-heading text-lg font-extrabold leading-tight text-stone-900">{rupee(subtotal)}</p>
           </div>
           <button
             onClick={placeOrder}
             disabled={placing || busy || !selectedId}
-            className="ml-auto flex-1 rounded-xl bg-[#EA2831] py-3 text-xs font-bold uppercase tracking-wider text-white shadow-lg shadow-red-600/10 transition-all active:scale-[0.99] disabled:pointer-events-none disabled:opacity-60"
+            className="ml-auto flex-1 rounded-xl bg-[#EA2831] py-3 text-xs font-bold uppercase tracking-wide text-white transition-colors duration-300 active:scale-[0.99] disabled:pointer-events-none disabled:bg-stone-200 disabled:text-stone-400"
           >
             {placing
               ? (paymentMethod === PAYMENT_METHODS.ONLINE ? t("co.openingPayment") : t("co.openingReview"))

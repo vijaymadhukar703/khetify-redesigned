@@ -174,6 +174,13 @@ const SellerOperations = () => {
   const [requests, setRequests] = useState([]);
   const [supply, setSupply] = useState([]);
   const [warehouses, setWarehouses] = useState([]);
+  // The single warehouse this user is scoped to, if exactly one. Used to lock
+  // the New Transfer source. null for seller_admin or multi-warehouse users,
+  // which keeps the dropdown behaviour unchanged for them. Declared here rather
+  // than beside `scoped` because it reads the `warehouses` state above.
+  const lockedWh = scoped && myWh.length === 1
+    ? (warehouses.find((w) => String(w._id) === myWh[0]) || null)
+    : null;
   const [manifest, setManifest] = useState(null); // { qrPayload } shipping label
   const [receiving, setReceiving] = useState(null); // { kind, item }
   // ONE guided Pick → Pack → Label → Dispatch flow; it opens at whichever step
@@ -304,6 +311,7 @@ const SellerOperations = () => {
       {showTransfer && (
         <DirectTransferModal
           warehouses={warehouses}
+          lockedWarehouse={lockedWh}
           onClose={() => setShowTransfer(false)}
           onDone={() => { setShowTransfer(false); reload(); setParams({ tab: 'send' }); }}
         />
@@ -1669,9 +1677,12 @@ const ScanReceiveModal = ({ target, onClose, onDone }) => {
  * lot, so listing four lots of one product would only ask them to choose
  * between numbers they have no reason to pick between.
  */
-const DirectTransferModal = ({ warehouses, onClose, onDone }) => {
+const DirectTransferModal = ({ warehouses, lockedWarehouse = null, onClose, onDone }) => {
   const [accountWh, setAccountWh] = useState([]); // every warehouse on the account
-  const [f, setF] = useState({ fromWarehouseId: '', toWarehouseId: '', challanNumber: '', note: '' });
+  const [f, setF] = useState({
+    fromWarehouseId: lockedWarehouse?._id || '',
+    toWarehouseId: '', challanNumber: '', note: '',
+  });
   // The delivery challan scan. `challanUrl` is an object URL used ONLY to
   // preview a picked image; a PDF has no preview and renders as a file row.
   // Revoked on unmount and on every re-pick so nothing leaks.
@@ -1683,6 +1694,16 @@ const DirectTransferModal = ({ warehouses, onClose, onDone }) => {
   const [loadingStock, setLoadingStock] = useState(false);
   const [errors, setErrors] = useState({});
   const [busy, setBusy] = useState(false);
+
+  // A warehouse-scoped user cannot choose the source, so keep it pinned to the
+  // locked warehouse. The warehouse list loads async, so the prop can arrive
+  // after mount and must still apply.
+  useEffect(() => {
+    if (lockedWarehouse?._id) {
+      setF((p) => (p.fromWarehouseId === lockedWarehouse._id ? p
+        : { ...p, fromWarehouseId: lockedWarehouse._id }));
+    }
+  }, [lockedWarehouse?._id]);
 
   // Destinations: any warehouse on the seller account. Sources: only the ones
   // this user may send FROM (already scoped by the caller).
@@ -1824,11 +1845,17 @@ const DirectTransferModal = ({ warehouses, onClose, onDone }) => {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4">
         <Field label="From warehouse *">
-          <select className={inputCls} value={f.fromWarehouseId}
-            onChange={(e) => { setF({ ...f, fromWarehouseId: e.target.value }); setErrors({}); }}>
-            <option value="">Select source…</option>
-            {warehouses.map((w) => <option key={w._id} value={w._id}>{w.name}</option>)}
-          </select>
+          {lockedWarehouse ? (
+            <div className="w-full border border-stone-200 bg-stone-50 rounded-lg px-3 py-2 text-sm text-stone-700">
+              {lockedWarehouse.name}
+            </div>
+          ) : (
+            <select className={inputCls} value={f.fromWarehouseId}
+              onChange={(e) => { setF({ ...f, fromWarehouseId: e.target.value }); setErrors({}); }}>
+              <option value="">Select source…</option>
+              {warehouses.map((w) => <option key={w._id} value={w._id}>{w.name}</option>)}
+            </select>
+          )}
           {errText(errors.fromWarehouseId)}
         </Field>
         <Field label="To warehouse *">

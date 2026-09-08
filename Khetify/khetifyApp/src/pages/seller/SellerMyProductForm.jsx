@@ -294,7 +294,12 @@ const BLANK = {
   // input is read-only there and here.
   origin: 'India',
   mrp: '',
-  gst: '0',
+  // '' means NOT YET RESOLVED — deliberately not '0'. A real HSN rate can
+  // genuinely be 0% (exempt goods); using '0' as the "unresolved" sentinel
+  // would accidentally equal that real rate and count the field as already
+  // resolved before the user ever chose anything, silently skipping the
+  // multi-rate picker. '' can never equal a real gstRate.
+  gst: '',
   packaging: '',
   unit: '',
   unit_value: '',
@@ -355,14 +360,6 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
 
   const HORTI_LABEL = { number: 'Horticulture licence number', certificate: 'Horticulture certificate' };
 
-  /* The product's saved Product value when it is NOT in the current catalogue —
-     i.e. it was chosen from an earlier revision of lib/horticultureProducts.js.
-     The value is stored as a plain string, not an id, so old products keep
-     whatever they were saved with and nothing migrates them. Empty for every
-     product whose value is still on the list (and for a new one). */
-  const legacyValue = formData.horticulture_product && !HORTICULTURE_PRODUCTS.includes(formData.horticulture_product)
-    ? formData.horticulture_product
-    : '';
 
   // Variant attributes. `draft` holds the value currently being typed for that
   // row (committed to `values` on Enter / comma / +); `id` keeps React keys
@@ -429,7 +426,11 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
           hsn: p.hsnCode || '',
           origin: p.countryOrigin || 'India',
           mrp: p.mrp ?? '',
-          gst: String(p.gstPercentage ?? '0'),
+          // '' (not '0') when a legacy product has no stored rate at all — see
+          // the note on the initial BLANK.gst above. A genuinely saved 0% still
+          // comes through as '0' here since p.gstPercentage is a real 0, not
+          // missing.
+          gst: p.gstPercentage != null ? String(p.gstPercentage) : '',
           packaging: p.packagingType || '',
           unit: p.unit || '',
           unit_value: p.unitValue ?? '',
@@ -680,7 +681,7 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
      from a resolved lookup and must never be left over from another code. */
   const handleHsnChange = (e) => {
     const digits = e.target.value.replace(/\D/g, '').slice(0, HSN_MAX);
-    setFormData(prev => ({ ...prev, hsn: digits, gst: '0' }));
+    setFormData(prev => ({ ...prev, hsn: digits, gst: '' }));
     setHsn(null);
     setHsnPicked(false);
     setHsnOpen(true);
@@ -699,7 +700,7 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
     // that value never changes, so the effect never re-fires and a reset here
     // would wipe the already-resolved GST% with nothing to bring it back.
     const changed = code !== formData.hsn;
-    setFormData(prev => ({ ...prev, hsn: code, gst: changed ? '0' : prev.gst }));
+    setFormData(prev => ({ ...prev, hsn: code, gst: changed ? '' : prev.gst }));
     if (changed) setHsn(null);
     setHsnPicked(true);
     setHsnOpen(false);
@@ -987,8 +988,7 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
             <div className="flex-1 min-w-0">
               <h3 className="text-sm font-bold text-amber-800">Horticulture documents required</h3>
               <p className="text-sm text-amber-700 mt-1">
-                To upload this product, please go to your profile and upload your
-                Horticulture licence number and certificate.
+                Ye product upload karne ke liye pehle profile me jaakar Horticulture licence number aur certificate upload karein.
               </p>
               <ul className="mt-3 space-y-1">
                 {hortiMissing.map((k) => (
@@ -1080,22 +1080,13 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
             {/* Optional. Long catalogue, so this one is searchable rather than a
                 plain ThemedSelect; the list lives in lib/horticultureProducts.js. */}
             <div>
-              {/* The LABEL says "Product"; the field, the payload key and the
-                  backend's horticultureProduct are unchanged — this is what the
-                  seller reads, not what the system calls it. */}
-              <label className={labelClass}>Product</label>
+              <label className={labelClass}>Horticulture Product</label>
               <SearchableSelect
                 id="horticulture_product"
                 className={inputClass}
                 value={formData.horticulture_product}
-                placeholder="Select Product"
-                // A product saved against an older revision of the catalogue
-                // holds a string that is no longer in it. It is prepended so the
-                // seller SEES their current value in the open list too (the
-                // closed field always shows it) and can leave it alone or
-                // replace it — editing an old product must never silently drop
-                // what it was selling.
-                options={legacyValue ? [legacyValue, ...HORTICULTURE_PRODUCTS] : HORTICULTURE_PRODUCTS}
+                placeholder="Select Horticulture Product"
+                options={HORTICULTURE_PRODUCTS}
                 onChange={(v) => setFormData(prev => ({ ...prev, horticulture_product: v }))}
               />
               {/* Soft, up-front heads-up — deliberately NOT an error colour and
@@ -1406,7 +1397,7 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
                   plain read-only display of the resolved value. */}
               <div className={`${inputClass} flex items-center justify-between bg-stone-50 text-stone-700 cursor-not-allowed`}>
                 <span className="font-semibold">
-                  {formData.gst === '0' ? '0% (Exempt)' : `${formData.gst}%`}
+                  {formData.gst === '' ? '—' : formData.gst === '0' ? '0% (Exempt)' : `${formData.gst}%`}
                 </span>
                 <span className="material-symbols-outlined text-base text-stone-400" title="Set automatically from the HSN code">lock</span>
               </div>

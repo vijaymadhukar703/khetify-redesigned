@@ -8,10 +8,16 @@ import { useNavigate } from 'react-router-dom';
  *   /customer-shop/login   → <ShopLogin />   (nested under /customer-shop)
  * No new page, route or auth call is introduced; the popup only navigates.
  */
+/* WHO signs in, not WHAT they sell.
+
+   Seller and Customer were a shopfront and a tractor — pictures of the
+   business, not of the person choosing. In a "sign in as…" list every row is a
+   kind of PERSON, so the two individual logins now use people. Company keeps a
+   building, because a company genuinely is not a person. */
 const LOGIN_LINKS = [
     { to: '/login', label: 'Company Login', hint: 'Manufacturers & brands', icon: 'domain' },
-    { to: '/seller/login', label: 'Seller Login', hint: 'Distributors & retailers', icon: 'storefront' },
-    { to: '/customer-shop/login', label: 'Customer Login', hint: 'Farmers & buyers', icon: 'agriculture' },
+    { to: '/seller/login', label: 'Seller Login', hint: 'Distributors & retailers', icon: 'person' },
+    { to: '/customer-shop/login', label: 'Customer Login', hint: 'Farmers & buyers', icon: 'account_circle' },
 ];
 
 const About = () => {
@@ -105,9 +111,9 @@ const About = () => {
                                     button and the card is inside the panel, so
                                     the cursor never leaves the hover area. */}
                                 {loginOpen && (
-                                    <div className="absolute right-0 top-full pt-2 w-64 z-50">
-                                        <div className="rounded-xl border border-gray-100 bg-white shadow-xl overflow-hidden">
-                                            <p className="px-4 pt-3 pb-2 text-[11px] font-bold uppercase tracking-wider text-text-muted">
+                                    <div className="absolute right-0 top-full pt-2 w-[320px] z-50">
+                                        <div className="rounded-2xl border border-gray-100 bg-white shadow-2xl overflow-hidden">
+                                            <p className="px-5 pt-5 pb-3 text-[11px] font-bold uppercase tracking-[0.14em] text-text-muted">
                                                 Sign in as
                                             </p>
                                             {LOGIN_LINKS.map((l) => (
@@ -115,12 +121,21 @@ const About = () => {
                                                     key={l.to}
                                                     type="button"
                                                     onClick={() => go(l.to)}
-                                                    className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-background-light transition-colors border-t border-gray-50"
+                                                    className="group flex w-full items-center gap-3.5 px-5 py-5 text-left border-t border-gray-50 transition-colors hover:bg-primary/5"
                                                 >
-                                                    <span className="material-symbols-outlined text-primary text-[22px]">{l.icon}</span>
-                                                    <span className="flex flex-col">
-                                                        <span className="text-sm font-bold text-text-main">{l.label}</span>
-                                                        <span className="text-[11px] text-text-muted">{l.hint}</span>
+                                                    {/* The icon disc FILLS on hover and an arrow slides in on
+                                                        the right. A background tint alone reads as "the cursor
+                                                        is here"; a control that visibly changes state reads as
+                                                        "this does something when you click it". */}
+                                                    <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary transition-colors group-hover:bg-primary group-hover:text-white">
+                                                        <span className="material-symbols-outlined text-[24px]">{l.icon}</span>
+                                                    </span>
+                                                    <span className="flex min-w-0 flex-col">
+                                                        <span className="text-[15px] font-bold text-text-main transition-colors group-hover:text-primary">{l.label}</span>
+                                                        <span className="text-[12px] text-text-muted">{l.hint}</span>
+                                                    </span>
+                                                    <span className="material-symbols-outlined ml-auto text-[18px] text-transparent transition-all group-hover:translate-x-0.5 group-hover:text-primary">
+                                                        arrow_forward
                                                     </span>
                                                 </button>
                                             ))}
@@ -159,10 +174,18 @@ const About = () => {
                                     key={l.to}
                                     type="button"
                                     onClick={() => go(l.to)}
-                                    className="flex items-center gap-3 py-2.5 text-left"
+                                    className="flex items-center gap-3 rounded-xl px-2 py-2.5 text-left transition-colors active:bg-primary/5"
                                 >
-                                    <span className="material-symbols-outlined text-primary text-[20px]">{l.icon}</span>
-                                    <span className="text-sm font-bold text-text-main">{l.label}</span>
+                                    {/* Same disc as the desktop menu, so the two
+                                        do not drift into different designs for
+                                        the same three choices. */}
+                                    <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+                                        <span className="material-symbols-outlined text-[20px]">{l.icon}</span>
+                                    </span>
+                                    <span className="flex min-w-0 flex-col">
+                                        <span className="text-sm font-bold text-text-main">{l.label}</span>
+                                        <span className="text-[11px] text-text-muted">{l.hint}</span>
+                                    </span>
                                 </button>
                             ))}
                         </div>

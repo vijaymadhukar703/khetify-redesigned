@@ -2,6 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
+
 /* ---------------------------------------------------------------------------
    GLOBAL RESPONSIVE GUARD
    Stops the whole page from scrolling sideways when one child is slightly wider
@@ -15,7 +16,19 @@ body {
   max-width: 100vw;
 }
 #root {
-  overflow-x: hidden;      /* the React mount point too */
+  /* NO overflow-x HERE, deliberately.
+
+     `overflow-x: hidden` on an element makes it a scroll container on BOTH
+     axes (the spec computes the other axis to `auto`), and a scroll container
+     becomes the scrollport that every `position: sticky` descendant sticks
+     to. #root itself never scrolls — the window does — so anything sticky
+     inside it had no scrollport to travel in and simply stopped sticking.
+     That is the whole app: 17 files use sticky headers, sidebars, summary
+     panels and rails.
+
+     The sideways guard is not lost. `body { overflow-x: hidden }` above
+     PROPAGATES to the viewport, because <html> leaves overflow visible — so
+     the clipping still happens, one level up, where it does no harm. */
   max-width: 100vw;
 }
 /* Media should never be the element that busts the layout. */

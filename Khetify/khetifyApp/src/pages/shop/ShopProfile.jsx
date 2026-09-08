@@ -10,6 +10,7 @@ import {
   saveShopLocation,
 } from "../../lib/shopApi";
 import LocationSettingsCard from "../../Components/common/LocationSettingsCard";
+import { lookupPincode } from "../../lib/pincodeLookup";
 import { getProductImage } from "../../lib/productImage";
 import { rupee } from "../../Components/shop/ProductCard";
 import { useT } from "../../context/ShopLanguageContext";
@@ -321,8 +322,44 @@ function PersonalInfo({ consumer, updateProfile, refresh }) {
 function AddressForm({ initial, onSave, onCancel, busy }) {
   const t = useT();
   const [form, setForm] = useState({ ...EMPTY_ADDR, ...initial });
+  // idle → nothing typed yet | loading → checking the PIN | done → district/state
+  // filled from the lookup | not_found / error → PIN not recognised, the person
+  // falls back to typing district/state themselves.
+  const [pinLookup, setPinLookup] = useState({ status: "idle" });
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const onPhone = (e) => setForm((f) => ({ ...f, phone: e.target.value.replace(/\D/g, "").slice(0, 10) }));
+  // Changing the pincode invalidates whatever district/state came from the
+  // PREVIOUS one — clearing them here means a stale auto-filled value can
+  // never survive under a pincode it no longer matches, whether the new one
+  // resolves to something different or doesn't resolve at all.
+  const onPincode = (e) => setForm((f) => ({ ...f, pincode: e.target.value.replace(/\D/g, "").slice(0, 6), district: "", state: "" }));
+
+  // The moment a valid 6-digit PIN is typed, resolve its district/state — see
+  // lib/pincodeLookup.js for the two sources and why there are two. City is
+  // filled ONLY if the person hasn't already typed one; district and state are
+  // always taken from the PIN once it resolves, since those two are exactly
+  // what a PIN code determines and shouldn't be typed by hand.
+  useEffect(() => {
+    if (!/^\d{6}$/.test(form.pincode)) { setPinLookup({ status: "idle" }); return undefined; }
+    let alive = true;
+    setPinLookup({ status: "loading" });
+    lookupPincode(form.pincode).then((result) => {
+      if (!alive) return;
+      if (!result) { setPinLookup({ status: "not_found" }); return; }
+      setForm((f) => ({
+        ...f,
+        state: result.state || f.state,
+        district: result.district || f.district,
+        // City is intentionally left alone — the pincode lookup no longer
+        // suggests one, only district and state.
+        city: f.city,
+      }));
+      setPinLookup({ status: "done" });
+    });
+    return () => { alive = false; };
+  }, [form.pincode]);
+
+  const districtStateLocked = pinLookup.status === "done";
 
   const submit = (e) => {
     e.preventDefault();
@@ -350,14 +387,58 @@ function AddressForm({ initial, onSave, onCancel, busy }) {
         </div>
       </div>
 
-      <input required className={field} value={form.fullName} onChange={set("fullName")} placeholder={t("pf.addrFullName")} autoComplete="name" />
-      <input required className={field} value={form.phone} onChange={onPhone} placeholder={t("pf.addrPhone")} inputMode="numeric" maxLength={10} autoComplete="tel" />
-      <input required className={`${field} sm:col-span-2`} value={form.line1} onChange={set("line1")} placeholder={t("pf.addrLine1")} />
-      <input className={`${field} sm:col-span-2`} value={form.line2} onChange={set("line2")} placeholder={t("pf.addrLine2")} />
-      <input required className={field} value={form.city} onChange={set("city")} placeholder={t("pf.addrCity")} />
-      <input className={field} value={form.district} onChange={set("district")} placeholder={t("pf.addrDistrict")} />
-      <input className={field} value={form.state} onChange={set("state")} placeholder={t("pf.addrState")} />
-      <input required className={field} value={form.pincode} onChange={(e) => setForm((f) => ({ ...f, pincode: e.target.value.replace(/\D/g, "").slice(0, 6) }))} placeholder={t("pf.addrPincode")} inputMode="numeric" maxLength={6} />
+      <label className="flex flex-col gap-1.5">
+        <span className="text-sm font-semibold text-[#14201A]">Full name</span>
+        <input required className={field} value={form.fullName} onChange={set("fullName")} placeholder={t("pf.addrFullName")} autoComplete="name" />
+      </label>
+      <label className="flex flex-col gap-1.5">
+        <span className="text-sm font-semibold text-[#14201A]">Phone number</span>
+        <input required className={field} value={form.phone} onChange={onPhone} placeholder={t("pf.addrPhone")} inputMode="numeric" maxLength={10} autoComplete="tel" />
+      </label>
+      <label className="flex flex-col gap-1.5 sm:col-span-2">
+        <span className="text-sm font-semibold text-[#14201A]">Address</span>
+        <input required className={field} value={form.line1} onChange={set("line1")} placeholder={t("pf.addrLine1")} />
+      </label>
+      <label className="flex flex-col gap-1.5 sm:col-span-2">
+        <span className="text-sm font-semibold text-[#14201A]">Landmark</span>
+        <input className={field} value={form.line2} onChange={set("line2")} placeholder={t("pf.addrLine2")} />
+      </label>
+
+      <label className="flex flex-col gap-1.5">
+        <span className="text-sm font-semibold text-[#14201A]">Pincode</span>
+        <input required className={field} value={form.pincode} onChange={onPincode} placeholder={t("pf.addrPincode")} inputMode="numeric" maxLength={6} autoComplete="postal-code" />
+        {pinLookup.status === "loading" && <p className="mt-1 text-xs text-[#9B9A92]">Checking pincode…</p>}
+        {pinLookup.status === "done" && <p className="mt-1 text-xs text-[#2E6B3E]">District and state filled automatically.</p>}
+        {(pinLookup.status === "not_found") && (
+          <p className="mt-1 text-xs text-[#9A6700]">Couldn't auto-fill for this pincode — please enter district and state manually.</p>
+        )}
+      </label>
+      <label className="flex flex-col gap-1.5">
+        <span className="text-sm font-semibold text-[#14201A]">City</span>
+        <input required className={field} value={form.city} onChange={set("city")} placeholder={t("pf.addrCity")} />
+      </label>
+      <label className="flex flex-col gap-1.5">
+        <span className="text-sm font-semibold text-[#14201A]">District</span>
+        <input
+          className={field}
+          value={form.district}
+          onChange={set("district")}
+          placeholder={t("pf.addrDistrict")}
+          readOnly={districtStateLocked}
+          disabled={districtStateLocked}
+        />
+      </label>
+      <label className="flex flex-col gap-1.5">
+        <span className="text-sm font-semibold text-[#14201A]">State</span>
+        <input
+          className={field}
+          value={form.state}
+          onChange={set("state")}
+          placeholder={t("pf.addrState")}
+          readOnly={districtStateLocked}
+          disabled={districtStateLocked}
+        />
+      </label>
 
       <div className="flex flex-wrap gap-2.5 sm:col-span-2">
         <SolidButton type="submit" disabled={busy}>{busy ? t("pf.saving") : t("pf.saveAddress")}</SolidButton>

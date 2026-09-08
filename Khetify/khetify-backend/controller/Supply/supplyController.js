@@ -83,7 +83,21 @@ exports.getSupplyOrders = async (req, res) => {
       .populate({ path: "warehouseId", select: "name code address" })
       .populate({ path: "sourceWarehouseId", select: "name code" });
     const pendingCount = rows.filter((r) => r.status === "requested").length;
-    res.json({ success: true, count: rows.length, pendingCount, data: rows });
+
+    // A "Dispatch to Seller" transfer leaves TWO SupplyOrder rows for one
+    // consignment: the seller's request and the company-initiated order that
+    // fulfils it. The management list shows one row (the request, which holds
+    // the original serial and requested date, and which the dispatch path
+    // already updates); the stage-filtered Send Stock queues are left alone.
+    // A company push with no sourceRequestId, or one whose source falls outside
+    // a scoped user's warehouses, is never hidden.
+    const ids = new Set(rows.map((r) => String(r._id)));
+    const data = stageStatuses
+      ? rows
+      : rows.filter(
+          (r) => !(r.initiatedBy === "company" && r.sourceRequestId && ids.has(String(r.sourceRequestId)))
+        );
+    res.json({ success: true, count: data.length, pendingCount, data });
   } catch (err) {
     res.status(500).json({ success: false, message: "Server error" });
   }

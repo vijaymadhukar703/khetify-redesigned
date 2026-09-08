@@ -57,27 +57,6 @@ const TRUST = [
   { icon: "eco", titleKey: "pdTrust.quality", subKey: "pdTrust.qualitySub" },
 ];
 
-const TrustStrip = ({ className = "", variant = "grid" }) => {
-  const t = useT();
-  const list = variant === "list";
-  return (
-    <div className={`grid gap-px overflow-hidden rounded-2xl bg-stone-200/70 ring-1 ring-stone-200/70 ${list ? "grid-cols-1" : "grid-cols-2 sm:grid-cols-4"} ${className}`}>
-      {/* Map param renamed off `t` — it would shadow the translator. */}
-      {TRUST.map((item) => (
-        <div key={item.titleKey} className={`bg-white p-3.5 ${list ? "flex items-center gap-3" : "flex flex-col items-start gap-2"}`}>
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-red-50 text-[#EA2831]">
-            <span className="material-symbols-outlined text-[20px]">{item.icon}</span>
-          </span>
-          <div className="min-w-0">
-            <p className="text-[13px] font-bold leading-tight text-stone-900">{t(item.titleKey)}</p>
-            <p className="mt-0.5 text-[11px] leading-snug text-stone-500">{t(item.subKey)}</p>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-};
-
 export default function ShopProductDetail() {
   const t = useT();
   // The API returns catalogue text already localised, so the fetch effects
@@ -100,13 +79,16 @@ export default function ShopProductDetail() {
   const [variantSlide, setVariantSlide] = useState(0);
   const swipeRef = useRef(null);
   const [activeImg, setActiveImg] = useState(0);
+  // Cursor position over the main image, 0–1 on each axis. null = not hovering,
+  // which is also what a touch device always reports (it fires no mousemove).
+  const [zoomAt, setZoomAt] = useState(null);
+  const thumbRailRef = useRef(null);
   // SELECTED VARIANT id, or null for "no variant chosen" — the page then looks
   // exactly as it does today. Never pre-selected, so the main product image and
   // the product price stay in charge until the customer picks something.
   // Seeded from ?variant= so a link from the cart or the wishlist reopens the
   // exact option that was saved, not the product's default.
   const [variantId, setVariantId] = useState(() => searchParams.get("variant") || null);
-  const [descOpen, setDescOpen] = useState(false); // mobile "read more" (UI)
   const [related, setRelated] = useState([]);
   const [justAdded, setJustAdded] = useState(false); // add-to-cart feedback (UI)
   const addedTimer = useRef(null);
@@ -300,7 +282,6 @@ export default function ShopProductDetail() {
 
   const name = product.name;
   const description = product.description || "";
-  const descLong = description.length > 90; // gate the mobile "Read more"
   // The FIRST of these three that is an array is the feature list; the Hindi
   // copy is looked up under that same field name.
   const featureField = ["features", "keyFeatures", "highlights"].find((f) => Array.isArray(product[f]));
@@ -362,10 +343,15 @@ export default function ShopProductDetail() {
 
   // Add-to-cart button states: sold out → added (flash) → already in cart → add.
   const cartState = !inStock ? "sold" : justAdded ? "added" : inCart ? "incart" : "add";
+  /* ONE PRIMARY, ONE QUIET.
+     Add to cart and Buy now were a red outline beside a solid — two buttons of
+     equal weight competing, so neither read as the main path. Buy now keeps
+     the brand red; Add to cart is the neutral secondary, and only turns red
+     once it has something to confirm. */
   const cartBtn = {
-    add: { icon: "add_shopping_cart", label: t("pd.addToCart"), cls: "border-2 border-[#EA2831] bg-white text-[#EA2831] hover:bg-red-50" },
-    added: { icon: "check_circle", label: t("pd.addedToCart"), cls: "border-2 border-[#EA2831] bg-[#EA2831] text-white" },
-    incart: { icon: "check_circle", label: t("pd.alreadyInCart"), cls: "border-2 border-red-200 bg-red-50 text-[#EA2831]" },
+    add: { icon: "add_shopping_cart", label: t("pd.addToCart"), cls: "border-2 border-stone-200 bg-white text-[#16191B] hover:border-stone-300 hover:bg-[#F5F4EF]" },
+    added: { icon: "check_circle", label: t("pd.addedToCart"), cls: "border-2 border-[#F3C6C8] bg-[#FDECEC] text-[#B3121A]" },
+    incart: { icon: "check_circle", label: t("pd.alreadyInCart"), cls: "border-2 border-[#F3C6C8] bg-[#FDECEC] text-[#B3121A]" },
     sold: { icon: "block", label: t("pd.soldOut"), cls: "border-2 border-stone-200 bg-white text-stone-400" },
   }[cartState];
 
@@ -382,7 +368,7 @@ export default function ShopProductDetail() {
       <button
         onClick={buyNow}
         disabled={!inStock}
-        className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#EA2831] py-3.5 text-sm font-bold text-white shadow-lg shadow-[#EA2831]/20 transition-all hover:bg-[#c91e26] active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-stone-200 disabled:text-stone-400 disabled:shadow-none"
+        className="flex flex-1 items-center justify-center gap-2 rounded-xl border-2 border-[#EA2831] bg-[#EA2831] py-3.5 text-sm font-bold text-white shadow-lg shadow-[#EA2831]/25 transition-all hover:border-[#C91E26] hover:bg-[#C91E26] active:scale-[0.99] disabled:cursor-not-allowed disabled:border-stone-200 disabled:bg-stone-200 disabled:text-stone-400 disabled:shadow-none"
       >
         <span className="material-symbols-outlined text-lg">bolt</span> {t("pd.buyNow")}
       </button>
@@ -400,10 +386,151 @@ export default function ShopProductDetail() {
   const railItems = related.slice(0, 10);
   const gridItems = related.slice(10);
 
+  /* THUMBNAIL RAIL SOURCE.
+
+     One rail, not two stacked ones. When a variant with its own photos is
+     selected the rail shows THAT variant's gallery; otherwise it shows the
+     product's own images. The page used to render both rows at once, which
+     put two "selected" outlines on screen and left the reader guessing which
+     strip drove the big picture. */
+  const railImages = hasVariantGallery ? variantGallery : images;
+  // Exactly what the frame renders, so the magnifier can never show a
+  // different photograph from the one under the cursor.
+  const mainSrc = selectedVariantImg || images[activeImg] || null;
+  const railActive = hasVariantGallery
+    ? Math.min(variantSlide, variantGallery.length - 1)
+    : activeImg;
+  const pickRailImage = (idx) => {
+    if (hasVariantGallery) setVariantSlide(idx);
+    else { setActiveImg(idx); setVariantId(null); }
+  };
+
+  /* ── HOVER MAGNIFIER ─────────────────────────────────────────────────────
+     A lens over the photograph and a magnified panel beside it, the way the
+     large fashion storefronts do it. The alternative — swapping the main image
+     for a scaled one — loses the reader's place: they can no longer see WHICH
+     part they are looking at.
+
+     THE MATHS IS DONE BY THE BROWSER, not by hand. With `background-size` at
+     ZOOM×100% and `background-position` given as the SAME percentage as the
+     cursor, CSS aligns "this fraction of the image" with "this fraction of the
+     box" for us. That identity only holds while the panel and the image frame
+     share an aspect ratio, so both are square — hand-rolled pixel offsets are
+     where this effect usually goes subtly wrong on the edges.
+
+     The lens is 1/ZOOM of the frame, because that is exactly how much of the
+     photograph fits in the panel. Clamped so it never hangs over an edge and
+     shows the reader an area that is not in the panel. */
+  const ZOOM = 2.5;
+  const lensSize = 100 / ZOOM;
+  const clampLens = (pct) => Math.min(Math.max(pct * 100 - lensSize / 2, 0), 100 - lensSize);
+
+  const onZoomMove = (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    setZoomAt({
+      x: Math.min(Math.max((e.clientX - r.left) / r.width, 0), 1),
+      y: Math.min(Math.max((e.clientY - r.top) / r.height, 0), 1),
+    });
+  };
+
+  const nudgeThumbs = (dir) => {
+    const el = thumbRailRef.current;
+    if (el) el.scrollBy({ top: dir * 140, behavior: "smooth" });
+  };
+
+  const Thumbs = ({ vertical }) => (
+    <div
+      ref={vertical ? thumbRailRef : undefined}
+      className={
+        vertical
+          ? "hidden w-[64px] shrink-0 flex-col gap-2 overflow-y-auto pr-1 lg:flex lg:max-h-[460px] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          : "mt-3 flex gap-2.5 overflow-x-auto pb-1 lg:hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      }
+    >
+      {railImages.map((src, idx) => (
+        <button
+          key={`${src}-${idx}`}
+          type="button"
+          onClick={() => pickRailImage(idx)}
+          aria-current={idx === railActive}
+          className={`shrink-0 overflow-hidden rounded-xl border-2 bg-white transition-all ${
+            vertical ? "size-[60px]" : "size-16 sm:size-[72px]"
+          } ${idx === railActive ? "border-[#EA2831]" : "border-stone-200 hover:border-stone-300"}`}
+        >
+          <img src={src} alt="" loading="lazy" className="h-full w-full object-contain p-1.5" />
+        </button>
+      ))}
+    </div>
+  );
+
+  /* THE VARIANT PICKER, ONE CONTROL.
+
+     Thumbnails and chips used to live in different columns — pictures beside
+     the gallery, sizes beside the price — so a product with both split its
+     options across the page and neither group announced what it was choosing.
+     They are one labelled group here, the way every large storefront does it:
+     "Colour: Misty Grey", then the swatches. */
+  const VariantPicker = () => {
+    if (!hasVariants) return null;
+    return (
+      <div className="mt-5">
+        <p className="text-[13px] font-semibold text-stone-500">
+          {variantLabelFor(variants)}:{" "}
+          <span className="font-bold text-stone-900">
+            {selectedVariant?.label || "—"}
+          </span>
+        </p>
+
+        {variantThumbs.length > 0 && (
+          <div className="mt-2.5 flex flex-wrap gap-2.5">
+            {variantThumbs.map((v) => {
+              const on = v.id === variantId;
+              return (
+                <button
+                  key={v.id}
+                  type="button"
+                  onClick={() => chooseVariant(on ? null : v.id)}
+                  title={v.label}
+                  aria-pressed={on}
+                  className={`size-[68px] shrink-0 overflow-hidden rounded-xl border-2 bg-white transition-all ${
+                    on ? "border-[#EA2831]" : "border-stone-200 hover:border-stone-300"
+                  }`}
+                >
+                  <img src={getProductImage(v.image)} alt={v.label} className="h-full w-full object-contain p-1.5" />
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {variantChips.length > 0 && (
+          <div className={`flex flex-wrap gap-2 ${variantThumbs.length ? "mt-2.5" : "mt-2.5"}`}>
+            {variantChips.map((v) => {
+              const on = v.id === variantId;
+              return (
+                <button
+                  key={v.id}
+                  type="button"
+                  onClick={() => chooseVariant(on ? null : v.id)}
+                  aria-pressed={on}
+                  className={`rounded-xl px-3.5 py-2 text-sm font-semibold ring-1 transition-all ${
+                    on ? "bg-[#EA2831] text-white ring-[#EA2831]" : "bg-white text-stone-700 ring-stone-200 hover:ring-stone-300"
+                  }`}
+                >
+                  {v.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
-    <div className="mx-auto max-w-6xl px-4 pb-28 pt-5 sm:px-6 lg:pb-14">
+    <div className="mx-auto max-w-[1280px] px-4 pb-28 pt-5 sm:px-6 lg:pb-14">
       {/* Back — text + arrow, matches the rest of the customer app */}
-      <div className="mb-5 hidden sm:block">
+      {/* <div className="mb-5 hidden sm:block">
         <button
           type="button"
           onClick={() => navigate(-1)}
@@ -416,144 +543,154 @@ export default function ShopProductDetail() {
           </svg>
           <span className="leading-none">{t("pd.back")}</span>
         </button>
-      </div>
+      </div> */}
 
-      {/* ── Top section ── */}
-      <div className="grid gap-6 lg:grid-cols-2 lg:gap-10">
-        {/* Gallery */}
-        <div className="lg:sticky lg:top-24 lg:self-start">
-          <div className="relative flex aspect-square items-center justify-center overflow-hidden rounded-3xl bg-transparent ring-0 sm:bg-stone-50 sm:ring-1 sm:ring-stone-200/70">
-            {/* The MAIN IMAGE is unchanged until a variant with a picture is
-                chosen; picking one swaps this frame, deselecting restores it. */}
-            {selectedVariantImg ? (
-              <img
-                src={selectedVariantImg}
-                alt={`${name} — ${selectedVariant.label}`}
-                className="h-full w-full object-contain p-6 sm:p-8"
-                onTouchStart={onGalleryTouchStart}
-                onTouchEnd={onGalleryTouchEnd}
-              />
-            ) : images.length ? (
-              <img src={images[activeImg]} alt={name} className="h-full w-full object-contain p-6 sm:p-8" />
-            ) : (
-              <span className="material-symbols-outlined text-7xl font-light text-stone-300">inventory_2</span>
-            )}
-            {/* PREV / NEXT — only for a variant that actually has several
-                photos. A single-image variant (and every company product) gets
-                no arrows at all, exactly as before. */}
-            {variantGallery.length > 1 && (
-              <>
-                <button
-                  onClick={() => stepVariantSlide(-1)}
-                  aria-label="Previous image"
-                  className="absolute left-2 top-1/2 flex size-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/90 shadow-sm ring-1 ring-stone-200/70 backdrop-blur transition-all hover:scale-110 active:scale-95"
-                >
-                  <span className="material-symbols-outlined text-xl text-stone-600">chevron_left</span>
-                </button>
-                <button
-                  onClick={() => stepVariantSlide(1)}
-                  aria-label="Next image"
-                  className="absolute right-2 top-1/2 flex size-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/90 shadow-sm ring-1 ring-stone-200/70 backdrop-blur transition-all hover:scale-110 active:scale-95"
-                >
-                  <span className="material-symbols-outlined text-xl text-stone-600">chevron_right</span>
-                </button>
-                {/* <span className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-stone-900/70 px-2.5 py-0.5 text-[11px] font-bold text-white">
-                  {Math.min(variantSlide, variantGallery.length - 1) + 1} / {variantGallery.length}
-                </span> */}
-              </>
-            )}
-            {off > 0 && (
-              <span className="absolute left-4 top-4 rounded-full bg-[#EA2831] px-3 py-1 text-xs font-extrabold uppercase tracking-wide text-white shadow-sm">{t("pd.percentOff", { percent: off })}</span>
-            )}
+      {/* ── THE PRODUCT, IN ONE CARD ──
+          The gallery used to sit in a rounded panel while the details floated
+          on the page background, so the top of the page read as a picture with
+          text beside it rather than as one product. Everything above the
+          description now shares a single surface.
+
+          NOT `overflow-hidden`: the hover magnifier is positioned `left-full`
+          and has to escape this box to sit over the column beside it. */}
+      <div className="rounded-[24px] bg-white p-4 ring-1 ring-stone-200/80 sm:p-6 lg:p-8">
+        <div className="grid gap-6 lg:grid-cols-12 lg:gap-8">
+
+        {/* ── Gallery ── */}
+        <div className="relative lg:col-span-5 lg:sticky lg:top-24 lg:self-start">
+          {/* ABOVE the photograph, not on it. Floated over the image it had to
+              carry its own white pill and blur to stay legible against whatever
+              the picture happened to be — a control fighting the content it
+              sits on. Out here it needs none of that, and it stops covering the
+              corner of every product image. */}
+          <div className="mb-2 flex justify-end">
             <button
               onClick={() => toggleItem(product, selectedVariant)}
               aria-label={wished ? t("pd.removeFromWishlist") : t("pd.addToWishlist")}
-              className="absolute right-4 top-4 flex size-11 items-center justify-center rounded-full bg-white/90 shadow-sm ring-1 ring-stone-200/70 backdrop-blur transition-all hover:scale-110 active:scale-95"
+              className="flex size-11 items-center justify-center rounded-full transition-transform hover:scale-110 active:scale-95"
             >
-              <span className={`material-symbols-outlined text-2xl transition-colors ${wished ? "text-[#EA2831]" : "text-stone-400 hover:text-[#EA2831]"}`} style={{ fontVariationSettings: wished ? "'FILL' 1" : "'FILL' 0" }}>favorite</span>
+              <span
+                className={`material-symbols-outlined text-[26px] transition-colors ${wished ? "text-[#EA2831]" : "text-stone-300 hover:text-[#EA2831]"}`}
+                style={{ fontVariationSettings: wished ? "'FILL' 1" : "'FILL' 0" }}
+              >
+                favorite
+              </span>
             </button>
           </div>
-          {/* THIS VARIANT's photos — click one to jump straight to it. Rendered
-              only when the variant has more than one, so a single-image variant
-              looks exactly as it did before. */}
-          {variantGallery.length > 1 && (
-            <div className="mt-3 flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              {/* {variantGallery.map((src, i) => (
-                <button
-                  key={`v-${i}`}
-                  onClick={() => setVariantSlide(i)}
-                  className={`size-16 shrink-0 overflow-hidden rounded-xl bg-stone-50 ring-2 transition-all sm:size-[72px] ${i === Math.min(variantSlide, variantGallery.length - 1) ? "ring-[#EA2831]" : "ring-stone-200 hover:ring-stone-300"}`}
-                >
-                  <img src={src} alt="" className="h-full w-full object-contain p-1.5" />
-                </button>
-              ))} */}
-            </div>
-          )}
 
-          {images.length > 1 && (
-            <div className="mt-3 flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              {images.map((src, i) => (
-                <button
-                  key={i}
-                  // Going back to a product photo drops the variant image, so
-                  // the two thumbnail rows can never both look selected.
-                  onClick={() => { setActiveImg(i); setVariantId(null); }}
-                  className={`size-16 shrink-0 overflow-hidden rounded-xl bg-stone-50 ring-2 transition-all sm:size-[72px] ${!selectedVariantImg && i === activeImg ? "ring-[#EA2831]" : "ring-stone-200 hover:ring-stone-300"}`}
-                >
-                  <img src={src} alt="" className="h-full w-full object-contain p-1.5" />
-                </button>
-              ))}
-            </div>
-          )}
+          <div className="relative flex gap-3">
+            <Thumbs vertical />
 
-          {/* VARIANT THUMBNAILS — their own row, below the product photos, so
-              the main gallery keeps its meaning and a variant picture is never
-              mistaken for another angle of the same item. */}
-          {variantThumbs.length > 0 && (
-            <div className="mt-4">
-              <p className="text-[11px] font-bold uppercase tracking-wider text-stone-400">
-                {variantLabelFor(variants)}
-              </p>
-              <div className="mt-2 flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                {variantThumbs.map((v) => {
-                  const on = v.id === variantId;
-                  return (
-                    <button
-                      key={v.id}
-                      onClick={() => chooseVariant(on ? null : v.id)}
-                      title={v.label}
-                      aria-pressed={on}
-                      className={`group relative size-16 shrink-0 overflow-hidden rounded-xl bg-stone-50 ring-2 transition-all sm:size-[72px] ${on ? "ring-[#EA2831]" : "ring-stone-200 hover:ring-stone-300"}`}
-                    >
-                      <img src={getProductImage(v.image)} alt={v.label} className="h-full w-full object-contain p-1.5" />
-                      {on && (
-                        <span className="absolute bottom-0 left-0 right-0 bg-[#EA2831] py-0.5 text-center text-[9px] font-bold uppercase tracking-wide text-white">
-                          {t("pd.selected")}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-              {/* The label sits under the strip rather than on each tile, where
-                  "Red / 500g" would be clipped at 72px. */}
-              {selectedVariant?.label && (
-                <p className="mt-1.5 text-xs font-semibold text-stone-700">{selectedVariant.label}</p>
+            <div
+              className="relative flex aspect-square flex-1 items-center justify-center overflow-hidden rounded-3xl bg-white"
+              onMouseMove={mainSrc ? onZoomMove : undefined}
+              onMouseLeave={() => setZoomAt(null)}
+            >
+              {selectedVariantImg ? (
+                <img
+                  src={selectedVariantImg}
+                  alt={`${name} — ${selectedVariant.label}`}
+                  className="h-full w-full object-contain p-6 sm:p-8"
+                  onTouchStart={onGalleryTouchStart}
+                  onTouchEnd={onGalleryTouchEnd}
+                />
+              ) : images.length ? (
+                <img src={images[activeImg]} alt={name} className="h-full w-full object-contain p-6 sm:p-8" />
+              ) : (
+                <span className="material-symbols-outlined text-7xl font-light text-stone-300">inventory_2</span>
+              )}
+
+              {/* No arrows over the photograph. The thumbnail rail beside it
+                  already steps through the images, and a swipe still does on
+                  touch (stepVariantSlide is kept for that) — a third control
+                  for the same job only sat on top of the picture. */}
+
+              {off > 0 && (
+                <span className="absolute left-4 top-4 rounded-full bg-[#EA2831] px-3 py-1 text-xs font-extrabold uppercase tracking-wide text-white shadow-sm">
+                  {t("pd.percentOff", { percent: off })}
+                </span>
+              )}
+
+              {/* THE LENS. pointer-events-none, or it would sit between the
+                  cursor and the frame and kill the mousemove that draws it. */}
+              {zoomAt && mainSrc && (
+                <span
+                  aria-hidden="true"
+                  className="pointer-events-none absolute z-10 hidden rounded-sm bg-[#16191B]/15 ring-1 ring-white/70 lg:block"
+                  style={{
+                    width: `${lensSize}%`,
+                    height: `${lensSize}%`,
+                    left: `${clampLens(zoomAt.x)}%`,
+                    top: `${clampLens(zoomAt.y)}%`,
+                  }}
+                />
               )}
             </div>
+
+            {/* THE MAGNIFIED PANEL, floated over the columns to its right — the
+                only way to show a 2.5x crop without shrinking the page's own
+                content. Desktop only: a phone has no hover, and pinch-zoom. */}
+            {zoomAt && mainSrc && (
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute left-full top-0 z-30 ml-5 hidden aspect-square w-[520px] overflow-hidden rounded-2xl bg-white shadow-[0_30px_60px_-30px_rgba(22,25,27,0.5)] ring-1 ring-stone-200 lg:block"
+                style={{
+                  backgroundImage: `url('${mainSrc}')`,
+                  backgroundRepeat: "no-repeat",
+                  backgroundSize: `${ZOOM * 100}%`,
+                  backgroundPosition: `${zoomAt.x * 100}% ${zoomAt.y * 100}%`,
+                }}
+              />
+            )}
+          </div>
+
+          {/* Up / down for the thumbnail rail, as in the reference. Only when
+              the rail actually overflows — otherwise two buttons that do
+              nothing. */}
+          {railImages.length > 6 && (
+            <div className="mt-2 hidden w-[64px] justify-center gap-2 lg:flex">
+              <button
+                type="button"
+                onClick={() => nudgeThumbs(-1)}
+                aria-label={t("pd.scrollLeft")}
+                className="flex size-8 items-center justify-center rounded-full text-stone-500 ring-1 ring-stone-200 transition-colors hover:bg-[#EA2831] hover:text-white hover:ring-[#EA2831]"
+              >
+                <span className="material-symbols-outlined text-[18px]">expand_less</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => nudgeThumbs(1)}
+                aria-label={t("pd.scrollRight")}
+                className="flex size-8 items-center justify-center rounded-full text-stone-500 ring-1 ring-stone-200 transition-colors hover:bg-[#EA2831] hover:text-white hover:ring-[#EA2831]"
+              >
+                <span className="material-symbols-outlined text-[18px]">expand_more</span>
+              </button>
+            </div>
           )}
+
+          <Thumbs vertical={false} />
         </div>
 
-        {/* Info */}
-        <div>
+        {/* ── Details ──
+            ORDER: name, rating, price, options, buy, then the seller strip.
+
+            The description is NOT here any more. It moved to a full-width
+            section under this block, which is where the reference puts it and
+            where it belongs: a paragraph of prose between the price and the
+            size selector pushes the one control the shopper came for below the
+            fold. Short facts above the button, long reading below it. */}
+        <div className="lg:col-span-7">
           {product.category && (
             <p className="inline-flex items-center gap-1 text-xs font-bold uppercase tracking-wider text-[#EA2831]">
               <span className="material-symbols-outlined text-sm">eco</span> {product.category}
             </p>
           )}
-          <h1 className="mt-2 font-heading text-2xl font-extrabold leading-tight tracking-tight text-stone-900 sm:text-[32px]">{name}</h1>
+          <h1 className="mt-2 font-heading text-2xl font-extrabold leading-tight tracking-tight text-stone-900 sm:text-[30px]">{name}</h1>
+          {selectedVariant?.label && (
+            <p className="mt-1 text-[15px] text-stone-500">({selectedVariant.label})</p>
+          )}
 
-          <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
             {rating != null ? (
               <span className="inline-flex items-center gap-1.5">
                 <Stars value={rating} size="text-base" />
@@ -563,93 +700,60 @@ export default function ShopProductDetail() {
             ) : (
               <span className="text-xs text-stone-400">{t("pd.noRatings")}</span>
             )}
-            {product.sku && <span className="font-mono text-xs uppercase text-stone-400">{t("pd.skuInline", { sku: product.sku })}</span>}
+            {product.sku && !selectedVariant && (
+              <span className="font-mono text-xs uppercase text-stone-400">{t("pd.skuInline", { sku: product.sku })}</span>
+            )}
           </div>
 
-          {product.description && (
-            <div className="mt-3 max-w-prose">
-              {/* Mobile: clamp to ~2 lines with Read more; desktop shows it all.
-                  The toggle only appears when the text is actually long. */}
-              <p className={`whitespace-pre-line text-[14px] leading-relaxed text-stone-600 sm:line-clamp-none ${descLong && !descOpen ? "line-clamp-2" : ""}`}>
-                {description}
-              </p>
-              {descLong && (
-                <button
-                  type="button"
-                  onClick={() => setDescOpen((o) => !o)}
-                  className="mt-1 text-xs font-bold text-[#EA2831] hover:underline sm:hidden"
-                >
-                  {descOpen ? t("pd.readLess") : t("pd.readMore")}
-                </button>
-              )}
-            </div>
+          {/* Straight under the name: what the thing IS, before what it costs.
+              It had its own full-width panel below the fold, which needed a
+              heading — and that heading was the one string on this page with no
+              entry in the dictionary, so it rendered as `pd.productDescription`.
+              Here it needs no heading at all: it sits under the title, which is
+              the label. One less key, one less section, and the reader learns
+              what they are looking at before being asked to buy it. */}
+          {description && (
+            <p className="mt-3.5 max-w-prose whitespace-pre-line text-[14px] leading-relaxed text-stone-600">
+              {description}
+            </p>
           )}
 
-          {/* VARIANTS WITHOUT AN IMAGE — size, weight, grade and so on. Chips
-              rather than thumbnails, because there is nothing to show. */}
-          {variantChips.length > 0 && (
-            <div className="mt-5">
-              <p className="text-[11px] font-bold uppercase tracking-wider text-stone-400">
-                {variantLabelFor(variantChips)}
-              </p>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {variantChips.map((v) => {
-                  const on = v.id === variantId;
-                  return (
-                    <button
-                      key={v.id}
-                      onClick={() => chooseVariant(on ? null : v.id)}
-                      aria-pressed={on}
-                      className={`rounded-xl px-3.5 py-2 text-sm font-semibold ring-1 transition-all ${on
-                        ? "bg-[#EA2831] text-white ring-[#EA2831]"
-                        : "bg-white text-stone-700 ring-stone-200 hover:ring-stone-300"}`}
-                    >
-                      {v.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Price */}
-          <div className="mt-5 rounded-2xl bg-stone-50 p-4 ring-1 ring-stone-200/60 sm:p-5">
-            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-              <span className="font-heading text-3xl font-extrabold text-stone-900 sm:text-4xl">{rupee(shownPrice)}</span>
-              {off > 0 && <span className="text-lg text-stone-400 line-through">{rupee(product.mrp)}</span>}
-              {off > 0 && <span className="rounded-md bg-red-100 px-2 py-0.5 text-sm font-bold text-[#EA2831]">{t("pd.percentOff", { percent: off })}</span>}
-              {product.unit && <span className="text-sm text-stone-400">/ {product.unit}</span>}
-            </div>
-            {save > 0 && <p className="mt-1.5 text-sm font-semibold text-emerald-700">{t("pd.youSave", { amount: rupee(save) })}</p>}
-            {product.gstPercentage > 0 && <p className="mt-1 text-xs text-stone-400">{t("pd.gstAtCheckout", { percent: product.gstPercentage })}</p>}
+          {/* Price, high and plain — struck MRP, live price, the discount. */}
+          <div className="mt-4 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            {off > 0 && <span className="text-lg text-stone-400 line-through">{rupee(product.mrp)}</span>}
+            <span className="font-heading text-3xl font-extrabold text-stone-900 sm:text-4xl">{rupee(shownPrice)}</span>
+            {off > 0 && (
+              <span className="text-lg font-bold text-emerald-700">{t("pd.percentOff", { percent: off })}</span>
+            )}
+            {product.unit && <span className="text-sm text-stone-400">/ {product.unit}</span>}
           </div>
+          {save > 0 && <p className="mt-1 text-sm font-semibold text-emerald-700">{t("pd.youSave", { amount: rupee(save) })}</p>}
+          {product.gstPercentage > 0 && (
+            <p className="mt-1 text-[13px] text-stone-500">{t("pd.gstAtCheckout", { percent: product.gstPercentage })}</p>
+          )}
 
-          {/* Stock + seller + brand */}
-          <div className="mt-4 space-y-2 text-sm">
+          <VariantPicker />
+
+          <div className="mt-6 text-sm">
             {inStock ? (
               <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-700">
                 <span className="material-symbols-outlined text-lg">check_circle</span>
                 {t("common.inStock")}
-                {lowStock && <span className="ml-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-bold text-amber-700">{t("pd.onlyLeft", { count: shownStock })}</span>}
+                {lowStock && (
+                  <span className="ml-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-bold text-amber-700">
+                    {t("pd.onlyLeft", { count: shownStock })}
+                  </span>
+                )}
               </span>
             ) : (
               <span className="inline-flex items-center gap-1.5 font-semibold text-[#EA2831]">
                 <span className="material-symbols-outlined text-lg">block</span> {t("pd.outOfStock")}
               </span>
             )}
-            {product.seller?.name && (
-              <p className="flex flex-wrap items-center gap-1.5 text-stone-500">
-                <span className="material-symbols-outlined text-base text-[#023020]">verified</span>
-                {t("pd.soldByInline")} <span className="font-semibold text-stone-700">{product.seller.name}</span>
-                {product.seller.city ? ` · ${product.seller.city}${product.seller.state ? ", " + product.seller.state : ""}` : ""}
-              </p>
-            )}
-            {product.brand && <p className="text-stone-500">{t("pd.brandLabel")} <span className="font-medium text-stone-700">{product.brand}</span></p>}
           </div>
 
-          {/* Quantity */}
           {inStock && (
-            <div className="mt-6 flex flex-wrap items-center gap-3">
+            <div className="mt-4 flex flex-wrap items-center gap-3">
               <span className="text-sm font-semibold text-stone-700">{t("pd.quantity")}</span>
               <div className="inline-flex items-center overflow-hidden rounded-xl border border-stone-200 bg-white">
                 <button onClick={() => setQty((q) => Math.max(1, q - 1))} aria-label={t("pd.decrease")} className="flex size-10 items-center justify-center text-stone-600 transition-colors hover:bg-stone-100 hover:text-[#EA2831]">
@@ -660,43 +764,49 @@ export default function ShopProductDetail() {
                   <span className="material-symbols-outlined">add</span>
                 </button>
               </div>
-              {/* {maxQty > 0 && <span className="text-xs text-stone-400">Max {maxQty} per order</span>} */}
             </div>
           )}
 
-          {/* Cart status line — tells the shopper what's already in their cart */}
           {inCart && (
-            <p className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-[#EA2831]">
+            <p className="mt-3 inline-flex flex-wrap items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-[#EA2831]">
               <span className="material-symbols-outlined text-base">shopping_cart</span>
               {t(cartQty === 1 ? "pd.unitsInCart" : "pd.unitsInCartPlural", { count: cartQty })}
               <Link to="/customer-shop/cart" className="underline underline-offset-2 hover:text-[#c91e26]">{t("pd.viewCart")}</Link>
             </p>
           )}
 
-          {/* Actions (desktop inline; mobile uses the sticky bar below) */}
-          <div className="mt-6 hidden gap-3 lg:flex">{actionButtons}</div>
+          <div className="mt-5 hidden max-w-[560px] gap-3 lg:flex">{actionButtons}</div>
+
+          {/* SELLER STRIP — the quiet grey band the reference closes this block
+              with. Promises plus who is actually shipping it, on one line. */}
+          <div className="mt-7 flex flex-wrap items-center gap-x-7 gap-y-3 rounded-xl border border-stone-200 px-4 py-3.5">
+            {TRUST.slice(0, 2).map((item) => (
+              <span key={item.titleKey} className="inline-flex items-center gap-2">
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-[#FDECEC] text-[#EA2831]">
+                  <span className="material-symbols-outlined text-[18px]">{item.icon}</span>
+                </span>
+                <span className="text-[13px] font-semibold text-stone-700">{t(item.titleKey)}</span>
+              </span>
+            ))}
+            {product.seller?.name && (
+              <span className="inline-flex min-w-0 items-center gap-1.5 text-[13px] text-stone-500">
+                <span className="material-symbols-outlined text-base text-[#EA2831]">verified</span>
+                {t("pd.soldByInline")}
+                <span className="truncate font-semibold text-stone-700">{product.seller.name}</span>
+              </span>
+            )}
+          </div>
         </div>
       </div>
+      </div>
 
-      {/* Trust band — full width across the page, under the product section. */}
-      <TrustStrip className="mt-8" />
-
-      {/* ── Detailed information ── */}
-      {(features.length > 0 || specs.length > 0 || usage) && (
-        <div className="mt-8 grid gap-5 lg:grid-cols-2">
-          {features.length > 0 && (
-            <Panel title={t("pd.keyFeatures")} icon="checklist" className={specs.length === 0 ? "lg:col-span-2" : ""}>
-              <ul className="space-y-2.5">
-                {features.map((f, i) => (
-                  <li key={i} className="flex items-start gap-2.5 text-sm text-stone-600">
-                    <span className="material-symbols-outlined mt-0.5 text-base text-emerald-600">check_circle</span>
-                    <span>{typeof f === "string" ? f : f?.label || f?.name}</span>
-                  </li>
-                ))}
-              </ul>
-            </Panel>
-          )}
-
+      {/* ── Specifications and features ──
+          SPECIFICATIONS RUN IN TWO COLUMNS AGAIN. The single-column list I
+          replaced them with turned a dozen short label/value pairs into a
+          column of half-empty rows a screen tall; side by side they read in
+          one glance, which is all a spec table is for. */}
+      {(specs.length > 0 || features.length > 0 || usage) && (
+        <div className="mt-5 grid gap-5 lg:grid-cols-2">
           {specs.length > 0 && (
             <Panel title={t("pd.specifications")} icon="list_alt" className={features.length === 0 ? "lg:col-span-2" : ""}>
               <dl className={features.length === 0 ? "grid gap-x-10 sm:grid-cols-2" : ""}>
@@ -707,6 +817,19 @@ export default function ShopProductDetail() {
                   </div>
                 ))}
               </dl>
+            </Panel>
+          )}
+
+          {features.length > 0 && (
+            <Panel title={t("pd.keyFeatures")} icon="checklist" className={specs.length === 0 ? "lg:col-span-2" : ""}>
+              <ul className="space-y-2.5">
+                {features.map((f, i) => (
+                  <li key={i} className="flex items-start gap-2.5 text-sm text-stone-600">
+                    <span className="material-symbols-outlined mt-0.5 text-base text-emerald-600">check_circle</span>
+                    <span>{typeof f === "string" ? f : f?.label || f?.name}</span>
+                  </li>
+                ))}
+              </ul>
             </Panel>
           )}
 
@@ -753,43 +876,56 @@ export default function ShopProductDetail() {
         </Panel>
       </div>
 
-      {/* ── Similar products: 10 in a horizontal rail, the rest flow below ── */}
+      {/* ── Similar products ──
+          Arrows OVERLAID on the rail's edges rather than parked in the header.
+          In the header they are a control you have to find; on the edges they
+          sit exactly where the row runs out, which is where the hand already
+          is. Hidden below `sm`, where the rail is swiped instead. */}
       {related.length > 0 && (
         <section className="mt-12">
-          <div className="mb-5 flex items-end justify-between gap-4">
-            <div>
-              <p className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-widest text-[#EA2831]">
-                <span className="material-symbols-outlined text-sm">eco</span> {t("pd.youMayAlsoLike")}
-              </p>
-              <h2 className="mt-1 font-heading text-2xl font-extrabold tracking-tight text-stone-900 sm:text-3xl">{t("pd.similarProducts")}</h2>
+          <div className="mb-5">
+            <p className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-widest text-[#EA2831]">
+              <span className="material-symbols-outlined text-sm">eco</span> {t("pd.youMayAlsoLike")}
+            </p>
+            <h2 className="mt-1 font-heading text-2xl font-extrabold tracking-tight text-stone-900 sm:text-3xl">
+              {t("pd.similarProducts")}
+            </h2>
+          </div>
+
+          <div className="relative">
+            <div
+              ref={railRef}
+              className="flex snap-x snap-mandatory gap-4 overflow-x-auto pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            >
+              {railItems.map((p) => (
+                <div key={p.listingId} className="w-[46%] shrink-0 snap-start sm:w-[31%] lg:w-[19%]">
+                  <HomeProductCard product={p} />
+                </div>
+              ))}
             </div>
-            {/* Rail arrows — only when the rail actually overflows (more items
-                than fit in one view). Otherwise they'd do nothing. */}
+
             {railItems.length > 4 && (
-            <div className="hidden shrink-0 gap-2 sm:flex">
-              <button onClick={() => scrollRail(-1)} aria-label={t("pd.scrollLeft")} className="flex size-10 items-center justify-center rounded-full bg-white text-stone-600 ring-1 ring-stone-200 transition-colors hover:text-[#EA2831] hover:ring-[#EA2831]">
-                <span className="material-symbols-outlined">chevron_left</span>
-              </button>
-              <button onClick={() => scrollRail(1)} aria-label={t("pd.scrollRight")} className="flex size-10 items-center justify-center rounded-full bg-white text-stone-600 ring-1 ring-stone-200 transition-colors hover:text-[#EA2831] hover:ring-[#EA2831]">
-                <span className="material-symbols-outlined">chevron_right</span>
-              </button>
-            </div>
+              <>
+                <button
+                  onClick={() => scrollRail(-1)}
+                  aria-label={t("pd.scrollLeft")}
+                  className="absolute -left-3 top-[38%] hidden size-11 -translate-y-1/2 items-center justify-center rounded-full bg-white text-stone-700 shadow-[0_10px_26px_-12px_rgba(22,25,27,0.55)] ring-1 ring-stone-200 transition-colors hover:bg-[#EA2831] hover:text-white sm:flex"
+                >
+                  <span className="material-symbols-outlined">chevron_left</span>
+                </button>
+                <button
+                  onClick={() => scrollRail(1)}
+                  aria-label={t("pd.scrollRight")}
+                  className="absolute -right-3 top-[38%] hidden size-11 -translate-y-1/2 items-center justify-center rounded-full bg-white text-stone-700 shadow-[0_10px_26px_-12px_rgba(22,25,27,0.55)] ring-1 ring-stone-200 transition-colors hover:bg-[#EA2831] hover:text-white sm:flex"
+                >
+                  <span className="material-symbols-outlined">chevron_right</span>
+                </button>
+              </>
             )}
           </div>
 
-          <div
-            ref={railRef}
-            className="flex snap-x snap-mandatory gap-4 overflow-x-auto pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-          >
-            {railItems.map((p) => (
-              <div key={p.listingId} className="w-[46%] shrink-0 snap-start sm:w-[31%] lg:w-[23%]">
-                <HomeProductCard product={p} />
-              </div>
-            ))}
-          </div>
-
           {gridItems.length > 0 && (
-            <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+            <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
               {gridItems.map((p) => <HomeProductCard key={p.listingId} product={p} />)}
             </div>
           )}
