@@ -157,13 +157,15 @@ const SellerHub = () => {
         </div>
       )}
 
-      {/* KPI strip */}
+      {/* KPI strip temporarily hidden — these metrics now live on the Seller Dashboard. */}
+      {/*
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mt-6 mb-8">
         <KpiTile label="Inventory value (MRP)" value={kpi.inventoryValue == null ? "—" : formatINR(kpi.inventoryValue)} accent="text-stone-900" />
         <KpiTile label="Open shipments" value={kpi.openShipments ?? 0} accent="text-stone-900" />
         <KpiTile label="Lots" value={kpi.lots ?? 0} accent="text-stone-900" />
         <KpiTile label="Alerts" value={kpi.alerts ?? 0} accent="text-[#EA2831]" />
       </div>
+      */}
 
       {/* Updates — the seller's live activity feed, right on Home (all roles) */}
       <div className="mb-8">

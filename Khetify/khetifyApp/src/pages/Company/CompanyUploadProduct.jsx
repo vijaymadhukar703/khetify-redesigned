@@ -157,7 +157,14 @@ const CompanyUploadProduct = () => {
     origin: 'India',
     mrp: '',
     cost_price: '',
-    gst: '0',
+    // '' means NOT YET RESOLVED — deliberately not '0'. A real HSN rate can
+    // genuinely be 0% (exempt goods), and if the "unresolved" sentinel were
+    // also '0' it would accidentally equal that real rate and the code below
+    // would treat the field as already resolved before the user ever chose
+    // anything, silently skipping the multi-rate picker. '' can never equal a
+    // real gstRate, so the picker only ever counts as satisfied by an actual
+    // pick (or an actual single-rate lookup).
+    gst: '',
     stock: '',
     moq: '',
     capacity: '', 
@@ -300,7 +307,7 @@ const CompanyUploadProduct = () => {
     // with it: it is filled ONLY from a resolved lookup, never left over.
     setHsn(null);
     setHsnPicked(false);
-    setFormData(prev => ({ ...prev, gst: '0' }));
+    setFormData(prev => ({ ...prev, gst: '' }));
     setHsnOpen(true);
   };
 
@@ -317,7 +324,7 @@ const CompanyUploadProduct = () => {
     // that value never changes, so the effect never re-fires and a reset here
     // would wipe the already-resolved GST% with nothing to bring it back.
     const changed = code !== formData.hsn;
-    setFormData(prev => ({ ...prev, hsn: code, gst: changed ? '0' : prev.gst }));
+    setFormData(prev => ({ ...prev, hsn: code, gst: changed ? '' : prev.gst }));
     if (changed) setHsn(null);
     setHsnPicked(true);
     setHsnOpen(false);
@@ -1308,7 +1315,7 @@ const CompanyUploadProduct = () => {
                     same key. The payload is unchanged. */}
                 <div className={`${inputClass} flex items-center justify-between bg-stone-50 text-stone-700 cursor-not-allowed`}>
                   <span className="font-semibold">
-                    {formData.gst === '0' ? '0% (Exempt)' : `${formData.gst}%`}
+                    {formData.gst === '' ? '—' : formData.gst === '0' ? '0% (Exempt)' : `${formData.gst}%`}
                   </span>
                   <span className="material-symbols-outlined text-base text-stone-400" title="Set automatically from the HSN code">lock</span>
                 </div>

@@ -266,6 +266,19 @@ const lotOriginalQty = (l) =>
     ? l.originalQuantity
     : Number(l?.availableStock || 0) + Number(l?.inTransitStock || 0);
 
+/**
+ * What the warehouse PHYSICALLY holds of this lot right now.
+ *
+ * Separate from lotOriginalQty on purpose: that is how many unit labels the lot
+ * may ever have, this is stock. All three buckets count — `reservedStock` is on
+ * the shelf but allocated to an order, and `inTransitStock` is on its way in and
+ * not yet confirmed. Omitting either would hide a lot the warehouse really has.
+ */
+const heldQty = (l) =>
+  Number(l?.availableStock || 0)
+  + Number(l?.reservedStock || 0)
+  + Number(l?.inTransitStock || 0);
+
 // Unit labels per row inside a Bulk Packaging page card. Capped at 3 so a
 // 5-unit box reads as a balanced 3 + 2 instead of one stretched line.
 // NOTE: this cap is independent of the card width — a wider card must NOT fit
@@ -377,6 +390,24 @@ const ImsLabels = () => {
   }, []);
 
   const lot = useMemo(() => lots.find((l) => l._id === lotId), [lots, lotId]);
+
+  // A warehouse user should not see lots it no longer physically holds —
+  // e.g. stock that has been transferred away. Company-level roles still
+  // see every lot, since they mint labels for lots held anywhere.
+  const visibleLots = useMemo(
+    () => (isWarehouse ? lots.filter((l) => heldQty(l) > 0) : lots),
+    [lots, isWarehouse]
+  );
+
+  // The mount effect picks its initial lot from the RAW list, which for a
+  // warehouse user can land on a lot the filter above hides. Re-point the
+  // selection at the first visible lot so the dropdown never reads blank
+  // with a lot still loaded behind it.
+  useEffect(() => {
+    if (!lotId) return;
+    if (visibleLots.some((l) => l._id === lotId)) return;
+    setLotId(visibleLots[0]?._id || '');
+  }, [visibleLots, lotId]);
 
   const loadUnits = () => {
     if (!lotId) return;
@@ -623,7 +654,7 @@ const ImsLabels = () => {
           <div className="flex flex-wrap items-end gap-3">
             <div className="flex-1 min-w-[220px]">
               <Field label="Lot">
-  <LotSelectDropdown lots={lots} value={lotId} lotLabel={lotLabel} onChange={setLotId} />
+  <LotSelectDropdown lots={visibleLots} value={lotId} lotLabel={lotLabel} onChange={setLotId} />
 </Field>
             </div>
             <Field label="Generate qty">

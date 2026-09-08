@@ -108,7 +108,21 @@ exports.getSellerSupplyOrders = async (req, res) => {
       .populate({ path: "items.productId", select: "productName skuNumber unit" })
       .populate({ path: "warehouseId", select: "name code" })
       .populate({ path: "shipmentId", select: "status qrToken statusHistory dispatchedAt" });
-    res.json({ success: true, count: rows.length, data: rows });
+
+    // One consignment, one row. When the company fulfils a seller request it
+    // creates a second, company-initiated order pointing back at the request
+    // via sourceRequestId, and copies the shipmentId onto the request itself —
+    // so the seller would otherwise see the same consignment twice, both
+    // offering "Scan to receive". Hide the company-initiated twin and keep the
+    // seller's own request, which carries the shipmentId, the original
+    // requested date, and is what receiveSupply already resolves against.
+    // A company push with no sourceRequestId, or one whose source falls
+    // outside this user's warehouse scope, is still returned — never hidden.
+    const ids = new Set(rows.map((r) => String(r._id)));
+    const data = rows.filter(
+      (r) => !(r.initiatedBy === "company" && r.sourceRequestId && ids.has(String(r.sourceRequestId)))
+    );
+    res.json({ success: true, count: data.length, data });
   } catch (err) {
     res.status(500).json({ success: false, message: "Server error" });
   }

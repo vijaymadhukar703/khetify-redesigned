@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  getSellerDashboardSummary, getSellerSupplyOrders, getSellerTransfers,
+  getSellerDashboardSummary, getSellerSupplyOrders, getSellerTransfers, getSellerLots,
 } from '../../lib/sellerApi';
 import { formatINR } from '../../lib/imsApi';
+import { useSellerPermission } from '../../context/SellerPermissionContext';
 
 // Supply-order status groups (mirror SellerSupply.jsx).
 const PENDING = ['requested', 'under_review', 'approved', 'picking', 'packed'];
@@ -75,12 +76,37 @@ const SellerDashboard = () => {
   const [kpi, setKpi] = useState(null);
   const [supply, setSupply] = useState([]);
   const [transfers, setTransfers] = useState([]);
+  const [invValueMrp, setInvValueMrp] = useState(null);
+  // A warehouse-scoped user only needs "Inventory Value (MRP)"; seller_admin
+  // keeps the full five-card strip unchanged.
+  const { warehouseIds = [], role } = useSellerPermission();
+  const isWarehouseUser = role !== 'seller_admin' && (warehouseIds || []).length > 0;
 
   useEffect(() => {
     let alive = true;
     getSellerDashboardSummary().then((s) => { if (alive && s?.success) setKpi(s.data); }).catch(() => {});
     getSellerSupplyOrders().then((s) => { if (alive && s?.success) setSupply(s.data || []); }).catch(() => {});
     getSellerTransfers().then((t) => { if (alive && t?.success) setTransfers(t.data || []); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  // "Inventory Value (MRP)" is computed client-side from seller lots, exactly
+  // as the Seller Hub tile does it, so both surfaces show the same number.
+  // Standalone and mount-only: the Hub tile is not period-filtered either.
+  // getSellerLots is a paid (inventory_view) endpoint and 403s on the free
+  // plan, so it degrades to "—" instead of blanking the rest of the dashboard.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const lots = await getSellerLots().catch(() => null);
+      if (!alive) return;
+      const lotRows = lots?.data || null;
+      setInvValueMrp(
+        lotRows
+          ? lotRows.reduce((s, l) => s + (l.availableStock || 0) * (l.productId?.mrp || 0), 0)
+          : null
+      );
+    })();
     return () => { alive = false; };
   }, []);
 
@@ -163,11 +189,15 @@ const SellerDashboard = () => {
             rounded-2xl, a plain accented icon rather than a tinted tile, and a
             per-metric accent colour so the four are scannable at a glance.
             Same four metrics, same data. */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <KpiCard icon="inventory_2" label="Stock Value" value={kpi ? formatINR(kpi.stockValue) : '—'} accent="text-stone-400" />
+        <div className={`grid grid-cols-2 lg:grid-cols-3 gap-4 ${isWarehouseUser ? 'xl:grid-cols-4' : 'xl:grid-cols-5'}`}>
+          {!isWarehouseUser && (
+            <KpiCard icon="inventory_2" label="Stock Value" value={kpi ? formatINR(kpi.stockValue) : '—'} accent="text-stone-400" />
+          )}
+          <KpiCard icon="currency_rupee" label="Inventory Value (MRP)" value={invValueMrp == null ? '—' : formatINR(invValueMrp)} accent="text-emerald-500" />
           <KpiCard icon="schedule" label="Expiring (≤90d)" value={kpi ? formatINR(kpi.expiringValue) : '—'} accent="text-orange-400" />
           <KpiCard icon="local_shipping" label={`Open Shipments · ${PERIOD_LABEL[range]}`} value={openShipments} accent="text-blue-400" />
           <KpiCard icon="package_2" label="Lots in Stock" value={kpi?.lots ?? '—'} accent="text-green-500" />
+          
         </div>
 
         {/* TOP STATS GRID — four separate cards, exactly the company dashboard's
@@ -210,10 +240,10 @@ const SellerDashboard = () => {
           <div className="lg:col-span-2 bg-white border border-stone-200 rounded-xl p-5 sm:p-8">
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-lg font-bold text-stone-900">Stock Valuation overview</h3>
-              <button onClick={() => navigate('/seller/operations')}
+              {/* <button onClick={() => navigate('/seller/operations')}
                 className="text-xs font-bold text-[#EA2831] hover:text-black transition-colors flex items-center gap-1">
                 Stock Valuation <span className="material-symbols-outlined text-sm">arrow_forward</span>
-              </button>
+              </button> */}
             </div>
 
             <div className="flex gap-6 sm:gap-12 mb-8 border-b border-stone-100 pb-8 overflow-x-auto no-scrollbar">

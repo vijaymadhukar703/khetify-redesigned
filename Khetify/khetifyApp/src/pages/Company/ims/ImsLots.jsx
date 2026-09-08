@@ -80,6 +80,22 @@ const statusFor = (l, original) => {
   return statusOf({ stock, reorderLevel: l.lowStockThreshold || 0 });
 };
 
+// Register-only: how much of the created quantity is still at the
+// warehouse. Live views use statusFor() instead.
+const MOVE = { ALL: 'All here', PART: 'Partly moved out', GONE: 'Fully moved out' };
+// Reserved goods are physically on the shelf and in-transit goods are a lot the
+// destination has not confirmed yet — counting either as moved out would be wrong.
+const heldQty = (l) =>
+  Number(l.availableStock || 0) + Number(l.reservedStock || 0) + Number(l.inTransitStock || 0);
+const movementFor = (l) => {
+  const created = originalQty(l);
+  if (created === null) return null;      // unproven row → "Unknown", same as statusFor
+  const held = heldQty(l);
+  if (held <= 0) return MOVE.GONE;
+  if (held >= created) return MOVE.ALL;
+  return MOVE.PART;
+};
+
 // The stock-status option that shows ONLY the lots this warehouse has nothing
 // left of. Deliberately not one of STATUS.*: those describe how much stock a lot
 // has, this one is about whether the lot still belongs in the working list.
@@ -130,7 +146,16 @@ const STOCK_STATUS_OPTIONS = [
   { value: STOCK_ZERO, label: 'Zero quantity (moved out)', dot: 'bg-stone-400' },
 ];
 
-const StockStatusDropdown = ({ value, onChange }) => {
+// The register's own filter list. Deliberately NO STOCK_ZERO entry — "Fully
+// moved out" is the same set, and two options for one filter would be noise.
+const MOVEMENT_OPTIONS = [
+  { value: 'all', label: 'All Movement' },
+  { value: MOVE.ALL, label: 'All here', dot: 'bg-green-500' },
+  { value: MOVE.PART, label: 'Partly moved out', dot: 'bg-orange-500' },
+  { value: MOVE.GONE, label: 'Fully moved out', dot: 'bg-stone-400' },
+];
+
+const StockStatusDropdown = ({ value, onChange, options = STOCK_STATUS_OPTIONS }) => {
   const [open, setOpen] = useState(false);
   const ref = React.useRef(null);
 
@@ -140,7 +165,7 @@ const StockStatusDropdown = ({ value, onChange }) => {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  const current = STOCK_STATUS_OPTIONS.find((o) => o.value === value) || STOCK_STATUS_OPTIONS[0];
+  const current = options.find((o) => o.value === value) || options[0];
 
   return (
     <div className="relative" ref={ref}>
@@ -162,7 +187,7 @@ const StockStatusDropdown = ({ value, onChange }) => {
           role="listbox"
           className="absolute z-20 mt-1.5 min-w-[210px] rounded-xl border border-stone-200 bg-white py-1.5 shadow-lg shadow-stone-900/10"
         >
-          {STOCK_STATUS_OPTIONS.map((opt) => {
+          {options.map((opt) => {
             const selected = opt.value === value;
             return (
               <li key={opt.value} role="option" aria-selected={selected}>
@@ -252,6 +277,10 @@ const ImsLots = ({
     getProducts().then((r) => setProducts(r?.data || r?.products || [])).catch(() => {});
   }, []);
 
+  // The two modes have disjoint filter vocabularies — a value picked in one
+  // would silently match nothing in the other, so switching tabs resets it.
+  useEffect(() => { setStockFilter('all'); setPage(1); }, [originalRegister]);
+
   /**
    * A lot this warehouse no longer holds any of. Its record STAYS in the
    * database for traceability — it is only hidden from the working list, and
@@ -269,19 +298,36 @@ const ImsLots = ({
     // at this warehouse is hidden by default — it is finished business, not
     // working stock — unless the operator asks for exactly those.
     let out = showSummary ? lots.slice() : lots.filter((l) => l.availableStock > 0);
-    out = stockFilter === STOCK_ZERO ? out.filter(isEmptyHere) : out.filter((l) => !isEmptyHere(l));
+    // The ORIGINAL LOT REGISTER keeps a lot forever, at its created quantity —
+    // a lot whose stock has fully moved out is exactly what the register
+    // exists to record. Live-stock views still hide spent lots as before.
+    if (stockFilter === STOCK_ZERO) out = out.filter(isEmptyHere);
+    else if (!originalRegister) out = out.filter((l) => !isEmptyHere(l));
     if (filter === 'expiring') out = out.filter((l) => { const d = daysToExpiry(l.expiryDate); return d !== null && d >= 0 && d <= 90; });
     else if (filter === 'expired') out = out.filter((l) => daysToExpiry(l.expiryDate) < 0);
     if (showStockStatus && stockFilter !== 'all' && stockFilter !== STOCK_ZERO) {
-      out = out.filter((l) => statusFor(l, originalRegister) === stockFilter);
+      out = originalRegister
+        ? out.filter((l) => movementFor(l) === stockFilter)
+        : out.filter((l) => statusFor(l, originalRegister) === stockFilter);
     }
     return out;
   }, [lots, filter, stockFilter, showSummary, showStockStatus, originalRegister]);
 
-  // The lots the SUMMARY CARDS describe — the same set the table works on, so a
-  // hidden zero-quantity lot is not counted in Total Lots, Units in Stock or
-  // Total Stock Value either.
-  const countedLots = useMemo(() => lots.filter((l) => !isEmptyHere(l)), [lots]);
+  // The lots the SUMMARY CARDS describe — the same set the table works on. The
+  // ORIGINAL LOT REGISTER counts every lot it has ever minted, including one
+  // whose stock has fully moved out; live-stock views skip those spent lots, so
+  // a hidden zero-quantity lot is not counted in their cards at all.
+  const countedLots = useMemo(
+    () => (originalRegister ? lots : lots.filter((l) => !isEmptyHere(l))),
+    [lots, originalRegister]
+  );
+
+  // Register only — how many of those recorded lots have nothing left here.
+  // Live-stock views never show this figure, so they compute nothing.
+  const movedOutCount = useMemo(
+    () => (originalRegister ? lots.filter(isEmptyHere).length : 0),
+    [lots, originalRegister]
+  );
 
   // Company summary — reuse the SAME shared helper the dashboard uses, over the
   // SAME lot dataset, so the numbers can never disagree. No dummy/duplicated maths.
@@ -291,9 +337,9 @@ const ImsLots = ({
         const p = l.productId || {};
         return {
           id: l._id,
-          // Register: the ORIGINAL created quantity, so "Units in Stock" and
-          // "Total Stock Value" describe the lots as created, not as they stand
-          // now. An unproven row contributes 0 rather than a guess.
+          // Register: the ORIGINAL created quantity, so the cards read
+          // "Units Created" / "Created Value" and describe the lots as created,
+          // not as they stand now. An unproven row contributes 0 rather than a guess.
           stock: qtyFor(l, originalRegister) ?? 0,
           reorderLevel: l.lowStockThreshold || 0,
           price: p.mrp || 0,
@@ -319,12 +365,24 @@ const ImsLots = ({
             helper, so they match the dashboard exactly. */}
         {showSummary && (
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
-            {[
-              { label: 'Total Lots', value: summary.total },
-              { label: 'Low / Out of Stock', value: summary.lowStock + summary.outOfStock },
-              { label: 'Units in Stock', value: rows.reduce((s, r) => s + r.stock, 0).toLocaleString('en-IN') },
-              { label: 'Total Stock Value', value: formatINR(summary.stockValue) },
-            ].map((stat, i) => (
+            {(originalRegister
+              ? [
+                  // Register mode: the figures are created quantities, frozen at
+                  // minting, so the labels say so. A low-stock warning is
+                  // meaningless on a historical record — how many lots have fully
+                  // moved out is the useful count instead.
+                  { label: 'Total Lots Created', value: summary.total },
+                  { label: 'Fully Moved Out', value: movedOutCount },
+                  { label: 'Units Created', value: rows.reduce((s, r) => s + r.stock, 0).toLocaleString('en-IN') },
+                  { label: 'Created Value', value: formatINR(summary.stockValue) },
+                ]
+              : [
+                  { label: 'Total Lots', value: summary.total },
+                  { label: 'Low / Out of Stock', value: summary.lowStock + summary.outOfStock },
+                  { label: 'Units in Stock', value: rows.reduce((s, r) => s + r.stock, 0).toLocaleString('en-IN') },
+                  { label: 'Total Stock Value', value: formatINR(summary.stockValue) },
+                ]
+            ).map((stat, i) => (
               <div key={i} className="min-w-0 bg-white border border-stone-200 rounded-xl p-5 sm:p-6 shadow-sm">
                 <p className="text-stone-500 text-[10px] font-bold uppercase mb-2 tracking-wider">{stat.label}</p>
                 <p className="text-xl sm:text-2xl lg:text-3xl font-bold text-stone-900 break-words leading-tight tabular-nums">{stat.value}</p>
@@ -358,6 +416,7 @@ const ImsLots = ({
   <StockStatusDropdown
     value={stockFilter}
     onChange={(v) => { setStockFilter(v); setPage(1); }}
+    options={originalRegister ? MOVEMENT_OPTIONS : STOCK_STATUS_OPTIONS}
   />
 )}
           </div>
@@ -402,7 +461,7 @@ const ImsLots = ({
                 <tr className="bg-stone-50 border-b border-stone-200">
                   <Th>Lot No.</Th><Th>Product</Th><Th>Warehouse</Th>
                   <Th>Mfg</Th><Th>Expiry</Th><Th>Qty</Th>
-                  {showStockStatus && <Th>Stock Status</Th>}
+                  {showStockStatus && <Th>{originalRegister ? 'Movement' : 'Stock Status'}</Th>}
                   <Th>{showStockStatus ? 'Expiry Status' : 'Status'}</Th><Th right>Actions</Th>
                 </tr>
               </thead>
@@ -417,6 +476,16 @@ const ImsLots = ({
                     : stock === STATUS.LOW ? 'bg-orange-50 text-orange-600'
                     : stock === null ? 'bg-stone-100 text-stone-500'
                     : 'bg-red-50 text-red-600';
+                  // Register: the badge reports MOVEMENT of the created quantity,
+                  // not a threshold check against a number that never changes.
+                  const move = originalRegister ? movementFor(lot) : null;
+                  const cellLabel = originalRegister ? move : stock;
+                  const cellCls = originalRegister
+                    ? (move === MOVE.ALL ? 'bg-green-50 text-green-700'
+                     : move === MOVE.PART ? 'bg-orange-50 text-orange-600'
+                     : move === null ? 'bg-stone-100 text-stone-500'
+                     : 'bg-stone-100 text-stone-600')
+                    : stockCls;
                   return (
                     <tr key={lot._id} className="hover:bg-stone-50/30 transition-colors">
                       <td className="px-6 py-5" data-label="Lot No.">
@@ -451,8 +520,8 @@ const ImsLots = ({
                         )}
                       </td>
                       {showStockStatus && (
-                        <td className="px-6 py-5" data-label="Stock Status">
-                          <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${stockCls}`}>{stock ?? 'Unknown'}</span>
+                        <td className="px-6 py-5" data-label={originalRegister ? 'Movement' : 'Stock Status'}>
+                          <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${cellCls}`}>{cellLabel ?? 'Unknown'}</span>
                         </td>
                       )}
                       <td className="px-6 py-5" data-label={showStockStatus ? 'Expiry Status' : 'Status'}>

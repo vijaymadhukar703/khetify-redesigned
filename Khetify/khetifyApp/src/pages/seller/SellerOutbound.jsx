@@ -113,7 +113,7 @@ const SellerOutbound = () => {
       <div className="max-w-7xl mx-auto space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-bold text-stone-900">Outbound Sales</h1>
+            <h1 className="text-xl font-bold text-stone-900">Sales</h1>
             <p className="text-sm text-stone-500">Sell from your stock to customers and dealers. Shipping deducts stock FEFO.</p>
           </div>
           {/* <PrimaryBtn onClick={() => setCreating(true)}><span className="material-symbols-outlined text-base">add_shopping_cart</span> New Order</PrimaryBtn> */}

@@ -3,7 +3,7 @@ import { Outlet, Link, useNavigate, useLocation } from "react-router-dom";
 import { useCart } from "../../context/CartContext";
 import { useWishlist } from "../../context/WishlistContext";
 import { useShopAuth } from "../../context/ShopAuthContext";
-import { getShopProducts } from "../../lib/shopApi";
+import { getShopProducts, getShopCategories } from "../../lib/shopApi";
 import CartDrawer from "./CartDrawer";
 import SearchSuggestions from "./SearchSuggestions";
 import { useShopLanguage, useT } from "../../context/ShopLanguageContext";
@@ -177,6 +177,21 @@ function AccountMenu({ isAuthed, consumer, redirectPath, onClose, onLogout, clas
 }
 
 export default function ShopLayout() {
+  /* TOP CATEGORIES IN THE FOOTER ARE LIVE, not a typed list. Every other big
+     storefront fills that column by hand and it rots the first time the
+     catalogue changes; this is the same getShopCategories() the home page
+     calls, so the column can never disagree with what is actually sellable.
+     A failure leaves it empty and the rest of the footer renders — a footer is
+     not worth an error state. */
+  const [footerCategories, setFooterCategories] = useState([]);
+  useEffect(() => {
+    let alive = true;
+    getShopCategories()
+      .then((r) => { if (alive) setFooterCategories(r?.data || []); })
+      .catch(() => { if (alive) setFooterCategories([]); });
+    return () => { alive = false; };
+  }, []);
+
   const { count } = useCart();
   const { count: wishlistCount } = useWishlist();
   const { isAuthed, consumer, logout } = useShopAuth();
@@ -502,45 +517,131 @@ export default function ShopLayout() {
         </div>
       </nav>
 
-      {/* ── Footer (unchanged) ── */}
-      <footer className="mt-auto border-t border-stone-200 bg-white">
-        <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6">
-          <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-4">
-            <div className="sm:col-span-2">
-              <Link to="/customer-shop" title={t("common.home")} className="flex items-center gap-2">
-                <span className="text-xl font-bold tracking-tight text-[#EA2831] transition-opacity hover:opacity-80">
+      {/* ── Footer ───────────────────────────────────────────────────────────
+          Built to the shape the big Indian storefronts use — dark, banded,
+          multi-column, back-to-top bar on top — with one rule applied
+          throughout: EVERY LINK GOES SOMEWHERE THAT EXISTS.
+
+          Those footers carry Careers, Press, FAQ, Contact Us, T&C, Privacy,
+          Sitemap, Returns, blog links, app-store badges, social handles and a
+          support phone number. Khetify has none of those pages, no app, no
+          handles and no support line, so none of them are here. A footer that
+          looks complete and 404s on eight of its links is worse than a shorter
+          one that works — and the missing ones are easy to slot in later,
+          because each is one <li>.
+
+          What IS here is real: catalogue routes, the account pages, the seller
+          and manufacturer entry points, and a Top categories column driven by
+          the live categories API rather than a typed list that would rot. ── */}
+      <footer className="mt-auto bg-[#16191B] text-stone-300">
+
+        {/* Back-to-top strip. The one control a reader at the foot of a long
+            catalogue page actually reaches for. */}
+        <button
+          type="button"
+          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          className="flex w-full items-center justify-center gap-1.5 border-b border-white/10 bg-white/[0.04] py-3.5 text-[12.5px] font-bold text-stone-300 transition-colors hover:bg-[#EA2831] hover:text-white"
+        >
+          <span className="material-symbols-outlined text-[16px]">arrow_upward</span>
+          {t("footer.backToTop")}
+        </button>
+
+        <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:py-14">
+          <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-12 lg:gap-8">
+
+            {/* Brand — the SAME red wordmark as the header (Khetify in full
+                #EA2831), not the split Kheti/fy treatment this used to have,
+                so the mark reads identically wherever it appears. */}
+            <div className="lg:col-span-4">
+              <Link to="/customer-shop" title={t("common.home")} className="inline-flex items-center">
+                <span className="font-heading text-[24px] font-extrabold -tracking-[0.03em] text-[#EA2831] transition-opacity hover:opacity-80">
                   Khetify
                 </span>
               </Link>
-              <p className="mt-4 max-w-sm text-sm leading-relaxed text-stone-500">
+              <p className="mt-4 max-w-[40ch] text-[13px] leading-[1.8] text-stone-400">
                 {t("footer.tagline")}
               </p>
+
+              {/* True as written: these are exactly the modes checkout offers. */}
+              <div className="mt-6">
+                <span className="block text-[10px] font-extrabold uppercase tracking-[0.18em] text-stone-500">
+                  {t("footer.payWith")}
+                </span>
+                <span className="mt-2 inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-[12px] font-semibold text-stone-300">
+                  <span className="material-symbols-outlined text-[16px] text-[#EA2831]">payments</span>
+                  {t("footer.payMethods")}
+                </span>
+              </div>
             </div>
 
-            <div>
-              <h4 className="text-sm font-bold text-stone-900">{t("footer.shop")}</h4>
-              <ul className="mt-3 space-y-2 text-sm text-stone-500">
-                <li><Link to="/customer-shop/products" className="hover:text-[#EA2831]">{t("footer.allProducts")}</Link></li>
-                <li><Link to="/customer-shop/products?sort=newest" className="hover:text-[#EA2831]">{t("footer.newArrivals")}</Link></li>
-                <li><Link to="/customer-shop/cart" className="hover:text-[#EA2831]">{t("footer.yourCart")}</Link></li>
-                <li><Link to="/customer-shop/orders" className="hover:text-[#EA2831]">{t("footer.yourOrders")}</Link></li>
+            <div className="lg:col-span-2">
+              <h4 className="text-[10.5px] font-extrabold uppercase tracking-[0.16em] text-white">
+                {t("footer.shop")}
+              </h4>
+              <ul className="mt-4 space-y-2.5 text-[13px] text-stone-400">
+                <li><Link to="/customer-shop/products" className="transition-colors hover:text-white">{t("footer.allProducts")}</Link></li>
+                <li><Link to="/customer-shop/categories" className="transition-colors hover:text-white">{t("footer.categories")}</Link></li>
+                <li><Link to="/customer-shop/products?sort=newest" className="transition-colors hover:text-white">{t("footer.newArrivals")}</Link></li>
+                <li><Link to="/customer-shop/cart" className="transition-colors hover:text-white">{t("footer.yourCart")}</Link></li>
               </ul>
             </div>
 
-            <div>
-              <h4 className="text-sm font-bold text-stone-900">{t("footer.account")}</h4>
-              <ul className="mt-3 space-y-2 text-sm text-stone-500">
-                <li><Link to={LOGIN_PATH} className="hover:text-[#EA2831]">{t("account.loginLink")}</Link></li>
-                <li><Link to={REGISTER_PATH} className="hover:text-[#EA2831]">{t("footer.createAccount")}</Link></li>
-                <li><Link to="/customer-shop" className="hover:text-[#EA2831]">{t("footer.backToStore")}</Link></li>
+            <div className="lg:col-span-2">
+              <h4 className="text-[10.5px] font-extrabold uppercase tracking-[0.16em] text-white">
+                {t("footer.account")}
+              </h4>
+              <ul className="mt-4 space-y-2.5 text-[13px] text-stone-400">
+                <li><Link to={LOGIN_PATH} className="transition-colors hover:text-white">{t("account.loginLink")}</Link></li>
+                <li><Link to={REGISTER_PATH} className="transition-colors hover:text-white">{t("footer.createAccount")}</Link></li>
+                <li><Link to="/customer-shop/orders" className="transition-colors hover:text-white">{t("footer.yourOrders")}</Link></li>
+                <li><Link to="/customer-shop/wishlist" className="transition-colors hover:text-white">{t("footer.wishlist")}</Link></li>
+                <li><Link to="/customer-shop/profile" className="transition-colors hover:text-white">{t("footer.profile")}</Link></li>
               </ul>
             </div>
+
+            <div className="lg:col-span-2">
+              <h4 className="text-[10.5px] font-extrabold uppercase tracking-[0.16em] text-white">
+                {t("footer.business")}
+              </h4>
+              <ul className="mt-4 space-y-2.5 text-[13px] text-stone-400">
+                <li><Link to="/seller/register" className="transition-colors hover:text-white">{t("footer.sellOnKhetify")}</Link></li>
+                <li><Link to="/seller/login" className="transition-colors hover:text-white">{t("footer.sellerLogin")}</Link></li>
+                <li><Link to="/register" className="transition-colors hover:text-white">{t("footer.forCompanies")}</Link></li>
+              </ul>
+            </div>
+
+            {/* Live, so it cannot drift from the catalogue. Hidden entirely when
+                the fetch gave nothing rather than printing a bare heading. */}
+            {footerCategories.length > 0 && (
+              <div className="sm:col-span-2 lg:col-span-2">
+                <h4 className="text-[10.5px] font-extrabold uppercase tracking-[0.16em] text-white">
+                  {t("footer.topCategories")}
+                </h4>
+                <ul className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2.5 text-[13px] text-stone-400 sm:grid-cols-3 lg:grid-cols-1">
+                  {footerCategories.slice(0, 6).map((c) => (
+                    <li key={c}>
+                      <Link
+                        to={`/customer-shop/products?category=${encodeURIComponent(c)}`}
+                        className="block truncate capitalize transition-colors hover:text-white"
+                      >
+                        {c}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
 
-          <div className="mt-10 flex flex-col items-center justify-between gap-2 border-t border-stone-100 pt-6 text-sm text-stone-400 sm:flex-row">
+          <div className="mt-12 flex flex-col items-center justify-between gap-4 border-t border-white/10 pt-6 sm:flex-row">
             {/* The YEAR is data — interpolated, never translated. */}
-            <span>{t("footer.copyright", { year: new Date().getFullYear() })}</span>
-            <Link to="/customer-shop" className="font-medium hover:text-stone-700">{t("footer.backToStore")}</Link>
+            <span className="text-[12.5px] text-stone-500">
+              {t("footer.copyright", { year: new Date().getFullYear() })}
+            </span>
+            {/* The header's own switch, reused. Building a second one here is
+                what produced the `languages is not defined` crash: that state
+                lives inside LanguageSelect, not in this component. */}
+            <LanguageSelect compact />
           </div>
         </div>
       </footer>
