@@ -197,7 +197,23 @@ exports.registerCompany = async (req, res) => {
       status: "pending",
     });
 
-    await company.save();
+    // Save with duplicate detection — the unique indexes will catch race conditions
+    // where two requests tried to create with the same email/phone simultaneously
+    try {
+      await company.save();
+    } catch (saveErr) {
+      // Mongoose duplicate key error — caught here in case race condition occurred
+      // after the findOne checks above but before the insert (rare but possible)
+      if (saveErr.code === 11000) {
+        const field = Object.keys(saveErr.keyPattern)[0];
+        if (field === 'email') {
+          return res.status(400).json({ message: "This email is already registered." });
+        } else if (field === 'number') {
+          return res.status(400).json({ message: "This phone number is already registered." });
+        }
+      }
+      throw saveErr;
+    }
 
     // Generate JWT. Company-owner tokens carry companyId === id and the
     // company_admin role so authorize()/RBAC works without a separate login.

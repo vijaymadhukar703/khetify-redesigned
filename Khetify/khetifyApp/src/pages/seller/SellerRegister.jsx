@@ -35,6 +35,10 @@ const SellerRegister = () => {
   const handleRegister = async (e) => {
     e.preventDefault();
     setServerError("");
+    
+    // Prevent duplicate submissions while one is in progress
+    if (loading) return;
+    
     const errs = getErrors();
     setErrors(errs);
     if (Object.keys(errs).length > 0) return;

@@ -17,6 +17,7 @@ const CompanyRegister = () => {
   // In-line error states
   const [errors, setErrors] = useState({});
   const [serverError, setServerError] = useState("");
+  const [loading, setLoading] = useState(false);
 
  const validateForm = () => {
    let newErrors = {};
@@ -65,9 +66,13 @@ const CompanyRegister = () => {
     e.preventDefault();
     setServerError("");
 
+    // Prevent duplicate submissions while one is in progress
+    if (loading) return;
+
     if (!validateForm()) return;
 
     try {
+      setLoading(true);
       // Email and Phone are mapped directly to the existing backend fields
       // (`email` and `number`) — the API/DB shape is unchanged, only the UI
       // now collects them as two separate, mandatory inputs.
@@ -97,6 +102,8 @@ const CompanyRegister = () => {
       setServerError(
         error.response?.data?.message || "Registration failed. Try again.",
       );
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -301,10 +308,11 @@ const CompanyRegister = () => {
 
             <div className="pt-2">
               <button
-                className="w-full rounded-lg bg-[#ea2a33] py-3.5 text-base font-bold text-white shadow-lg hover:bg-red-600 transition-all active:scale-[0.98]"
+                className="w-full rounded-lg bg-[#ea2a33] py-3.5 text-base font-bold text-white shadow-lg hover:bg-red-600 transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
                 type="submit"
+                disabled={loading}
               >
-                Create account
+                {loading ? "Creating account..." : "Create account"}
               </button>
             </div>
             <div className="text-center mt-5">
