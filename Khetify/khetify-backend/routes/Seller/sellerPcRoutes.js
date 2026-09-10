@@ -42,10 +42,14 @@ certificates.get("/", pc.listCertificates);
 certificates.get("/:id", pc.getCertificate);
 certificates.get("/:id/download", pc.downloadCertificate);
 
-/* /api/seller/listings — marketplace publish, gated by an ACTIVE PC */
+/* /api/seller/listings — marketplace publish, gated by an ACTIVE PC.
+   READ IS SPLIT FROM WRITE on this router: seeing whether a product is live is
+   "listing:read" (managers/staff hold it, so My Products can render a truthful
+   Published / Not published badge), while publish and unpublish stay on
+   manageCerts. The capability therefore sits per-route, not on the router. */
 const listings = express.Router();
-listings.use(auth, sellerOnly, manageCerts);
-listings.get("/", pc.listListings);
+listings.use(auth, sellerOnly);
+listings.get("/", authorize("listing:read"), pc.listListings);
 /**
  * PC GATE, ONLY WHERE THERE IS A COMPANY TO BE CERTIFIED BY.
  *
@@ -67,8 +71,8 @@ const pcGateWhenCompanyProduct = (req, res, next) =>
     ? requireActivePC((r) => r.body.companyId)(req, res, next)
     : next();
 
-listings.post("/publish", pcGateWhenCompanyProduct, pc.publishListing);
+listings.post("/publish", manageCerts, pcGateWhenCompanyProduct, pc.publishListing);
 // Unpublish is intentionally NOT PC-gated — a seller can always pull a listing.
-listings.patch("/:id/unpublish", pc.unpublishListing);
+listings.patch("/:id/unpublish", manageCerts, pc.unpublishListing);
 
 module.exports = { documents, applications, certificates, listings };

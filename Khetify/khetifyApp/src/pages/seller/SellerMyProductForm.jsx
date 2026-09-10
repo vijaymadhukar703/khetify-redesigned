@@ -1080,7 +1080,7 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
             {/* Optional. Long catalogue, so this one is searchable rather than a
                 plain ThemedSelect; the list lives in lib/horticultureProducts.js. */}
             <div>
-              <label className={labelClass}>Horticulture Product</label>
+              <label className={labelClass}>Product</label>
               <SearchableSelect
                 id="horticulture_product"
                 className={inputClass}

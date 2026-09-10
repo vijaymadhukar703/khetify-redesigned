@@ -62,6 +62,7 @@ const SellerInventory = () => {
         batchNo: l.batchNumber || '—',
         name: p.productName || '—',
         sku: p.skuNumber || '',
+        productCode: p.product_code || '',
         category: p.category || 'Uncategorised',
         brand: p.brandName || '',
         packingSize: [p.packagingType, p.unit].filter(Boolean).join(' · '),
@@ -154,7 +155,7 @@ const SellerInventory = () => {
                   {/* Brand + Reorder At are intentionally not shown on Seller
                       Inventory. The reorder value still drives Stock Status and
                       the Low/Out-of-Stock card — it's just not a column here. */}
-                  {['Lot No.', 'Batch No.', 'Product', 'Category', 'Warehouse', 'Mfg', 'Expiry', 'Qty', 'Stock Status', 'Expiry Status', 'MRP', ''].map((h, i) => (
+                  {['Lot No.', 'Product', 'Product Code', 'Category', 'Warehouse', 'Mfg', 'Expiry', 'Qty', 'Stock Status', 'Expiry Status', 'MRP', ''].map((h, i) => (
                     <th key={i} className={`px-4 py-4 text-[10px] font-bold text-stone-400 uppercase tracking-widest whitespace-nowrap ${h === '' ? 'text-right' : ''}`}>{h}</th>
                   ))}
                 </tr>
@@ -168,11 +169,11 @@ const SellerInventory = () => {
                       <td data-label="Lot No." className="px-4 py-5">
                         <span className="text-xs font-bold bg-stone-100 text-stone-600 px-2.5 py-1 rounded-full whitespace-nowrap">{r.lotNo}</span>
                       </td>
-                      <td data-label="Batch No." className="px-4 py-5 text-sm text-stone-500 font-medium">{r.batchNo}</td>
                       <td data-label="Product" className="px-4 py-5">
                         <p className="font-bold text-stone-900 text-sm">{r.name}</p>
                         {r.sku && <p className="text-[10px] font-bold text-stone-400 uppercase tracking-tight">SKU: {r.sku}</p>}
                       </td>
+                      <td data-label="Product Code" className="px-4 py-5 text-sm text-stone-500 font-medium whitespace-nowrap">{r.productCode || '—'}</td>
                       <td data-label="Category" className="px-4 py-5 text-sm text-stone-500 font-medium">{r.category}</td>
                       {/* <td data-label="Packing Size" className="px-4 py-5 text-sm text-stone-500 font-medium">{r.packingSize || '—'}</td> */}
                       <td data-label="Warehouse" className="px-4 py-5 text-sm text-stone-900 font-medium">{r.warehouse}</td>
@@ -202,8 +203,8 @@ const SellerInventory = () => {
                     </tr>
                   );
                 })}
-                {!loading && filtered.length === 0 && <tr><td colSpan={13} className="px-6 py-12 text-center text-sm text-stone-400">{rows.length === 0 ? 'No stock yet — it appears after your company approves a supply request.' : 'No lots match these filters.'}</td></tr>}
-                {loading && <tr><td colSpan={13} className="px-6 py-12 text-center text-sm text-stone-400">Loading inventory…</td></tr>}
+                {!loading && filtered.length === 0 && <tr><td colSpan={12} className="px-6 py-12 text-center text-sm text-stone-400">{rows.length === 0 ? 'No stock yet — it appears after your company approves a supply request.' : 'No lots match these filters.'}</td></tr>}
+                {loading && <tr><td colSpan={12} className="px-6 py-12 text-center text-sm text-stone-400">Loading inventory…</td></tr>}
               </tbody>
             </table>
           </div>

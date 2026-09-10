@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import Swal from 'sweetalert2';
+import { useSellerPermission } from '../../context/SellerPermissionContext';
 import { getMyProducts, getMyStock } from '../../lib/sellerMyProductApi';
 // The SAME publish/unpublish calls the company-product catalog uses. The only
 // difference is the body: no companyId, because a seller's own product has no
@@ -531,7 +532,15 @@ const SellerMyProducts = () => {
   // linkable and survives a refresh. A hand-typed unknown value falls back to
   // the first tab rather than rendering nothing.
   const [params, setParams] = useSearchParams();
-  const active = TABS.find((t) => t.key === params.get('tab')) || TABS[0];
+  const requestedTab = TABS.find((t) => t.key === params.get('tab')) || TABS[0];
+
+  // WRITE capability. Reading the module is now enough to SEE it (a warehouse
+  // user needs to know what their warehouse holds), so every mutating action is
+  // gated on this instead. The server enforces the same split per route.
+  const canManage = useSellerPermission('myproduct:manage');
+  // READ-ONLY users get no tab bar (below), so a stale ?tab=stock must not
+  // strand them on a tab they can neither see nor switch away from.
+  const active = canManage ? requestedTab : TABS[0];
 
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -678,7 +687,13 @@ const SellerMyProducts = () => {
      react-hooks/set-state-in-effect), and the change is always something the
      seller just did, so the handler already knows. */
 
+  const openEdit = (productId) => {
+    if (!canManage) return; // read-only: a stale modal or keyboard path must not write
+    setEditing({ productId });
+  };
+
   const openPublish = async (product) => {
+    if (!canManage) return;
     // NOT A BLOCK — just make sure the seller knows. A published product with no
     // stock is legitimate (stock can be added straight after), it simply shows
     // as out of stock to shoppers, so this warns and lets them decide.
@@ -729,6 +744,7 @@ const SellerMyProducts = () => {
   };
 
   const handleUnpublish = async (listingId) => {
+    if (!canManage) return;
     const { isConfirmed } = await Swal.fire({
       title: 'Unpublish from marketplace?',
       text: 'Customers will no longer see this product on the storefront.',
@@ -770,21 +786,23 @@ const SellerMyProducts = () => {
 
   // Shared by the Products toolbar and the empty state, so the two never drift.
   const uploadButton = useMemo(
-    () => (
+    () => (!canManage ? (
+      <p className="text-sm text-stone-400">View only — ask your seller admin to add or edit products.</p>
+    ) : (
       <button
         type="button"
-        onClick={() => setEditing({ productId: null })}
+        onClick={() => openEdit(null)}
         className="inline-flex items-center gap-1.5 bg-[#EA2831] text-white text-sm font-bold px-4 py-2.5 rounded-xl hover:bg-[#d0232b] transition-colors whitespace-nowrap"
       >
         <span className="material-symbols-outlined text-[18px]">add</span>
         Upload product
       </button>
-    ),
-    []
+    )),
+    [canManage] // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   // Shared by the Stock toolbar and the empty state, so the two never drift.
-  const addStockButton = (
+  const addStockButton = !canManage ? null : (
     <button
       type="button"
       onClick={() => setAddingStock(true)}
@@ -857,7 +875,9 @@ const SellerMyProducts = () => {
         </div>
 
         {/* Tabs — same treatment as Seller Operations: active tab is brand red
-            with a red bottom border sitting on the divider. */}
+            with a red bottom border sitting on the divider. Hidden for
+            read-only users: they only ever need the Products list. */}
+        {canManage && (
         <div className="flex gap-1 border-b border-stone-200 overflow-x-auto">
           {TABS.map((t) => (
             <button
@@ -875,6 +895,7 @@ const SellerMyProducts = () => {
             </button>
           ))}
         </div>
+        )}
 
         {/* THE FORM TAKES OVER THE PANEL when open — the tabs and the toolbar
             would otherwise sit above a long form and invite a half-filled
@@ -924,7 +945,7 @@ const SellerMyProducts = () => {
                       <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Product Details</th>
                       <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Category</th>
                       <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Brand</th>
-                      <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">MRP (₹)</th>
+                      <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">{canManage ? 'MRP (₹)' : 'Price (₹)'}</th>
                       <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Stock</th>
                       <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Status</th>
                       <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Marketplace</th>
@@ -958,23 +979,66 @@ const SellerMyProducts = () => {
                                   {p.unit || '—'}
                                   {variants > 0 ? ` · ${variants} variant${variants === 1 ? '' : 's'}` : ''}
                                 </span>
+                                {/* The product's own code, as a second muted line
+                                    rather than a 9th column: this table already
+                                    carries Category, Brand, Price, Stock, Status,
+                                    Marketplace and Actions, and a line here costs
+                                    no horizontal space. Rendered for BOTH views —
+                                    a code is information, not an action. */}
+                                {/* <span className="text-[10px] text-stone-400 font-medium uppercase tracking-tighter">
+                                  Code: {p.product_code || '—'}
+                                </span> */}
                               </div>
                             </div>
                           </td>
                           <td data-label="Category" className="px-6 py-4 text-xs text-stone-500 font-bold uppercase">{p.category || '—'}</td>
                           <td data-label="Brand" className="px-6 py-4 text-sm text-stone-700">{p.brandName || '—'}</td>
-                          <td data-label="MRP (₹)" className="px-6 py-4 text-sm text-stone-900 font-black">₹{p.mrp ?? '—'}</td>
+                          {canManage ? (
+                            <td data-label="MRP (₹)" className="px-6 py-4 text-sm text-stone-900 font-black">₹{p.mrp ?? '—'}</td>
+                          ) : (() => {
+                            // READ-ONLY: the live marketplace price when the
+                            // product is published, otherwise the MRP tagged as
+                            // such so the two are never read as the same number.
+                            const listed = listings.get(String(p._id));
+                            const isLive = !!listed && listed.status === 'published' && listed.price != null;
+                            const amount = isLive ? listed.price : p.mrp;
+                            return (
+                              <td data-label="Price (₹)" className="px-6 py-4 text-sm text-stone-900 font-black">
+                                {amount == null ? '—' : `₹${amount}`}
+                                {amount != null && !isLive && (
+                                  <span className="block text-[10px] font-bold uppercase tracking-wide text-stone-400">MRP</span>
+                                )}
+                              </td>
+                            );
+                          })()}
                           <td data-label="Stock" className="px-6 py-4"><StockCell product={p} /></td>
                           <td data-label="Status" className="px-6 py-4"><StatusPill status={p.productStatus} /></td>
                           <td data-label="Marketplace" className="px-6 py-4">
                             {(() => {
                               const listed = listings.get(String(p._id));
+                              // READ-ONLY: this cell only ever held the publish
+                              // controls, so without a badge it renders empty.
+                              if (!canManage) {
+                                const live = !!listed && listed.status === 'published';
+                                return (
+                                  <span
+                                    className={`inline-flex items-center w-fit text-[10px] font-bold uppercase tracking-wide px-2.5 py-1 rounded-full border whitespace-nowrap ${
+                                      live
+                                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                        : 'bg-stone-100 text-stone-500 border-stone-200'
+                                    }`}
+                                  >
+                                    {live ? 'Published' : 'Not published'}
+                                  </span>
+                                );
+                              }
                               if (listed && listed.status === 'published') {
                                 return (
                                   <div className="flex items-center gap-2">
                                     <span className="inline-flex items-center bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold px-2.5 py-1 rounded-full whitespace-nowrap">
                                       Listed at ₹{listed.price}
                                     </span>
+                                    {canManage && (
                                     <button
                                       onClick={() => handleUnpublish(listed.listingId)}
                                       disabled={unpublishingId === listed.listingId}
@@ -983,9 +1047,11 @@ const SellerMyProducts = () => {
                                     >
                                       {unpublishingId === listed.listingId ? 'Unpublishing…' : 'Unpublish'}
                                     </button>
+                                    )}
                                   </div>
                                 );
                               }
+                              if (!canManage) return null;
                               const isPublishing = publishingId === p._id;
                               return (
                                 <button
@@ -1010,14 +1076,16 @@ const SellerMyProducts = () => {
                             >
                               <span className="material-symbols-outlined text-xl">visibility</span>
                             </button>
+                            {canManage && (
                             <button
                               type="button"
-                              onClick={() => setEditing({ productId: p._id })}
+                              onClick={() => openEdit(p._id)}
                               title="Edit product"
                               className="p-2 text-stone-400 hover:text-[#EA2831] transition-colors"
                             >
                               <span className="material-symbols-outlined text-xl">edit</span>
                             </button>
+                            )}
                           </td>
                         </tr>
                       );

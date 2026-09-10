@@ -196,7 +196,10 @@ async function ledger(
 const POPULATE_PRODUCT = {
   path: "productId",
   select:
-    "productName category unitType unit packagingType mrp brandName skuNumber hsnCode productImages companyId",
+    // gstPercentage rides along for the POS line-tax display; the authoritative
+    // tax is still computed in salesService.createOrder from the Product itself.
+    // product_code is the product-level code shown in the company Inventory table.
+    "productName product_code category unitType unit packagingType mrp gstPercentage brandName skuNumber hsnCode productImages companyId",
   populate: { path: "companyId", select: "companyName" },
 };
 

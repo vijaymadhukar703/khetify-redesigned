@@ -394,6 +394,57 @@ const WarehouseFormModal = ({ warehouse, onClose, onDone }) => {
   };
   const managerFilled = !!(m.name.trim() && m.email.trim() && m.phone.trim() && m.password.trim());
 
+  // EDIT-MODE manager block — a SEPARATE piece of state from the create block
+  // above, because it edits an account that already exists rather than
+  // describing one to create. Prefilled from the row the list already carries
+  // (GET returns manager + managerCount), so no extra request.
+  const assignedManager = isEdit ? warehouse?.manager || null : null;
+  const managerCount = isEdit ? warehouse?.managerCount || 0 : 0;
+  // The password is ALWAYS blank: the backend never returns it, and a blank
+  // field means "keep the current one". The modal is mounted fresh on every
+  // open, so this re-runs and the box is empty every time.
+  const [em, setEm] = useState({
+    name: assignedManager?.name || '',
+    email: assignedManager?.email || '',
+    phone: assignedManager?.phone || '',
+    password: '',
+  });
+  const [emErrors, setEmErrors] = useState({});
+  // The server's own message (e.g. a 409 duplicate email) shown INSIDE the
+  // modal, next to the fields that caused it.
+  const [saveError, setSaveError] = useState('');
+  const uem = (k) => (e) => {
+    setEm((prev) => ({ ...prev, [k]: e.target.value }));
+    if (emErrors[k]) setEmErrors((prev) => ({ ...prev, [k]: undefined }));
+    setSaveError('');
+  };
+  const onEditManagerPhone = (e) => {
+    const digits = e.target.value.replace(/\D/g, '').slice(0, 10);
+    setEm((prev) => ({ ...prev, phone: digits }));
+    if (emErrors.phone) setEmErrors((prev) => ({ ...prev, phone: undefined }));
+    setSaveError('');
+  };
+
+  /**
+   * Only what the user ACTUALLY changed, plus the password when one was typed.
+   * Returns undefined when nothing changed, so the PUT is byte-for-byte what
+   * it is today and the backend's manager branch is never entered.
+   */
+  const managerPatch = () => {
+    if (!assignedManager) return undefined;
+    const patch = {};
+    const name = em.name.trim();
+    const email = em.email.trim();
+    const phone = em.phone.trim();
+    if (name !== (assignedManager.name || '')) patch.name = name;
+    if (email !== (assignedManager.email || '')) patch.email = email;
+    if (phone !== (assignedManager.phone || '')) patch.phone = phone;
+    // A blank box is not a change — the key is OMITTED entirely so the
+    // existing password is never touched.
+    if (em.password.trim()) patch.password = em.password.trim();
+    return Object.keys(patch).length ? patch : undefined;
+  };
+
   const [stateIso, setStateIso] = useState(initialStateIso);
   const cities = useMemo(() => (stateIso ? City.getCitiesOfState('IN', stateIso) : []), [stateIso]);
   const [cityChoice, setCityChoice] = useState(initialCityChoice); // a listed city name or OTHER_CITY
@@ -434,6 +485,19 @@ const WarehouseFormModal = ({ warehouse, onClose, onDone }) => {
       setMErrors(me);
       if (Object.keys(me).length) return;
     }
+    // EDIT: only the fields actually shown are checked, and the password only
+    // when one was typed — a blank box is a valid "keep it".
+    if (isEdit && assignedManager) {
+      const ee = {};
+      if (!em.name.trim()) ee.name = 'Manager name is required';
+      if (!em.email.trim()) ee.email = 'Manager email is required';
+      if (!em.phone.trim()) ee.phone = 'Manager phone is required';
+      const pw = em.password.trim();
+      if (pw && pw.length < 6) ee.password = 'Password must be at least 6 characters';
+      setEmErrors(ee);
+      if (Object.keys(ee).length) return;
+    }
+    setSaveError('');
     // Edit keeps '' so the server can clear capacity; create omits it (undefined).
     const capacity = f.capacityUnits === '' ? (isEdit ? '' : undefined) : Number(f.capacityUnits);
     const payload = {
@@ -452,7 +516,9 @@ const WarehouseFormModal = ({ warehouse, onClose, onDone }) => {
     };
     try {
       if (isEdit) {
-        await updateWarehouse(warehouse._id, payload);
+        // Warehouse + manager in the SAME PUT — never a second request.
+        const manager = managerPatch();
+        await updateWarehouse(warehouse._id, manager ? { ...payload, manager } : payload);
         toast('success', 'Warehouse updated');
       } else {
         // Warehouse + its manager in ONE call — the backend creates both
@@ -471,7 +537,12 @@ const WarehouseFormModal = ({ warehouse, onClose, onDone }) => {
       onDone();
     } catch (err) {
       // 403 on create usually means the plan lacks multi_warehouse — server enforces it
-      toast('error', err?.response?.data?.message || `Could not ${isEdit ? 'update' : 'create'} warehouse`);
+      const msg = err?.response?.data?.message || `Could not ${isEdit ? 'update' : 'create'} warehouse`;
+      // The whole save was rejected (a 409 duplicate email/phone is the likely
+      // one), so the modal STAYS OPEN with everything the user typed intact —
+      // onDone() above is never reached from here.
+      setSaveError(msg);
+      toast('error', msg);
     }
   };
   return (
@@ -578,6 +649,80 @@ const WarehouseFormModal = ({ warehouse, onClose, onDone }) => {
           </Field>
         </div>
       )}
+      {/* WAREHOUSE MANAGER — EDIT. The same heading, spacing and inputs the
+          create block above uses; only the password rule differs. */}
+      {isEdit && (
+        <div className="mt-6 pt-5 border-t border-stone-200">
+          <div className="flex items-start gap-2 mb-4">
+            <span className="material-symbols-outlined text-[#EA2831] text-[20px]">badge</span>
+            <div>
+              <h4 className="text-sm font-bold text-stone-900">Warehouse Manager</h4>
+              {assignedManager ? (
+                <p className="text-xs text-stone-500 mt-0.5">
+                  They sign in with the email below. Changing it changes how they log in.
+                </p>
+              ) : (
+                // Created before managers existed: the backend rejects a manager
+                // object for such a warehouse, so empty inputs would only produce
+                // a confusing error.
+                <p className="text-xs text-stone-500 mt-0.5">No manager is assigned to this warehouse.</p>
+              )}
+            </div>
+          </div>
+
+          {assignedManager && (
+            <>
+              {managerCount > 1 && (
+                <p className="text-xs text-stone-500 mb-3">
+                  This warehouse has {managerCount} managers. Editing the first.
+                </p>
+              )}
+              <Field label="Full Name *">
+                <input className={inputCls} value={em.name} onChange={uem('name')} placeholder="Manager's full name" />
+                <FieldError msg={emErrors.name} />
+              </Field>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4">
+                <Field label="Email *">
+                  <input className={inputCls} type="email" value={em.email} onChange={uem('email')} placeholder="manager@company.com" />
+                  <FieldError msg={emErrors.email} />
+                </Field>
+                <Field label="Phone Number *">
+                  <input
+                    className={inputCls}
+                    type="tel"
+                    inputMode="numeric"
+                    maxLength={10}
+                    value={em.phone}
+                    onChange={onEditManagerPhone}
+                    placeholder="10-digit mobile number"
+                  />
+                  <FieldError msg={emErrors.phone} />
+                </Field>
+              </div>
+              <Field label="New password">
+                <input
+                  className={inputCls}
+                  type="password"
+                  value={em.password}
+                  onChange={uem('password')}
+                  autoComplete="new-password"
+                  placeholder="At least 6 characters"
+                />
+                <p className="text-xs text-stone-400 mt-1">Leave blank to keep the current password.</p>
+                <FieldError msg={emErrors.password} />
+              </Field>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* The server's own words — a duplicate email/phone reads clearly here. */}
+      {saveError && (
+        <p className="mt-4 text-sm font-semibold text-[#EA2831] bg-red-50 border border-red-100 rounded-lg px-3 py-2">
+          {saveError}
+        </p>
+      )}
+
       <PrimaryBtn
         disabled={
           !f.name.trim() || !f.state || !f.city || !f.line1.trim() || !f.pincode.trim() ||

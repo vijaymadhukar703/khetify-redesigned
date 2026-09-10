@@ -96,6 +96,7 @@ import SellerDashboard from './pages/seller/SellerDashboard';
 import SellerAnalytics from './pages/seller/SellerAnalytics';
 import SellerAnalyticsDetails from './pages/seller/SellerAnalyticsDetails';
 import SellerLabels from './pages/seller/SellerLabels';
+import SellerPos from './pages/seller/SellerPos';
 import SellerCustomers from './pages/seller/SellerCustomers';
 import SellerOutbound from './pages/seller/SellerOutbound';
 import SellerBilling from './pages/seller/SellerBilling';
@@ -354,6 +355,7 @@ function App() {
           {/* Transfers now live inside the unified Operations module. */}
           <Route path="/seller/transfers" element={<Navigate to="/seller/operations?tab=shipments" replace />} />
           <Route path="/seller/labels" element={<SellerLabels />} />
+          <Route path="/seller/pos" element={<SellerPos />} />
           <Route path="/seller/customers" element={<SellerCustomers />} />
           <Route path="/seller/outbound" element={<SellerOutbound />} />
           <Route path="/seller/billing" element={<SellerBilling />} />

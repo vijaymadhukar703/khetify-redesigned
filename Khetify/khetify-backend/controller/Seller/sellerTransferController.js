@@ -45,13 +45,17 @@ exports.warehouseStock = async (req, res) => {
     const rows = await lotService.getLots(req.user.sellerId, { ownerType: "seller", warehouseId });
     const live = rows.filter((r) => (r.availableStock || 0) > 0);
 
+    // mrp / gstPercentage / hsnCode ride along for the POS line display only —
+    // getLots already populates productId, so nothing extra is fetched. The
+    // authoritative price and tax are still computed server-side in
+    // salesService.createOrder; these are for showing a line amount at the counter.
     // Group the in-stock lots by product so the picker lists distinct products
     // (the accept step FEFO-picks across that product's lots).
     const byProduct = new Map();
     for (const r of live) {
       const p = r.productId || {};
       const id = String(p._id || r.productId);
-      if (!byProduct.has(id)) byProduct.set(id, { productId: id, productName: p.productName || "—", skuNumber: p.skuNumber || "", availableQty: 0, lots: [] });
+      if (!byProduct.has(id)) byProduct.set(id, { productId: id, productName: p.productName || "—", skuNumber: p.skuNumber || "", mrp: p.mrp ?? null, gstPercentage: p.gstPercentage ?? 0, hsnCode: p.hsnCode || "", availableQty: 0, lots: [] });
       const entry = byProduct.get(id);
       entry.availableQty += r.availableStock;
       entry.lots.push({ lotNumber: r.lotNumber || r.batchNumber, expiryDate: r.expiryDate || null, availableStock: r.availableStock });

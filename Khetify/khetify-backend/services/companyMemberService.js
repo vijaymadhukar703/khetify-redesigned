@@ -249,10 +249,114 @@ async function sendWarehouseManagerWelcomeEmail({
   return { skipped: false };
 }
 
+/**
+ * WAREHOUSE MANAGER — DETAILS CHANGED.
+ *
+ * The companion to sendWarehouseManagerWelcomeEmail above, and deliberately a
+ * SEPARATE template: the welcome mail says the account was just created, which
+ * is wrong (and alarming) for an edit. Same transport, same layout, same
+ * `loginPath` parameter so the seller flow can point at "/seller/login".
+ *
+ * `to` is explicit rather than derived, because the caller sends this to BOTH
+ * the old and the new address when the login email itself changed — the old
+ * address is the only place a manager who did not expect the change can still
+ * be reached.
+ *
+ * `changedFields` is a list of human labels ("Name", "Email", …) so the
+ * manager can see what actually moved. `password` is the NEW plaintext and is
+ * present ONLY when it changed; when absent the mail says nothing about the
+ * password at all.
+ *
+ * Throws whatever sendMail throws; the caller decides how to handle it.
+ */
+async function sendWarehouseManagerUpdatedEmail({
+  managerName,
+  to,
+  changedFields,
+  password,
+  companyName,
+  warehouseName,
+  loginPath = "",
+} = {}) {
+  if (!to) return { skipped: true, reason: "no-email" };
+
+  // Same env + fallback the welcome email uses.
+  const baseUrl = (process.env.FRONTEND_URL || "http://localhost:5173").replace(/\/$/, "");
+  const path = loginPath ? `/${String(loginPath).replace(/^\/+/, "")}` : "";
+  const loginUrl = `${baseUrl}${path}`;
+
+  const name = managerName || "there";
+  const company = companyName || "your company";
+  const warehouse = warehouseName || "a warehouse";
+  const fields = Array.isArray(changedFields) ? changedFields.filter(Boolean) : [];
+  const fieldList = fields.length ? fields.join(", ") : "Your account details";
+  // A password is mentioned ONLY when one was actually set.
+  const hasPassword = !!password;
+
+  const text =
+    `Hi ${name},\n\n` +
+    `Your Warehouse Manager account for ${warehouse} at ${company} has been updated by an administrator.\n\n` +
+    `What changed: ${fieldList}\n\n` +
+    `Your current login details:\n` +
+    `  Company:   ${company}\n` +
+    `  Warehouse: ${warehouse}\n` +
+    `  Login URL: ${loginUrl}\n` +
+    `  Email:     ${to}\n` +
+    (hasPassword ? `  New password: ${password}\n` : "") +
+    `\n` +
+    (hasPassword
+      ? `Please sign in with the new password and change it as soon as possible.\n\n`
+      : "") +
+    `If you did not expect this change, contact your administrator straight away.\n`;
+
+  const row = (label, value) =>
+    `<tr>
+       <td style="padding:6px 12px 6px 0;color:#666;font-size:13px;white-space:nowrap">${escapeHtml(label)}</td>
+       <td style="padding:6px 0;font-size:14px;font-weight:bold;color:#14201A">${escapeHtml(value)}</td>
+     </tr>`;
+
+  const html = `
+    <div style="font-family:'Segoe UI',Arial,sans-serif;max-width:520px;margin:auto;color:#14201A">
+      <h2 style="color:#EA2831;margin-bottom:4px">Khetify</h2>
+      <p style="font-size:15px">Hi ${escapeHtml(name)},</p>
+      <p style="font-size:15px;line-height:1.6">
+        Your <strong>Warehouse Manager</strong> account for
+        <strong>${escapeHtml(warehouse)}</strong> at <strong>${escapeHtml(company)}</strong>
+        has been updated by an administrator.
+      </p>
+      <p style="font-size:14px;line-height:1.6">What changed: <strong>${escapeHtml(fieldList)}</strong></p>
+      <table style="border-collapse:collapse;margin:18px 0">
+        ${row("Company", company)}
+        ${row("Warehouse", warehouse)}
+        ${row("Login email", to)}
+        ${hasPassword ? row("New password", password) : ""}
+      </table>
+      <p>
+        <a href="${loginUrl}" style="display:inline-block;background:#EA2831;color:#fff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:bold">Log in to Khetify</a>
+      </p>
+      ${hasPassword
+        ? '<p style="color:#666;font-size:13px">Please sign in with the new password and change it as soon as possible.</p>'
+        : ''}
+      <p style="color:#666;font-size:13px">
+        If you did not expect this change, contact your administrator straight away.
+      </p>
+      <p style="color:#999;font-size:12px">Or paste this link into your browser:<br/>${loginUrl}</p>
+    </div>`;
+
+  await sendMail({
+    to,
+    subject: `Your Warehouse Manager account for ${warehouse} was updated — Khetify`,
+    text,
+    html,
+  });
+
+  return { skipped: false };
+}
 module.exports = {
   WAREHOUSE_MANAGER_ROLE,
   COMPANY_MEMBER_SCOPE,
   assertUniqueIdentity,
   sendWarehouseManagerWelcomeEmail,
+  sendWarehouseManagerUpdatedEmail,
   createCompanyMember,
 };

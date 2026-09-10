@@ -506,7 +506,9 @@ const ImsLabels = () => {
    */
   const lotLabel = (l) =>
     `${l.productId?.productName || 'Item'} · ${l.lotNumber || l.batchNumber}`
-    + ` (avail ${labelsLeftFor(l).toLocaleString('en-IN')})`;
+    // A warehouse never generates labels, so the count is noise for them —
+    // Main Company keeps it. Same figure as before, just not shown there.
+    + (isWarehouse ? '' : ` (avail ${labelsLeftFor(l).toLocaleString('en-IN')})`);
 
   const qtyNum = Number(qty) || 0;
   // GENERATE availability — how many NEW labels may still be minted.

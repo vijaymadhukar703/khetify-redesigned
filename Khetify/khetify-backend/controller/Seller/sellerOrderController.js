@@ -10,6 +10,7 @@ const salesService = require("../../services/salesService");
 const barcodeService = require("../../services/barcodeService");
 const shipmentService = require("../../services/shipmentService");
 const { rankByProximity, planAllocation } = require("../../services/warehouseProximityService");
+const { warehouseScope } = require("../../services/warehouseScope");
 
 // Same workflow map the company order controller uses.
 const TRANSITIONS = {
@@ -24,6 +25,41 @@ const TRANSITIONS = {
 
 const sellerOwner = (req) => ({ ownerType: "seller", ownerId: req.user.sellerId });
 const sellerScope = (req) => ({ ownerType: "seller", ownerId: req.user.sellerId });
+
+/**
+ * WAREHOUSE SCOPING for the order READS. sellerScope() narrows to the seller
+ * ACCOUNT; this narrows to the warehouses the caller is assigned to, so a
+ * warehouse user no longer sees another warehouse's sales and POS bills.
+ *
+ * Scope comes from services/warehouseScope.js — the same helper the inventory,
+ * shipment, supply and report controllers already use. It returns null for an
+ * unscoped caller (seller_admin holds "*"), and {} here means no restriction,
+ * so seller_admin's result set is byte for byte what it is today.
+ *
+ * MATCHED THROUGH THE LINES, not just the order header. Order.js sets the
+ * order-level `sourceWarehouseId` only on a single-warehouse order and leaves
+ * it null on a SPLIT one, so filtering on the header alone would hide every
+ * split order from every warehouse. The $or reads `items.sourceWarehouseId`
+ * too, and a split order surfaces for each warehouse holding one of its lines.
+ *
+ * UNASSIGNED ORDERS FALL OUT BY CONSTRUCTION. A customer web order that has not
+ * been approved and assigned yet carries no source warehouse on the header OR
+ * on any line, so it matches neither arm and stays invisible to warehouse
+ * users — it belongs to the seller admin until they assign it. There is
+ * deliberately no "missing field" fallback: treating an absent warehouse as
+ * "visible to everyone" is exactly the leak this closes.
+ */
+const warehouseOrderScope = async (req) => {
+  const scope = await warehouseScope(req.user); // null = unscoped (seller_admin)
+  if (!scope) return {};
+  return {
+    $or: [
+      { "items.sourceWarehouseId": { $in: scope } },
+      { sourceWarehouseId: { $in: scope } },
+    ],
+  };
+};
+
 const fail = (res, err) => res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
 
 /** POST /api/seller/orders — create a confirmed sale order (FEFO reservation from seller stock). */
@@ -90,11 +126,25 @@ async function attachItemSkus(orders) {
 /** GET /api/seller/orders */
 exports.getOrders = async (req, res) => {
   try {
-    const filter = sellerScope(req);
+    const filter = { ...sellerScope(req), ...(await warehouseOrderScope(req)) };
     if (req.query.status) filter.status = req.query.status;
     // .lean() so the resolved SKU can be attached to the plain rows below. The
     // serialised shape is unchanged — the schema declares no virtuals.
-    const rows = await Order.find(filter).sort({ placedAt: -1 }).limit(Math.min(Number(req.query.limit) || 200, 500)).lean();
+    //
+    // WHICH WAREHOUSE MADE THE SALE, by name. Both paths are populated because
+    // Order.js stores the source in two places: the order-level field for a
+    // single-warehouse order, and the per-line field for a SPLIT one, where the
+    // order-level field is null by definition. Both are returned as-is — the
+    // server does not collapse a split order's lines into one "the" warehouse,
+    // because there isn't one; the UI decides how to render that.
+    //
+    // "name code" only: these rows already carry every line and the list caps
+    // at 500, so the full warehouse document would be dead weight. Populate
+    // runs as part of this one query — no extra round trip, no per-row lookup.
+    const rows = await Order.find(filter)
+      .populate("sourceWarehouseId", "name code")
+      .populate("items.sourceWarehouseId", "name code")
+      .sort({ placedAt: -1 }).limit(Math.min(Number(req.query.limit) || 200, 500)).lean();
     await attachItemSkus(rows);
     res.json({ success: true, count: rows.length, data: rows });
   } catch (err) { fail(res, err); }
@@ -103,7 +153,8 @@ exports.getOrders = async (req, res) => {
 /** GET /api/seller/orders/:id */
 exports.getOrder = async (req, res) => {
   try {
-    const order = await Order.findOne({ _id: req.params.id, ...sellerScope(req) }).lean();
+    // Out of scope reads as NOT FOUND, never 403 — a 403 would confirm the id exists.
+    const order = await Order.findOne({ _id: req.params.id, ...sellerScope(req), ...(await warehouseOrderScope(req)) }).lean();
     if (!order) return res.status(404).json({ success: false, message: "Order not found" });
     order.nextStates = TRANSITIONS[order.status] || [];
     res.json({ success: true, data: order });
@@ -113,7 +164,7 @@ exports.getOrder = async (req, res) => {
 /** GET /api/seller/orders/:id/picklist — FEFO plan over the SELLER's lots. */
 exports.getPicklist = async (req, res) => {
   try {
-    const order = await Order.findOne({ _id: req.params.id, ...sellerScope(req) });
+    const order = await Order.findOne({ _id: req.params.id, ...sellerScope(req), ...(await warehouseOrderScope(req)) });
     if (!order) return res.status(404).json({ success: false, message: "Order not found" });
     const now = new Date();
     const lines = [];
@@ -168,7 +219,7 @@ exports.getPicklist = async (req, res) => {
 exports.getSourceOptions = async (req, res) => {
   try {
     const sellerId = req.user.sellerId;
-    const order = await Order.findOne({ _id: req.params.id, ...sellerScope(req) }).lean();
+    const order = await Order.findOne({ _id: req.params.id, ...sellerScope(req), ...(await warehouseOrderScope(req)) }).lean();
     if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
     const now = new Date();

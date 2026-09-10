@@ -37,14 +37,6 @@ const TABS = [
   { key: 'batches', label: 'Batches', icon: 'monitoring', render: () => <ImsLotDashboard /> },
 ];
 
-// The Main Company splits the SAME ImsLots into two readings of the data: live
-// stock, and the immutable register of lots as created. Separate from TABS
-// above, which belongs to the other-roles 3-tab block.
-const COMPANY_TABS = [
-  { key: 'stock', label: 'Stock', icon: 'list_alt' },
-  { key: 'register', label: 'Lot Register', icon: 'inventory_2' },
-];
-
 const InventoryTracking = () => {
   const { role } = usePermission();
   const [params, setParams] = useSearchParams();
@@ -61,12 +53,6 @@ const InventoryTracking = () => {
   // (no max-w-7xl) so the wider `fluid` Lots table uses the available content
   // area. Only main Company hides Receive Lot; the warehouse keeps it.
   if (isMainCompany || isWarehouse) {
-    // Which of the two Main Company tabs is showing. Anything missing, unknown
-    // or stale lands on Stock. `isRegister` is gated on isMainCompany, so a
-    // Company Warehouse user keeps ignoring ?tab exactly as before.
-    const companyTab = params.get('tab') === 'register' ? 'register' : 'stock';
-    const isRegister = isMainCompany && companyTab === 'register';
-
     return (
       <div className="w-full px-3 sm:px-5 py-6">
         <h1 className="text-2xl font-bold text-stone-900 mb-1">Inventory</h1>
@@ -76,38 +62,20 @@ const InventoryTracking = () => {
             Company Warehouse never mints a lot — its "Receive Lot" scans an
             incoming parent lot and confirms the transfer into this warehouse. */}
         {/* The Main Company reads its Inventory as the ORIGINAL LOT REGISTER —
-            the lots it minted, at their created quantity — only on the Lot
-            Register tab; its Stock tab and the Company Warehouse both keep the
-            live-stock view. Same component, flag off. */}
+            the lots it minted, at their created quantity. That is now its ONLY
+            reading: warehouse-by-warehouse live stock is shown elsewhere in the
+            app, and repeating it here produced a duplicate row per warehouse for
+            the same lot. The Company Warehouse keeps the live-stock view — same
+            component, flag off. */}
         {/* No warehouse yet → Lot creation is unavailable. Only the main Company
             is gated: a Company Warehouse user is, by definition, attached to one,
             and the check runs on the company-wide directory. If the lookup could
             not complete (whChecked false) the page renders normally and the
             backend rejects any lot creation. */}
-        {/* Main Company only: Stock (live) vs Lot Register (as created). The
-            Company Warehouse renders no tab bar and never reads ?tab. */}
+        {/* No tab bar for either role now. Neither reads ?tab, so a stale
+            param cannot change what renders. */}
         {isMainCompany && (
-          <>
-            <div className="flex gap-1 border-b border-stone-200 mb-6 overflow-x-auto">
-              {COMPANY_TABS.map((t) => (
-                <button
-                  key={t.key}
-                  onClick={() => setParams({ tab: t.key })}
-                  className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-bold border-b-2 -mb-px whitespace-nowrap transition-colors ${
-                    companyTab === t.key
-                      ? 'border-[#EA2831] text-[#EA2831]'
-                      : 'border-transparent text-stone-400 hover:text-stone-700'
-                  }`}
-                >
-                  <span className="material-symbols-outlined text-[18px]">{t.icon}</span>
-                  {t.label}
-                </button>
-              ))}
-            </div>
-            <p className="text-stone-500 mb-5">
-              {isRegister ? 'Every lot you minted, at its created quantity.' : 'Live stock across your warehouses.'}
-            </p>
-          </>
+          <p className="text-stone-500 mb-5">Every lot you created, at its created quantity.</p>
         )}
 
         {isMainCompany && whChecked && !hasWarehouse ? (
@@ -118,9 +86,9 @@ const InventoryTracking = () => {
           <ImsLots
             showSummary showStockStatus paginate showBatchNo fluid requireWarehouse
             hideReceive={isMainCompany}
-            hideCreate={isWarehouse || isRegister}
+            hideCreate={isWarehouse}
             receiveTransfer={isWarehouse}
-            originalRegister={isRegister}
+            originalRegister={isMainCompany}
           />
         )}
       </div>
