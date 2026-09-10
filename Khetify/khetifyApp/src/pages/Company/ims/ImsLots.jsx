@@ -148,6 +148,9 @@ const STOCK_STATUS_OPTIONS = [
 
 // The register's own filter list. Deliberately NO STOCK_ZERO entry — "Fully
 // moved out" is the same set, and two options for one filter would be noise.
+// RETAINED BUT UNREFERENCED: the register now shows Product Code instead of
+// Movement, so it filters on stock status like every other view. Kept here
+// (with MOVE and movementFor) because the movement reading may be wanted again.
 const MOVEMENT_OPTIONS = [
   { value: 'all', label: 'All Movement' },
   { value: MOVE.ALL, label: 'All here', dot: 'bg-green-500' },
@@ -306,9 +309,7 @@ const ImsLots = ({
     if (filter === 'expiring') out = out.filter((l) => { const d = daysToExpiry(l.expiryDate); return d !== null && d >= 0 && d <= 90; });
     else if (filter === 'expired') out = out.filter((l) => daysToExpiry(l.expiryDate) < 0);
     if (showStockStatus && stockFilter !== 'all' && stockFilter !== STOCK_ZERO) {
-      out = originalRegister
-        ? out.filter((l) => movementFor(l) === stockFilter)
-        : out.filter((l) => statusFor(l, originalRegister) === stockFilter);
+      out = out.filter((l) => statusFor(l, originalRegister) === stockFilter);
     }
     return out;
   }, [lots, filter, stockFilter, showSummary, showStockStatus, originalRegister]);
@@ -416,7 +417,7 @@ const ImsLots = ({
   <StockStatusDropdown
     value={stockFilter}
     onChange={(v) => { setStockFilter(v); setPage(1); }}
-    options={originalRegister ? MOVEMENT_OPTIONS : STOCK_STATUS_OPTIONS}
+    options={STOCK_STATUS_OPTIONS}
   />
 )}
           </div>
@@ -459,9 +460,9 @@ const ImsLots = ({
             <table className={`w-full text-left border-collapse resp-table ${showBatchNo ? 'min-w-[1150px]' : 'min-w-[1000px]'}`}>
               <thead>
                 <tr className="bg-stone-50 border-b border-stone-200">
-                  <Th>Lot No.</Th><Th>Product</Th><Th>Warehouse</Th>
+                  <Th>Lot No.</Th><Th>Product</Th><Th>Product Code</Th><Th>Category</Th><Th>Warehouse</Th>
                   <Th>Mfg</Th><Th>Expiry</Th><Th>Qty</Th>
-                  {showStockStatus && <Th>{originalRegister ? 'Movement' : 'Stock Status'}</Th>}
+                  {showStockStatus && !originalRegister && <Th>Stock Status</Th>}
                   <Th>{showStockStatus ? 'Expiry Status' : 'Status'}</Th><Th right>Actions</Th>
                 </tr>
               </thead>
@@ -476,16 +477,6 @@ const ImsLots = ({
                     : stock === STATUS.LOW ? 'bg-orange-50 text-orange-600'
                     : stock === null ? 'bg-stone-100 text-stone-500'
                     : 'bg-red-50 text-red-600';
-                  // Register: the badge reports MOVEMENT of the created quantity,
-                  // not a threshold check against a number that never changes.
-                  const move = originalRegister ? movementFor(lot) : null;
-                  const cellLabel = originalRegister ? move : stock;
-                  const cellCls = originalRegister
-                    ? (move === MOVE.ALL ? 'bg-green-50 text-green-700'
-                     : move === MOVE.PART ? 'bg-orange-50 text-orange-600'
-                     : move === null ? 'bg-stone-100 text-stone-500'
-                     : 'bg-stone-100 text-stone-600')
-                    : stockCls;
                   return (
                     <tr key={lot._id} className="hover:bg-stone-50/30 transition-colors">
                       <td className="px-6 py-5" data-label="Lot No.">
@@ -506,6 +497,17 @@ const ImsLots = ({
                         <p className="font-bold text-stone-900 text-sm">{p.productName || '—'}</p>
                         <p className="text-[10px] font-bold text-stone-400 uppercase">{p.category || ''}</p>
                       </td>
+                      {/* The product's own code, beside the product it names, in
+                          every view. An ADDITION for the warehouse and seller —
+                          their Stock Status column is untouched below. */}
+                      <td className="px-6 py-5 text-sm font-mono font-semibold text-stone-700 whitespace-nowrap" data-label="Product Code">
+                        {p.product_code || <span className="text-stone-300">—</span>}
+                      </td>
+                      {/* Category rides beside the code in every view — register,
+                          warehouse and seller alike — never gated on the register. */}
+                      <td className="px-6 py-5 text-sm text-stone-500 font-medium" data-label="Category">
+                        {p.category || <span className="text-stone-300">—</span>}
+                      </td>
                       <td className="px-6 py-5 text-sm text-stone-500 font-medium" data-label="Warehouse">{lot.warehouseId?.name || 'Unassigned'}</td>
                       <td className="px-6 py-5 text-sm text-stone-500 font-medium" data-label="Mfg">{fmtDate(lot.mfgDate)}</td>
                       <td className="px-6 py-5 text-sm text-stone-500 font-medium" data-label="Expiry">{fmtDate(lot.expiryDate)}</td>
@@ -519,9 +521,9 @@ const ImsLots = ({
                           </span>
                         )}
                       </td>
-                      {showStockStatus && (
-                        <td className="px-6 py-5" data-label={originalRegister ? 'Movement' : 'Stock Status'}>
-                          <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${cellCls}`}>{cellLabel ?? 'Unknown'}</span>
+                      {showStockStatus && !originalRegister && (
+                        <td className="px-6 py-5" data-label="Stock Status">
+                          <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${stockCls}`}>{stock ?? 'Unknown'}</span>
                         </td>
                       )}
                       <td className="px-6 py-5" data-label={showStockStatus ? 'Expiry Status' : 'Status'}>
@@ -552,7 +554,7 @@ const ImsLots = ({
                   );
                 })}
                 {!loading && visible.length === 0 && (
-                  <tr><td colSpan={8 + (showStockStatus ? 1 : 0) + (showBatchNo ? 1 : 0)} className="px-6 py-12 text-center text-sm text-stone-400">No lots here.</td></tr>
+                  <tr><td colSpan={10 + (showStockStatus ? 1 : 0) + (showBatchNo ? 1 : 0)} className="px-6 py-12 text-center text-sm text-stone-400">No lots here.</td></tr>
                 )}
               </tbody>
             </table>

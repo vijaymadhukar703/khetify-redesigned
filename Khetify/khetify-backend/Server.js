@@ -73,6 +73,7 @@ const sellerReportRoutes = require("./routes/Seller/sellerReportRoutes"); // Sel
 const { units: sellerUnitRoutes, scan: sellerScanRoutes } = require("./routes/Seller/sellerBarcodeRoutes"); // Seller labels/scan (Phase 4b)
 const sellerCustomerRoutes = require("./routes/Seller/sellerCustomerRoutes"); // Seller customers & dealers (Phase 5a)
 const sellerOrderRoutes = require("./routes/Seller/sellerOrderRoutes"); // Seller outbound sales (Phase 5b)
+const sellerPosRoutes = require("./routes/Seller/sellerPosRoutes"); // seller POS counter sale
 const sellerSubscriptionRoutes = require("./routes/Seller/sellerSubscriptionRoutes"); // Seller subscription/billing
 const sellerTeamRoutes = require("./routes/Seller/sellerTeamRoutes"); // Seller team / roles (RBAC)
 const { documents: sellerDocumentsRoutes, applications: sellerPcAppRoutes, certificates: sellerCertRoutes, listings: sellerListingRoutes } = require("./routes/Seller/sellerPcRoutes"); // Principal Certificate (seller side)
@@ -266,6 +267,7 @@ app.use("/api/seller/units", sellerUnitRoutes); // seller unit labels (view/prin
 app.use("/api/seller/scan", sellerScanRoutes); // seller unit scan
 app.use("/api/seller/customers", sellerCustomerRoutes); // seller customers & dealers
 app.use("/api/seller/orders", sellerOrderRoutes); // seller outbound sales
+app.use("/api/seller/pos", sellerPosRoutes); // seller POS counter sale
 app.use("/api/seller/subscription", sellerSubscriptionRoutes); // seller subscription/billing
 app.use("/api/seller/team", sellerTeamRoutes); // seller team / roles (RBAC)
 app.use("/api/seller/documents", sellerDocumentsRoutes); // PC: KYC/business documents

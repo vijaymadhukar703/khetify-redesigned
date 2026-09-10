@@ -1,16 +1,22 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Swal from 'sweetalert2';
 import { Modal, Field, inputCls, PrimaryBtn, GhostBtn, Th } from '../Company/ims/ImsUi';
 import { formatINR, fmtDate } from '../../lib/imsApi';
 import {
   getSellerOrders, createSellerOrder, updateSellerOrderStatus,
   getSellerCustomers, getSellerProducts, getSellerOrderSourceOptions,
+  getSellerPosInvoicePdf,
 } from '../../lib/sellerApi';
 
 const toast = (icon, title) => Swal.fire({ icon, title, toast: true, position: 'top-end', timer: 2200, showConfirmButton: false });
 const apiError = (err) => toast('error', err?.response?.data?.message || err.message || 'Something went wrong');
 const listOf = (r) => (Array.isArray(r) ? r : r?.data || []);
 const fmtNum = (n) => Number(n || 0).toLocaleString('en-IN');
+
+/** A COUNTER SALE, by the field createSale actually sets. Deliberately NOT the
+ *  invoice number's "INV-" prefix: that is a formatting detail that can change,
+ *  and a renamed prefix would silently take the Bill button away. */
+const isPosSale = (o) => o.salesChannel === 'pos';
 
 const STATUS_STYLE = {
   pending: 'bg-stone-100 text-stone-600', confirmed: 'bg-blue-50 text-blue-700', packed: 'bg-amber-50 text-amber-700',
@@ -44,6 +50,26 @@ const skuSummary = (o) => {
   const skus = (o.items || []).map((it) => it.sku).filter(Boolean);
   if (!skus.length) return { first: '—', more: 0 };
   return { first: skus[0], more: skus.length - 1 };
+};
+
+/** WHICH WAREHOUSE FULFILLED THE ORDER, as a primary line plus an overflow
+ *  count — the same shape as productSummary above so the columns read alike.
+ *
+ *  The order-level `sourceWarehouseId` is set only when the WHOLE order ships
+ *  from ONE warehouse. A SPLIT order leaves it null by design and records the
+ *  warehouse per line instead, so the lines are the fallback and their DISTINCT
+ *  names are what the overflow counts — two lines out of one warehouse read as
+ *  one name, not "+1 more".
+ *
+ *  An order with neither shows a dash. That is expected, not a gap: orders
+ *  placed before the server began recording the source have no warehouse to
+ *  show, and guessing one would be worse than saying nothing. */
+const warehouseSummary = (o) => {
+  const single = o.sourceWarehouseId?.name;
+  if (single) return { first: single, more: 0, all: [single] };
+  const names = [...new Set((o.items || []).map((it) => it.sourceWarehouseId?.name).filter(Boolean))];
+  if (!names.length) return { first: null, more: 0, all: [] };
+  return { first: names[0], more: names.length - 1, all: names };
 };
 
 /** HOW THE CUSTOMER PAID.
@@ -85,6 +111,7 @@ const SellerOutbound = () => {
   const [creating, setCreating] = useState(false);
   // The order awaiting a warehouse choice before it can be approved.
   const [assigning, setAssigning] = useState(null);
+  const [billing, setBilling] = useState(null);
 
   const refresh = useCallback(() => {
     getSellerOrders().then((r) => setOrders(listOf(r))).catch(apiError).finally(() => setLoading(false));
@@ -109,8 +136,8 @@ const SellerOutbound = () => {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-white font-sora">
-      <div className="max-w-7xl mx-auto space-y-6">
+    <div className="flex-1 overflow-y-auto p-4 sm:py-8 sm:px-4 bg-white font-sora">
+      <div className="w-full space-y-6">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold text-stone-900">Sales</h1>
@@ -120,10 +147,10 @@ const SellerOutbound = () => {
         </div>
 
         <div className="border border-stone-200 rounded-2xl shadow-sm bg-white overflow-hidden">
-          <div className="overflow-x-auto no-scrollbar">
-            <table className="w-full text-left border-collapse min-w-[1180px] resp-table">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse min-w-[1100px] resp-table">
               <thead><tr className="bg-stone-50 border-b border-stone-200">
-                <Th>Invoice</Th><Th>Product</Th><Th>SKU</Th><Th>Buyer</Th><Th>Delivery Address</Th><Th>Units</Th><Th>Total</Th><Th>Status</Th><Th>Placed</Th><Th right>Actions</Th>
+                <Th pad="px-4">Invoice</Th><Th pad="px-4">Product</Th><Th pad="px-4">SKU</Th><Th pad="px-4">Buyer</Th><Th pad="px-4">Warehouse</Th><Th pad="px-4">Delivery Address</Th><Th pad="px-4">Units</Th><Th pad="px-4">Total</Th><Th pad="px-4">Status</Th><Th pad="px-4">Placed</Th><Th right pad="px-4">Actions</Th>
               </tr></thead>
               <tbody className="divide-y divide-stone-100">
                 {orders.map((o) => {
@@ -131,10 +158,11 @@ const SellerOutbound = () => {
                   const sku = skuSummary(o);
                   const pay = paymentLabel(o);
                   const addr = addressLines(o);
+                  const wh = warehouseSummary(o);
                   return (
                     <tr key={o._id} className="hover:bg-stone-50/40 align-top">
-                      <td data-label="Invoice" className="px-6 py-4">
-                        <span className="text-sm font-mono font-bold text-stone-800">{o.invoiceNumber || o.orderNumber}</span>
+                      <td data-label="Invoice" className="px-4 py-4">
+                        <span className="text-sm font-mono font-bold text-stone-800 whitespace-nowrap">{o.invoiceNumber || o.orderNumber}</span>
                         {pay && (
                           <span className={`block mt-1 text-[10px] font-bold uppercase tracking-wider ${paymentMode(o) === 'cod' ? 'text-amber-600' : 'text-violet-600'}`}>
                             {pay}
@@ -144,21 +172,32 @@ const SellerOutbound = () => {
                       {/* Product name gets its own column — it was previously
                           invisible here, so a seller had to open the order to
                           see what had actually been bought. */}
-                      <td data-label="Product" className="px-6 py-4 max-w-[220px]">
+                      <td data-label="Product" className="px-4 py-4 max-w-[190px]">
                         <span className="block text-sm font-semibold text-stone-800 truncate" title={prod.first}>{prod.first}</span>
                         {prod.more > 0 && <span className="text-[11px] text-stone-400">+{prod.more} more item{prod.more > 1 ? 's' : ''}</span>}
                       </td>
                       {/* The SKU of the exact variant bought — the parent
                           product's SKU is only used when the line has no
                           variant SKU of its own. */}
-                      <td data-label="SKU" className="px-6 py-4 max-w-[160px]">
+                      <td data-label="SKU" className="px-4 py-4 max-w-[160px]">
                         <span className="block text-sm font-mono text-stone-700 truncate" title={sku.first}>{sku.first}</span>
                         {sku.more > 0 && <span className="text-[11px] text-stone-400">+{sku.more} more</span>}
                       </td>
-                      <td data-label="Buyer" className="px-6 py-4 text-sm text-stone-700">{o.customerName || '—'}</td>
+                      <td data-label="Buyer" className="px-4 py-4 text-sm text-stone-700">{o.customerName || '—'}</td>
+                      {/* Which warehouse the stock actually left from. A split
+                          order names the first and counts the rest; the tooltip
+                          lists them all. */}
+                      <td data-label="Warehouse" className="px-4 py-4 max-w-[160px] whitespace-nowrap">
+                        {wh.first ? (
+                          <>
+                            <span className="block text-sm text-stone-700 truncate" title={wh.all.join(', ')}>{wh.first}</span>
+                            {wh.more > 0 && <span className="text-[11px] text-stone-400">+{wh.more} more</span>}
+                          </>
+                        ) : <span className="text-sm text-stone-300">—</span>}
+                      </td>
                       {/* Where it ships to — the same address the warehouse
                           recommendation is measured against. */}
-                      <td data-label="Delivery Address" className="px-6 py-4 max-w-[260px]">
+                      <td data-label="Delivery Address" className="px-4 py-4 max-w-[170px]">
                         {addr ? (
                           <>
                             {addr.street && <span className="block text-sm text-stone-700 truncate" title={addr.street}>{addr.street}</span>}
@@ -166,23 +205,28 @@ const SellerOutbound = () => {
                           </>
                         ) : <span className="text-sm text-stone-300">—</span>}
                       </td>
-                      <td data-label="Units" className="px-6 py-4 text-sm text-stone-600">{fmtNum(o.totalUnits)}</td>
-                      <td data-label="Total" className="px-6 py-4 text-sm font-semibold text-stone-800 whitespace-nowrap">{formatINR(o.totalAmount)}</td>
-                      <td data-label="Status" className="px-6 py-4"><span className={`text-[11px] font-bold rounded-full px-2.5 py-1 capitalize ${STATUS_STYLE[o.status] || 'bg-stone-100'}`}>{o.status}</span></td>
-                      <td data-label="Placed" className="px-6 py-4 text-sm text-stone-500 whitespace-nowrap">{fmtDate(o.placedAt)}</td>
-                      <td className="px-6 py-4 cell-actions">
-                        <div className="flex items-center justify-end gap-2">
+                      <td data-label="Units" className="px-4 py-4 text-sm text-stone-600">{fmtNum(o.totalUnits)}</td>
+                      <td data-label="Total" className="px-4 py-4 text-sm font-semibold text-stone-800 whitespace-nowrap">{formatINR(o.totalAmount)}</td>
+                      <td data-label="Status" className="px-4 py-4"><span className={`text-[11px] font-bold rounded-full px-2.5 py-1 capitalize ${STATUS_STYLE[o.status] || 'bg-stone-100'}`}>{o.status}</span></td>
+                      <td data-label="Placed" className="px-4 py-4 text-sm text-stone-500 whitespace-nowrap">{fmtDate(o.placedAt)}</td>
+                      <td className="px-4 py-4 cell-actions whitespace-nowrap">
+                        <div className="flex items-center justify-end gap-2 whitespace-nowrap shrink-0">
                           {(NEXT_ACTIONS[o.status] || []).map(([label, status]) => (
                             <GhostBtn key={status} onClick={() => advance(o, status)}>{label}</GhostBtn>
                           ))}
-                          {!NEXT_ACTIONS[o.status] && <span className="text-xs text-stone-300">—</span>}
+                          {/* A POS bill was previously visible only once, right
+                              after saving. This is the way back to it. POS sales
+                              carry no Approve/Cancel, so it stands alone — and a
+                              non-POS row is left exactly as it was. */}
+                          {isPosSale(o) && <GhostBtn onClick={() => setBilling(o)}>Bill</GhostBtn>}
+                          {!NEXT_ACTIONS[o.status] && !isPosSale(o) && <span className="text-xs text-stone-300">—</span>}
                         </div>
                       </td>
                     </tr>
                   );
                 })}
-                {!loading && orders.length === 0 && <tr><td colSpan={10} className="px-6 py-12 text-center text-sm text-stone-400">No orders yet.</td></tr>}
-                {loading && <tr><td colSpan={10} className="px-6 py-12 text-center text-sm text-stone-400">Loading…</td></tr>}
+                {!loading && orders.length === 0 && <tr><td colSpan={10} className="px-4 py-12 text-center text-sm text-stone-400">No orders yet.</td></tr>}
+                {loading && <tr><td colSpan={10} className="px-4 py-12 text-center text-sm text-stone-400">Loading…</td></tr>}
               </tbody>
             </table>
           </div>
@@ -190,6 +234,7 @@ const SellerOutbound = () => {
       </div>
 
       {creating && <NewOrderModal onClose={() => setCreating(false)} onDone={() => { setCreating(false); refresh(); }} />}
+      {billing && <PosBillModal order={billing} onClose={() => setBilling(null)} />}
       {assigning && (
         <AssignWarehouseModal
           order={assigning}
@@ -216,6 +261,82 @@ const SellerOutbound = () => {
  * warehouses, nearest to the delivery address); every row is a dropdown the
  * seller can override, listing only warehouses that can actually cover it.
  */
+/**
+ * THE SAVED POS BILL, shown as the REAL PDF.
+ *
+ * Not re-rendered as HTML on purpose. SellerPos.jsx already draws an HTML
+ * invoice and the server's posInvoicePdfService.js draws the PDF; a third
+ * renderer here would be a third version of one document, free to drift from
+ * the other two. Displaying the actual PDF means what the seller reads is
+ * byte for byte what prints.
+ *
+ * The header is filled from the ROW ALREADY IN HAND — no second request for an
+ * order the list has already loaded.
+ */
+const PosBillModal = ({ order, onClose }) => {
+  const [url, setUrl] = useState(null);
+  const [error, setError] = useState(null);
+  const frameRef = useRef(null);
+  const invoiceNo = order.invoiceNumber || order.orderNumber || 'bill';
+
+  useEffect(() => {
+    // `cancelled` guards a close that beats the response; the cleanup ALWAYS
+    // revokes, so opening several bills in a row cannot leak object URLs.
+    let cancelled = false;
+    let objectUrl = null;
+    (async () => {
+      try {
+        const blob = await getSellerPosInvoicePdf(order._id);
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setUrl(objectUrl);
+      } catch (err) {
+        // The response body is a Blob on this endpoint, so it carries no
+        // readable message — say something useful rather than blank the modal.
+        if (!cancelled) setError(err?.message || 'Could not load this bill.');
+      }
+    })();
+    return () => { cancelled = true; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [order._id]);
+
+  // print() on the IFRAME, never window.print() — the latter would print the
+  // Sales table sitting behind this modal instead of the invoice.
+  const printBill = () => frameRef.current?.contentWindow?.print();
+
+  const download = () => {
+    if (!url) return;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `invoice-${invoiceNo}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
+  return (
+    <Modal title={`Bill · ${invoiceNo}`} onClose={onClose} wide>
+      <p className="-mt-3 mb-4 text-xs text-stone-500">{fmtDate(order.placedAt)}</p>
+
+      {error ? (
+        <div className="rounded-xl border border-red-100 bg-red-50 p-6 text-center">
+          <span className="material-symbols-outlined text-3xl text-red-400">error</span>
+          <p className="mt-2 text-sm font-semibold text-red-700">{error}</p>
+        </div>
+      ) : !url ? (
+        <div className="h-[60vh] flex items-center justify-center text-sm text-stone-400">Loading bill…</div>
+      ) : (
+        <iframe ref={frameRef} src={url} title={`Invoice ${invoiceNo}`} className="w-full h-[60vh] rounded-xl border border-stone-200" />
+      )}
+
+      <div className="flex items-center justify-end gap-2 mt-5">
+        <GhostBtn onClick={onClose}>Close</GhostBtn>
+        <GhostBtn onClick={printBill} disabled={!url}>Print</GhostBtn>
+        <PrimaryBtn onClick={download} disabled={!url}>Download PDF</PrimaryBtn>
+      </div>
+    </Modal>
+  );
+};
+
 const AssignWarehouseModal = ({ order, onClose, onDone }) => {
   const [info, setInfo] = useState(null); // null = loading
   const [choice, setChoice] = useState({}); // productId -> warehouseId

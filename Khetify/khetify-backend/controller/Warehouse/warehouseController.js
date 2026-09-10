@@ -4,6 +4,8 @@ const { withTransaction } = require("../../services/txn");
 const companyMember = require("../../services/companyMemberService");
 const audit = require("../../services/auditService");
 const Company = require("../../model/Company/Company");
+const User = require("../../model/User/User");
+const bcrypt = require("bcryptjs");
 
 /**
  * Best-effort: read [longitude, latitude] out of a Google Maps link.
@@ -47,6 +49,35 @@ function locationFromMapsUrl(url) {
   return null;
 }
 
+/**
+ * The warehouse manager(s) assigned to the given warehouses.
+ *
+ * Matched exactly as createWarehouse assigns them: a company user carrying
+ * the warehouse-manager role with this warehouse in `warehouseIds`, scoped to
+ * the caller's own company. Sorted oldest-first so "the manager" is stable.
+ *
+ * The projection is EXPLICIT and deliberately narrow: passwordHash must never
+ * leave this process. `warehouseIds` is read only to group rows and is dropped
+ * from what is returned to the client.
+ */
+const MANAGER_PUBLIC_FIELDS = "_id name email phone";
+
+async function findWarehouseManagers(companyId, warehouseIds, session) {
+  return User.find({
+    companyId,
+    role: companyMember.WAREHOUSE_MANAGER_ROLE,
+    warehouseIds: { $in: warehouseIds },
+  })
+    .select(MANAGER_PUBLIC_FIELDS + " warehouseIds")
+    .sort({ createdAt: 1 })
+    .session(session || null)
+    .lean();
+}
+
+/** Only ever the four public fields — never the whole user document. */
+const publicManager = (u) =>
+  (u ? { _id: u._id, name: u.name, email: u.email, phone: u.phone } : null);
+
 /** GET /api/warehouse */
 exports.getWarehouses = async (req, res) => {
   try {
@@ -67,8 +98,28 @@ exports.getWarehouses = async (req, res) => {
     const scope = await warehouseScope(req.user);
     const filter = { companyId: req.user.companyId };
     if (scope) filter._id = { $in: scope };
-    const rows = await Warehouse.find(filter).sort({ createdAt: -1 });
-    res.json({ success: true, count: rows.length, data: rows });
+    const rows = await Warehouse.find(filter).sort({ createdAt: -1 }).lean();
+
+    // The Edit Warehouse modal reads this list (there is no single-warehouse
+    // GET), so the assigned manager rides along with each row. One query for
+    // the whole page, not one per warehouse. A warehouse created before
+    // managers existed simply carries null.
+    const managers = await findWarehouseManagers(req.user.companyId, rows.map((w) => w._id));
+    const byWarehouse = new Map();
+    for (const u of managers) {
+      for (const id of u.warehouseIds || []) {
+        const k = String(id);
+        if (!byWarehouse.has(k)) byWarehouse.set(k, []);
+        byWarehouse.get(k).push(u);
+      }
+    }
+    const data = rows.map((w) => {
+      const found = byWarehouse.get(String(w._id)) || [];
+      // First by createdAt, plus a count so the frontend can tell when a
+      // warehouse somehow ended up with more than one manager.
+      return { ...w, manager: publicManager(found[0]), managerCount: found.length };
+    });
+    res.json({ success: true, count: data.length, data });
   } catch (err) {
     res.status(500).json({ success: false, message: "Server error" });
   }
@@ -279,11 +330,160 @@ exports.updateWarehouse = async (req, res) => {
       wh.markModified("location");
     }
 
-    await wh.save(); // runs the company-XOR-seller pre('validate') hook
-    res.json({ success: true, message: "Warehouse updated", data: wh });
+    // ── MANAGER (optional) ──
+    // Absent key → this handler behaves exactly as it always has: save the
+    // warehouse and return. Every manager field below is likewise optional.
+    const { manager } = req.body;
+    if (manager === undefined || manager === null) {
+      await wh.save(); // runs the company-XOR-seller pre('validate') hook
+      return res.json({ success: true, message: "Warehouse updated", data: wh });
+    }
+    if (typeof manager !== "object" || Array.isArray(manager)) {
+      return res.status(400).json({ success: false, message: "manager must be an object" });
+    }
+
+    // Editing a manager, never creating one — creation belongs to the create
+    // flow, which also assigns the role and the warehouse.
+    const [assigned] = await findWarehouseManagers(req.user.companyId, [wh._id]);
+    if (!assigned) {
+      return res.status(400).json({
+        success: false,
+        message: "This warehouse has no manager to edit. Managers are assigned when the warehouse is created.",
+      });
+    }
+
+    // Normalised the same way companyMemberService writes them, so the login
+    // lookup (a case-insensitive email match) keeps resolving.
+    const nextName = manager.name !== undefined ? String(manager.name || "").trim() : undefined;
+    const nextEmail = manager.email !== undefined ? String(manager.email || "").trim().toLowerCase() : undefined;
+    const nextPhone = manager.phone !== undefined ? String(manager.phone || "").trim() : undefined;
+    // ONLY a non-empty string is a password change. Missing, null or "" means
+    // keep the existing one — a manager must never be locked out by a save
+    // that simply didn't retype it.
+    const rawPassword = typeof manager.password === "string" ? manager.password.trim() : "";
+
+    if (nextName !== undefined && !nextName) return res.status(400).json({ success: false, message: "Manager name cannot be empty" });
+    if (nextEmail !== undefined && !nextEmail) return res.status(400).json({ success: false, message: "Manager email cannot be empty" });
+    if (nextPhone !== undefined && !nextPhone) return res.status(400).json({ success: false, message: "Manager phone cannot be empty" });
+
+    // Snapshot for the no-session fallback below.
+    const before = await Warehouse.findById(wh._id).lean();
+
+    const saved = await withTransaction(async (session) => {
+      const opts = session ? { session } : {};
+      let warehouseWritten = false;
+      try {
+        // The SAME duplicate check the create path runs, excluding this very
+        // user — otherwise re-saving an unchanged email fails against itself.
+        // Runs BEFORE any write, so the likeliest rejection leaves the
+        // warehouse untouched even where transactions aren't available.
+        if (nextEmail !== undefined || nextPhone !== undefined) {
+          await companyMember.assertUniqueIdentity({
+            email: nextEmail,
+            phone: nextPhone,
+            excludeId: assigned._id,
+            session,
+          });
+        }
+
+        const $set = {};
+        if (nextName !== undefined) $set.name = nextName;
+        if (nextEmail !== undefined) $set.email = nextEmail;
+        if (nextPhone !== undefined) $set.phone = nextPhone;
+        // Same algorithm and same cost factor as createCompanyMember.
+        if (rawPassword) $set.passwordHash = await bcrypt.hash(rawPassword, 10);
+
+        await wh.save(opts); // runs the company-XOR-seller pre('validate') hook
+        warehouseWritten = true;
+
+        // role, companyId and warehouseIds are deliberately NOT in $set: this
+        // endpoint edits a manager's details, not their permissions.
+        if (Object.keys($set).length) {
+          await User.updateOne({ _id: assigned._id, companyId: req.user.companyId }, { $set }, opts);
+        }
+
+        const fresh = await User.findById(assigned._id)
+          .select(MANAGER_PUBLIC_FIELDS)
+          .session(session || null)
+          .lean();
+        return fresh;
+      } catch (err) {
+        // No session (standalone mongod) → put the warehouse back by hand, so a
+        // rejected manager edit can't leave a renamed warehouse behind.
+        if (!session && warehouseWritten && before) {
+          await Warehouse.replaceOne({ _id: wh._id }, before).catch(() => {});
+        }
+        throw err;
+      }
+    });
+
+    // Mirrors the create path's "user.created" entry so the trail is
+    // continuous. The password is never part of it.
+    await audit.log({
+      req,
+      action: "user.updated",
+      entityType: "User",
+      entityId: assigned._id,
+      after: {
+        name: saved?.name,
+        email: saved?.email,
+        role: companyMember.WAREHOUSE_MANAGER_ROLE,
+        passwordChanged: !!rawPassword,
+      },
+    });
+
+    // ── CHANGE NOTIFICATION ──
+    // Past withTransaction and past the audit entry, so the record is already
+    // committed. Deliberately NON-FATAL, exactly like the create path: a
+    // bounced mailbox must never turn a successful save into a 500, so the
+    // outcome is reported as `managerEmailSent` instead. The raw password is
+    // handed to the mailer and never written to a log.
+    const changedFields = [];
+    if (nextName !== undefined && nextName !== (assigned.name || "")) changedFields.push("Name");
+    if (nextEmail !== undefined && nextEmail !== (assigned.email || "")) changedFields.push("Email");
+    if (nextPhone !== undefined && nextPhone !== (assigned.phone || "")) changedFields.push("Phone");
+    if (rawPassword) changedFields.push("Password");
+
+    let managerEmailSent = false;
+    if (changedFields.length) {
+      try {
+        const company = await Company
+          .findById(req.user.companyId)
+          .select("companyInfo.companyName fullName")
+          .lean();
+        const companyName = company?.companyInfo?.companyName || company?.fullName;
+
+        // When the LOGIN EMAIL moved, both addresses are told: the old one so a
+        // manager who did not expect this can raise the alarm, the new one so
+        // they know where they sign in now. `assigned` was read before the
+        // update, so it still holds the old address.
+        const recipients = [saved?.email];
+        if (changedFields.includes("Email") && assigned.email) recipients.unshift(assigned.email);
+        const unique = [...new Set(recipients.filter(Boolean))];
+
+        for (const to of unique) {
+          await companyMember.sendWarehouseManagerUpdatedEmail({
+            managerName: saved?.name,
+            to,
+            changedFields,
+            password: rawPassword || undefined, // plaintext, request-scoped, email only
+            companyName,
+            warehouseName: wh.name,
+          });
+        }
+        managerEmailSent = unique.length > 0;
+      } catch (mailErr) {
+        console.error("updateWarehouse: manager update email failed:", mailErr.message);
+      }
+    }
+
+    const updated = await Warehouse.findById(wh._id);
+    res.json({ success: true, message: "Warehouse updated", data: updated, manager: publicManager(saved), managerEmailSent });
   } catch (err) {
     console.error("updateWarehouse error:", err);
-    res.status(500).json({ success: false, message: "Server error" });
+    res
+      .status(err.status || 500)
+      .json({ success: false, message: err.status ? err.message : "Server error" });
   }
 };
 

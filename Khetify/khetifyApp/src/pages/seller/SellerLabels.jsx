@@ -301,7 +301,7 @@ const SellerLabels = () => {
             <div className="flex-1 min-w-[220px]">
               <Field label="Lot">
                 <select className={inputCls} value={lotId} onChange={(e) => setLotId(e.target.value)}>
-                  {lots.map((l) => <option key={l._id} value={l._id}>{lotLabel(l)} (avail {l.availableStock})</option>)}
+                  {lots.map((l) => <option key={l._id} value={l._id}>{lotLabel(l)}</option>)}
                   {lots.length === 0 && <option value="">No lots yet</option>}
                 </select>
               </Field>
