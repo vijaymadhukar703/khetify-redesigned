@@ -272,6 +272,15 @@ export const getSellerOrderSourceOptions = (id) => data(api.get(`orders/${id}/so
 export const updateSellerOrderStatus = (id, statusOrBody) =>
   data(api.patch(`orders/${id}/status`, typeof statusOrBody === "string" ? { status: statusOrBody } : statusOrBody));
 
+/* ---- POS counter sale ---- */
+// One call: creates the order (FEFO reservation + GST + invoice number)
+// AND commits the stock, because the goods leave the counter immediately.
+export const createSellerPosSale = (body) => data(api.post("pos/sale", body));
+// A4 GST invoice for a POS sale. Returns a PDF blob, not JSON — so it must
+// NOT go through the JSON data(...) wrapper.
+export const getSellerPosInvoicePdf = (id) =>
+  api.get(`pos/sale/${id}/invoice`, { responseType: "blob" }).then((r) => r.data);
+
 /* ---- live location consent ---- */
 // { status: "granted" | "denied", latitude?, longitude?, accuracy? }
 // Resolve coordinates to a readable address WITHOUT saving — the confirmation

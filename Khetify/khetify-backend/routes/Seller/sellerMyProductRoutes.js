@@ -41,9 +41,14 @@ const {
  * middlewares/principalRouteGuard.js already refuses a non-seller token on
  * /api/seller/*.
  *
- * "myproduct:manage" resolves through config/permissions.js, where seller_admin
- * holds "*" — so it passes today without that file being touched, and the
- * capability is there to hand to a narrower seller role later.
+ * CAPABILITIES ARE PER-ROUTE, split read from write: every GET takes
+ * "myproduct:read" and every write (POST/PUT) takes "myproduct:manage". Both
+ * resolve through config/permissions.js, where seller_admin holds "*" and so
+ * keeps the whole module. "myproduct:read" is additionally granted to
+ * seller_manager and seller_staff, so a warehouse user can SEE the products
+ * their warehouse physically holds without being able to change any of them —
+ * creating, editing, adding stock and publishing all stay on
+ * "myproduct:manage". A single blanket capability could not express that.
  *
  * ONE gate does apply, and it is not any of those three:
  * requireSellerProductDocs asks only whether the seller has a GST certificate,
@@ -55,16 +60,17 @@ const {
  * The sidebar entry and the page route are untouched: My Products is always
  * reachable, it is the CONTENT that waits on the paperwork.
  */
-router.use(auth, authorize("myproduct:manage"), requireSellerProductDocs);
+router.use(auth, requireSellerProductDocs);
 
 // ROUTE ORDER MATTERS: these two literal paths must be declared BEFORE "/:id",
 // or Express matches "stock" / "duplicate-check" as an :id and the handlers
 // below are never reached.
-router.get("/stock", getMyProductStock);
-router.post("/stock", validate({ body: addMyProductStockBody }), addMyProductStock);
-router.get("/duplicate-check", duplicateCheck);
+router.get("/stock", authorize("myproduct:read"), getMyProductStock);
+// POST /stock ADDS stock — a write, despite sharing the path with the GET above.
+router.post("/stock", authorize("myproduct:manage"), validate({ body: addMyProductStockBody }), addMyProductStock);
+router.get("/duplicate-check", authorize("myproduct:read"), duplicateCheck);
 
-router.get("/", listMyProducts);
+router.get("/", authorize("myproduct:read"), listMyProducts);
 
 /* WRITE ROUTES ARE MULTIPART, in the company routes' order:
    auth → authorize → upload → (normalise) → validate → handler.
@@ -78,15 +84,17 @@ router.get("/", listMyProducts);
    schema stay strict AND the images survive. */
 router.post(
   "/",
+  authorize("myproduct:manage"),
   upload.uploadProductFields,
   applyUploadedImages,
   validate({ body: createMyProductBody }),
   createMyProduct
 );
 
-router.get("/:id", getMyProduct);
+router.get("/:id", authorize("myproduct:read"), getMyProduct);
 router.put(
   "/:id",
+  authorize("myproduct:manage"),
   upload.uploadProductFields,
   applyUploadedImages,
   validate({ body: updateMyProductBody }),

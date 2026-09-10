@@ -945,7 +945,12 @@ const SellerMyProducts = () => {
                       <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Product Details</th>
                       <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Category</th>
                       <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Brand</th>
+<<<<<<< HEAD
+                      <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Product Code</th>
+                      <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">MRP (₹)</th>
+=======
                       <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">{canManage ? 'MRP (₹)' : 'Price (₹)'}</th>
+>>>>>>> 42555cb863ee1b825f83f87a798f64cbd7543002
                       <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Stock</th>
                       <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Status</th>
                       <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Marketplace</th>
@@ -993,6 +998,10 @@ const SellerMyProducts = () => {
                           </td>
                           <td data-label="Category" className="px-6 py-4 text-xs text-stone-500 font-bold uppercase">{p.category || '—'}</td>
                           <td data-label="Brand" className="px-6 py-4 text-sm text-stone-700">{p.brandName || '—'}</td>
+<<<<<<< HEAD
+                          <td data-label="Product Code" className="px-6 py-4 text-xs font-bold font-mono text-stone-700 uppercase">{p.product_code || '—'}</td>
+                          <td data-label="MRP (₹)" className="px-6 py-4 text-sm text-stone-900 font-black">₹{p.mrp ?? '—'}</td>
+=======
                           {canManage ? (
                             <td data-label="MRP (₹)" className="px-6 py-4 text-sm text-stone-900 font-black">₹{p.mrp ?? '—'}</td>
                           ) : (() => {
@@ -1011,6 +1020,7 @@ const SellerMyProducts = () => {
                               </td>
                             );
                           })()}
+>>>>>>> 42555cb863ee1b825f83f87a798f64cbd7543002
                           <td data-label="Stock" className="px-6 py-4"><StockCell product={p} /></td>
                           <td data-label="Status" className="px-6 py-4"><StatusPill status={p.productStatus} /></td>
                           <td data-label="Marketplace" className="px-6 py-4">

@@ -86,6 +86,14 @@ const ROLE_CAPABILITIES = {
     "warehouse:manage",
     "supply:*",
     "inventory:read",
+    // Read-only visibility of the seller's OWN catalogue, so a warehouse user
+    // can see the products their warehouse holds. Every mutation (create,
+    // edit, add stock, publish) stays on "myproduct:manage" — seller_admin only.
+    "myproduct:read",
+    // Read-only visibility of marketplace listing status, so a warehouse user
+    // can see whether a product is live. Publishing and unpublishing stay on
+    // the manage capability.
+    "listing:read",
     "transfer:*",
     "label:*",
     "customer:*",
@@ -100,6 +108,11 @@ const ROLE_CAPABILITIES = {
     "catalog:read",
     "supply:read",
     "inventory:read",
+    // Read-only visibility of the seller's OWN catalogue (see seller_manager).
+    "myproduct:read",
+    // Read-only visibility of marketplace listing status (see seller_manager):
+    // whether a product is live. Publishing and unpublishing stay on manage.
+    "listing:read",
     "transfer:read",
     "label:read",
     "label:print",
