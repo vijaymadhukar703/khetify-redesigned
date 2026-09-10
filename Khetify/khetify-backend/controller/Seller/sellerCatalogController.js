@@ -13,7 +13,7 @@ const pcService = require("../../services/pcService");
  * company's margin can never leak to a seller. ProductCost is never queried.
  */
 const SELLER_PRODUCT_FIELDS =
-  "productName category skuNumber brandName packagingType unit unitType mrp hsnCode productImages";
+  "productName category skuNumber brandName packagingType unit unitType mrp hsnCode productImages product_code";
 
 /** Resolve the caller's catalog company, gated on an ACTIVE PC (issuing a PC is
  * now the authorization — there is no separate link approval). Picks the

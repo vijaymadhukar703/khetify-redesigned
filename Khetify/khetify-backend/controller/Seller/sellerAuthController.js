@@ -84,13 +84,16 @@ exports.registerSeller = async (req, res) => {
     const normEmail = email ? String(email).toLowerCase().trim() : null;
     const normPhone = phone ? String(phone).trim() : null;
 
-    // Reject duplicate email/phone.
-    const query = [];
-    if (normEmail) query.push({ email: normEmail });
-    if (normPhone) query.push({ phone: normPhone });
-    const existing = query.length ? await Seller.findOne({ $or: query }) : null;
-    if (existing) {
-      return res.status(400).json({ message: "Seller already exists" });
+    // Reject duplicate email — check separately for specific error message
+    const existingEmail = normEmail ? await Seller.findOne({ email: normEmail }) : null;
+    if (existingEmail) {
+      return res.status(400).json({ message: "This email is already registered." });
+    }
+
+    // Reject duplicate phone
+    const existingPhone = normPhone ? await Seller.findOne({ phone: normPhone }) : null;
+    if (existingPhone) {
+      return res.status(400).json({ message: "This phone number is already registered." });
     }
 
     const passwordHash = await bcrypt.hash(String(password), 10);

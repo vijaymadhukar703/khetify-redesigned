@@ -172,25 +172,27 @@ exports.registerCompany = async (req, res) => {
       return res.status(400).json({ message: "Password must be at least 6 characters" });
     }
 
-    // Check existing company
-    const query = [];
-    if (email) query.push({ email });
-    if (number) query.push({ number });
+    // Check existing company — check email and phone separately for specific error messages
+    const existingEmail = email ? await Company.findOne({ email: String(email).toLowerCase().trim() }) : null;
+    if (existingEmail) {
+      return res.status(400).json({ message: "This email is already registered." });
+    }
 
-    const existing = await Company.findOne({ $or: query });
-
-    if (existing) {
-      return res.status(400).json({ message: "Company already exists" });
+    const existingPhone = number ? await Company.findOne({ number: String(number).trim() }) : null;
+    if (existingPhone) {
+      return res.status(400).json({ message: "This phone number is already registered." });
     }
 
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Create company
+    // Create company — normalize email (lowercase + trim)
+    const normEmail = email ? String(email).toLowerCase().trim() : null;
+    const normNumber = number ? String(number).trim() : null;
     const company = new Company({
       fullName,
-      email: email || null,
-      number: number || null,
+      email: normEmail,
+      number: normNumber,
       password: hashedPassword,
       status: "pending",
     });

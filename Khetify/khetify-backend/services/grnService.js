@@ -10,6 +10,7 @@ const { nextSeq } = require("./counterService");
 const lotService = require("./lotService");
 const locationService = require("./locationService");
 const { assertWarehouseCapacity } = require("./warehouseCapacityService");
+const stockNotificationService = require("./stockNotificationService");
 
 function httpErr(message, status = 400) {
   const err = new Error(message);
@@ -285,10 +286,30 @@ async function postGRN(companyId, grnId, { performedBy } = {}) {
     grn.qcBy = performedBy;
     await grn.save({ session });
 
-    return taskDocs.length;
+    return { putawayTaskCount: taskDocs.length, inventoryTasks: tasks };
   });
 
-  return { grn, putawayTasks: created };
+  // Trigger stock availability notifications (non-blocking, errors logged only)
+  _notifyStockAvailable(created.inventoryTasks).catch((err) => console.error("Stock notification batch error:", err));
+
+  return { grn, putawayTasks: created.putawayTaskCount };
+}
+
+// Trigger stock availability notifications (non-blocking, errors logged only)
+async function _notifyStockAvailable(tasks) {
+  if (!tasks || tasks.length === 0) return;
+  for (const task of tasks) {
+    try {
+      const inv = await Inventory.findById(task.inventoryId).lean();
+      if (inv && inv.availableStock > 0) {
+        stockNotificationService
+          .checkAndNotifyStockAvailability(task.productId, null, inv.availableStock)
+          .catch((err) => console.error(`Stock notification error for product ${task.productId}:`, err));
+      }
+    } catch (err) {
+      console.error(`Error checking stock notification for task ${task.inventoryId}:`, err);
+    }
+  }
 }
 
 /* ---------------------------------------------------------------- writeoff */

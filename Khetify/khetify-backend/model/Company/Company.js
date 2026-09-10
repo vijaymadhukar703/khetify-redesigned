@@ -166,4 +166,9 @@ const companySchema = new mongoose.Schema(
   { timestamps: true },
 );
 
+// Add unique index on email — ensures email uniqueness at database level
+companySchema.index({ email: 1 }, { unique: true, sparse: true });
+// Add unique index on phone number — ensures phone uniqueness at database level
+companySchema.index({ number: 1 }, { unique: true, sparse: true });
+
 module.exports = mongoose.model("Company", companySchema);
