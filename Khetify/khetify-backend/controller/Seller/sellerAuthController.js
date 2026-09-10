@@ -98,13 +98,29 @@ exports.registerSeller = async (req, res) => {
 
     const passwordHash = await bcrypt.hash(String(password), 10);
 
-    const seller = await Seller.create({
-      email: normEmail,
-      phone: normPhone,
-      passwordHash,
-      status: "pending",
-      sellerInfo: { businessName },
-    });
+    // Create seller with duplicate detection — the unique indexes will catch race conditions
+    let seller;
+    try {
+      seller = await Seller.create({
+        email: normEmail,
+        phone: normPhone,
+        passwordHash,
+        status: "pending",
+        sellerInfo: { businessName },
+      });
+    } catch (createErr) {
+      // Mongoose duplicate key error — caught here in case race condition occurred
+      // after the findOne checks above but before the insert (rare but possible)
+      if (createErr.code === 11000) {
+        const field = Object.keys(createErr.keyPattern)[0];
+        if (field === 'email') {
+          return res.status(400).json({ message: "This email is already registered." });
+        } else if (field === 'phone') {
+          return res.status(400).json({ message: "This phone number is already registered." });
+        }
+      }
+      throw createErr;
+    }
 
     const token = signSellerToken(seller);
 
