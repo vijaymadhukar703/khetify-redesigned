@@ -10,22 +10,42 @@ export const StatCard = ({ label, value, accent }) => (
   </div>
 );
 
-export const Modal = ({ title, onClose, children, wide }) => (
-  <div
-    className="fixed inset-0 z-50 bg-stone-900/40 backdrop-blur-[2px] flex items-center justify-center p-4 font-sora"
-    onClick={(e) => e.target === e.currentTarget && onClose()}
-  >
-    <div className={`bg-white rounded-2xl shadow-xl w-full ${wide ? 'max-w-2xl' : 'max-w-lg'} max-h-[88vh] overflow-y-auto p-6`}>
-      <div className="flex items-start justify-between mb-5">
-        <h3 className="text-lg font-bold text-stone-900">{title}</h3>
-        <button onClick={onClose} className="text-stone-400 hover:text-stone-600 p-1">
-          <span className="material-symbols-outlined">close</span>
-        </button>
+export const Modal = ({ title, onClose, children, wide }) => {
+  const mouseDownOnBackdrop = React.useRef(false);
+
+  const handleBackdropMouseDown = (e) => {
+    // Only track mouseDown if it happened directly on the backdrop, not on child elements
+    mouseDownOnBackdrop.current = e.target === e.currentTarget;
+  };
+
+  const handleBackdropMouseUp = (e) => {
+    // Only close if both mouseDown AND mouseUp happened on the backdrop (not during text selection drag)
+    if (mouseDownOnBackdrop.current && e.target === e.currentTarget) {
+      mouseDownOnBackdrop.current = false;
+      onClose();
+    }
+    // Reset the flag regardless
+    mouseDownOnBackdrop.current = false;
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-stone-900/40 backdrop-blur-[2px] flex items-center justify-center p-4 font-sora"
+      onMouseDown={handleBackdropMouseDown}
+      onMouseUp={handleBackdropMouseUp}
+    >
+      <div className={`bg-white rounded-2xl shadow-xl w-full ${wide ? 'max-w-2xl' : 'max-w-lg'} max-h-[88vh] overflow-y-auto p-6`}>
+        <div className="flex items-start justify-between mb-5">
+          <h3 className="text-lg font-bold text-stone-900">{title}</h3>
+          <button onClick={onClose} className="text-stone-400 hover:text-stone-600 p-1">
+            <span className="material-symbols-outlined">close</span>
+          </button>
+        </div>
+        {children}
       </div>
-      {children}
     </div>
-  </div>
-);
+  );
+};
 
 export const Field = ({ label, required, children }) => {
   // Render a trailing "*" (or an explicit `required` prop) as a red asterisk.

@@ -151,6 +151,9 @@ function AccountMenu({ isAuthed, consumer, redirectPath, onClose, onLogout, clas
           <Link to="/customer-shop/cart" className={item} onClick={onClose}>
             <span className="material-symbols-outlined text-lg text-stone-400">shopping_cart</span> {t("account.myCart")}
           </Link>
+          <Link to="/customer-shop/notifications" className={item} onClick={onClose}>
+  <span className="material-symbols-outlined text-lg text-stone-400">notifications</span> {t("nav.notifications") || "Notifications"}
+</Link>
           <button
             onClick={onLogout}
             className="flex w-full items-center gap-2.5 border-t border-stone-100 px-4 py-2.5 text-left text-[#EA2831] hover:bg-red-50"
@@ -415,6 +418,15 @@ export default function ShopLayout() {
                   </Link>
                 </div>
               )}
+
+
+              {consumer && (
+  <Link to="/customer-shop/notifications" aria-label="Notifications" className="relative flex items-center gap-2 rounded-xl px-2.5 py-2 text-sm font-semibold text-stone-700 transition-colors hover:bg-stone-100">
+    <span className="material-symbols-outlined text-[22px] text-stone-600">notifications</span>
+    <span className="hidden lg:block">{t("nav.notifications") || "Notifications"}</span>
+  </Link>
+)}
+
 
               <Link to={WISHLIST_PATH} aria-label="Wishlist" className="relative flex items-center gap-2 rounded-xl px-2.5 py-2 text-sm font-semibold text-stone-700 transition-colors hover:bg-stone-100">
                 <span className="relative">

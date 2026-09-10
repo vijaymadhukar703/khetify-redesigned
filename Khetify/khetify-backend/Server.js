@@ -60,7 +60,9 @@ const shipmentCostRoutes = require("./routes/Transport/shipmentCostRoutes");
 const ownerRoutes = require("./routes/Analytics/ownerRoutes");
 const auditRoutes = require("./routes/Audit/auditRoutes");
 const shopRoutes = require("./routes/Shop/shopRoutes"); // Public customer storefront (/customer-shop) — browse + consumer auth + checkout
+const shopNotificationRoutes = require("./routes/Shop/shopNotificationRoutes"); // Customer stock notifications
 const sellerRoutes = require("./routes/Seller/sellerRoutes"); // Seller-side IMS (Phase 1: auth + portal)
+const sellerStockRequestRoutes = require("./routes/Seller/sellerStockRequestRoutes"); // Seller demand monitoring
 const sellerWarehouseRoutes = require("./routes/Seller/sellerWarehouseRoutes"); // Seller warehouses (Phase 2b)
 const sellerCatalogRoutes = require("./routes/Seller/sellerCatalogRoutes"); // Seller read-only catalog (Phase 2c)
 const sellerMyProductRoutes = require("./routes/Seller/sellerMyProductRoutes"); // Seller's OWN products + own stock ("My Products")
@@ -235,6 +237,7 @@ app.use("/api/analytics", analyticsRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/purchasing", purchasingRoutes);
 app.use("/api/shop", shopRoutes); // public customer storefront (browse + consumer auth + checkout)
+app.use("/api/shop/notifications", shopNotificationRoutes); // customer stock notifications & inbox
 app.use("/api/seller/warehouses", sellerWarehouseRoutes); // before /api/seller so the specific path wins
 // GST RATE MASTER, REACHABLE BY A SELLER TOKEN.
 //
@@ -272,6 +275,7 @@ app.use("/api/seller/documents", sellerDocumentsRoutes); // PC: KYC/business doc
 app.use("/api/seller/pc-applications", sellerPcAppRoutes); // PC: applications + agreement
 app.use("/api/seller/certificates", sellerCertRoutes); // PC: issued certificates + govt
 app.use("/api/seller/listings", sellerListingRoutes); // PC-gated marketplace listings
+app.use("/api/seller/stock-requests", sellerStockRequestRoutes); // seller demand monitoring
 app.use("/api/seller", sellerRoutes); // Seller-side IMS portal (additive; company mounts untouched)
 
 /* ----- 404 + central error handler (must be last) ----- */

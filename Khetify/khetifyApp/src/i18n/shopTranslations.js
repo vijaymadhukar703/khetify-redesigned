@@ -895,6 +895,57 @@ const en = {
 
 
 
+
+
+
+
+
+/* ══════════ BLOCK A — paste inside  const en = {  ══════════ */
+  "pf.addToCartAria": "Add {name} to cart",
+  "pf.addrRemoved": "Address removed.",
+  "pf.addrSaved": "Address saved.",
+  "pf.addrTypeHome": "Home",
+  "pf.addrTypeOther": "Other",
+  "pf.addrTypeWork": "Work",
+  "pf.addrUpdated": "Address updated.",
+  "pf.addressType": "Address type",
+  "pf.checkAddress": "Add a delivery address",
+  "pf.checkEmail": "Email verified",
+  "pf.checkName": "Name added",
+  "pf.checkPhone": "Phone number added",
+  "pf.completeness": "Profile completeness",
+  "pf.defaultAddress": "Default address",
+  "pf.defaultUpdated": "Default address updated.",
+  "pf.details": "Details",
+  "pf.emailNotVerified": "Email not verified",
+  "pf.emailVerifiedHint": "Verified — used for order notifications",
+  "pf.errLoadAccount": "Could not load your account.",
+  "pf.eyebrow": "Your account",
+  "pf.footer": "© {year} Khetify · Customer account",
+  "pf.helloName": "Hello, {name}",
+  "pf.hidePassword": "Hide password",
+  "pf.manageAll": "Manage your profile, addresses, orders and security — all in one place.",
+  "pf.member": "Member",
+  "pf.memberSince": "Member since",
+  "pf.navAria": "Account sections",
+  "pf.orderUnits": "{count} item",
+  "pf.orderUnitsPlural": "{count} items",
+  "pf.ordersRecentSub": "Your last {count} orders",
+  "pf.paidVia": "Paid via {mode}",
+  "pf.passwordHint": "At least 6 characters",
+  "pf.passwordMismatchHint": "The two passwords don't match yet.",
+  "pf.passwordUpdated": "Password updated.",
+  "pf.pinChecking": "Checking pincode…",
+  "pf.pinFilled": "District and state filled automatically.",
+  "pf.pinNotFound": "Couldn't auto-fill for this pincode — please enter district and state manually.",
+  "pf.recentOrders": "Recent orders",
+  "pf.savedAddress": "{count} saved address",
+  "pf.savedAddressPlural": "{count} saved addresses",
+  "pf.savedItems": "{count} saved item",
+  "pf.savedItemsPlural": "{count} saved items",
+  "pf.showPassword": "Show password",
+
+
 };
 
 /**
@@ -1724,6 +1775,59 @@ const hi = {
   "why.w3.body": "हर बैच पर निर्माण और समाप्ति तिथि होती है, और सबसे पुराना उपयोग-योग्य स्टॉक पहले भेजा जाता है — ताकि आप तक वही पहुँचे जो पहुँचना चाहिए।",
   "why.w3.title": "सिर्फ़ स्टॉक नहीं, तारीख़ के साथ",
  
+
+
+
+
+
+  
+/* ══════════ BLOCK B — paste inside  const hi = {  ══════════ */
+  "pf.addToCartAria": "{name} को कार्ट में जोड़ें",
+  "pf.addrRemoved": "पता हटाया गया।",
+  "pf.addrSaved": "पता सहेजा गया।",
+  "pf.addrTypeHome": "घर",
+  "pf.addrTypeOther": "अन्य",
+  "pf.addrTypeWork": "कार्यस्थल",
+  "pf.addrUpdated": "पता अपडेट हुआ।",
+  "pf.addressType": "पते का प्रकार",
+  "pf.checkAddress": "डिलीवरी पता जोड़ें",
+  "pf.checkEmail": "ईमेल सत्यापित",
+  "pf.checkName": "नाम जोड़ा गया",
+  "pf.checkPhone": "फ़ोन नंबर जोड़ा गया",
+  "pf.completeness": "प्रोफ़ाइल पूर्णता",
+  "pf.defaultAddress": "डिफ़ॉल्ट पता",
+  "pf.defaultUpdated": "डिफ़ॉल्ट पता अपडेट हुआ।",
+  "pf.details": "विवरण",
+  "pf.emailNotVerified": "ईमेल सत्यापित नहीं",
+  "pf.emailVerifiedHint": "सत्यापित — ऑर्डर सूचनाओं के लिए उपयोग होता है",
+  "pf.errLoadAccount": "आपका खाता लोड नहीं हो सका।",
+  "pf.eyebrow": "आपका खाता",
+  "pf.footer": "© {year} खेतिफ़ाय · ग्राहक खाता",
+  "pf.helloName": "नमस्ते, {name}",
+  "pf.hidePassword": "पासवर्ड छिपाएँ",
+  "pf.manageAll": "अपनी प्रोफ़ाइल, पते, ऑर्डर और सुरक्षा — सब एक ही जगह प्रबंधित करें।",
+  "pf.member": "सदस्य",
+  "pf.memberSince": "सदस्य बने",
+  "pf.navAria": "खाता अनुभाग",
+  "pf.orderUnits": "{count} वस्तु",
+  "pf.orderUnitsPlural": "{count} वस्तुएँ",
+  "pf.ordersRecentSub": "आपके पिछले {count} ऑर्डर",
+  "pf.paidVia": "{mode} से भुगतान",
+  "pf.passwordHint": "कम से कम 6 अक्षर",
+  "pf.passwordMismatchHint": "दोनों पासवर्ड अभी मेल नहीं खा रहे।",
+  "pf.passwordUpdated": "पासवर्ड अपडेट हुआ।",
+  "pf.pinChecking": "पिनकोड जाँच रहे हैं…",
+  "pf.pinFilled": "ज़िला और राज्य अपने आप भर दिए गए।",
+  "pf.pinNotFound": "इस पिनकोड के लिए अपने आप नहीं भर सके — कृपया ज़िला और राज्य स्वयं भरें।",
+  "pf.recentOrders": "हाल के ऑर्डर",
+  "pf.savedAddress": "{count} सहेजा गया पता",
+  "pf.savedAddressPlural": "{count} सहेजे गए पते",
+  "pf.savedItems": "{count} सहेजी गई वस्तु",
+  "pf.savedItemsPlural": "{count} सहेजी गई वस्तुएँ",
+  "pf.showPassword": "पासवर्ड दिखाएँ",
+ 
+
+
 
 
 

@@ -104,6 +104,7 @@ import SellerAdministration from './pages/seller/SellerAdministration';
 import SellerProfile from './pages/seller/SellerProfile';
 import SellerWarehouseSettings from './pages/seller/SellerWarehouseSettings';
 import SellerFaq from './pages/seller/SellerFaq';
+import SellerStockRequests from './pages/seller/SellerStockRequests';
 import { SellerSubscriptionProvider } from './context/SellerSubscriptionContext';
 import { SellerPermissionProvider } from './context/SellerPermissionContext';
 
@@ -128,6 +129,7 @@ import ShopHome from './pages/shop/ShopHome';
 import ShopProducts from './pages/shop/ShopProducts';
 import ShopProductDetail from './pages/shop/ShopProductDetail';
 import ShopCart from './pages/shop/ShopCart';
+import ShopNotifications from './pages/shop/ShopNotifications';
 import ShopLogin from './pages/shop/ShopLogin';
 import ShopRegister from './pages/shop/ShopRegister';
 import ShopWishlist from './pages/shop/ShopWishlist';
@@ -358,6 +360,8 @@ function App() {
           <Route path="/seller/outbound" element={<SellerOutbound />} />
           <Route path="/seller/billing" element={<SellerBilling />} />
           <Route path="/seller/faq" element={<SellerFaq />} />
+          <Route path="/seller/billing" element={<SellerBilling />} />
+          <Route path="/seller/stock-requests" element={<SellerStockRequests />} />
         </Route>
 
         {/* ───────────── Platform admin panel (/admin/*) ───────────── */}
@@ -419,7 +423,9 @@ function App() {
             <Route path="wishlist" element={<ShopWishlist />} />
             <Route path="orders" element={<RequireConsumer><ShopOrders /></RequireConsumer>} />
              <Route path="categories" element={<ShopCategories />} />
-           
+            <Route path="orders" element={<RequireConsumer><ShopOrders /></RequireConsumer>} />
+            <Route path="notifications" element={<RequireConsumer><ShopNotifications /></RequireConsumer>} />
+
             
             {/* Unknown /customer-shop/* → storefront home */}
             <Route path="*" element={<Navigate to="/customer-shop" replace />} />

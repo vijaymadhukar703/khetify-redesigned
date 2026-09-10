@@ -295,3 +295,12 @@ export const SELLER_FEATURES = {
 /* ---- RBAC stub (Phase 1): seller_admin holds everything within its scope.
    Real gating (capabilities / subscription) is wired in later phases. ---- */
 export const sellerCan = () => true;
+
+/* ---- demand monitor (stock-request notifications from customers) ----
+   Routed through the shared `api` instance so the interceptor attaches the
+   Bearer token from the SAME "sellerToken" key the rest of the seller portal
+   uses — pages must not read localStorage / call fetch() directly for these. */
+export const getSellerPendingStockRequests = (params = {}) => data(api.get("stock-requests", { params }));
+export const getSellerInterestedCustomers = (productId, params = {}) =>
+  data(api.get(`stock-requests/${productId}`, { params }));
+export const getSellerStockRequestStats = () => data(api.get("stock-requests/stats/summary"));

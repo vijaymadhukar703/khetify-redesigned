@@ -37,6 +37,17 @@ export const SELLER_MODULES = [
   { key: "outbound", label: "Sales", icon: "point_of_sale", phase: 5, desc: "Sell to customers and dealers.", path: "/seller/outbound", live: true, cap: "order:read", noApproval: true },
   { key: "analytics", label: "Stock Valuation", icon: "monitoring", phase: 4, desc: "Stock, aging, expiry & movement reports.", path: "/seller/analytics", live: true, feature: "inventory_view", cap: "report:read" },
   { key: "customers", label: "Customers & Dealers", icon: "groups", phase: 5, desc: "Your end customers and dealers.", path: "/seller/customers", live: true, cap: "customer:read" },
+  // NEW ENTRY (add to SELLER_MODULES array):
+{
+  key: "stockrequests",
+  label: "Demand Monitor",
+  icon: "monitor_heart",
+  phase: 5,
+  desc: "See customers interested in your out-of-stock products.",
+  path: "/seller/stock-requests",
+  live: true,
+  cap: "report:read"
+},
 ];
 
 // Module keys that the sidebar nests under the Administration group (instead of

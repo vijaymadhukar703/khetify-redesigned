@@ -169,7 +169,10 @@ const sellerSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
-sellerSchema.index({ email: 1 });
+// Add unique index on email — ensures email uniqueness at database level
+sellerSchema.index({ email: 1 }, { unique: true, sparse: true });
+// Add unique index on phone — ensures phone uniqueness at database level
+sellerSchema.index({ phone: 1 }, { unique: true, sparse: true });
 
 // Nearest-warehouse / proximity lookups against the stored consent point.
 // 2dsphere skips documents with no point, so accounts that never answered

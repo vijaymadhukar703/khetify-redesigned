@@ -253,6 +253,7 @@ const SellerProductCatalog = () => {
                 <tr className="bg-stone-50/50 border-b border-stone-200">
                   <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Product Details</th>
                   <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Category</th>
+                  <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Product Code</th>
                   {/* <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">SKU Number</th> */}
                   <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">MRP (₹)</th>
                   <th className="px-6 py-5 text-[11px] font-bold text-stone-400 uppercase tracking-widest">Stock</th>
@@ -279,6 +280,7 @@ const SellerProductCatalog = () => {
                       </div>
                     </td>
                     <td data-label="Category" className="px-6 py-4 text-xs text-stone-500 font-bold uppercase">{p.category}</td>
+                    <td data-label="Product Code" className="px-6 py-4 text-xs font-bold font-mono text-stone-700 uppercase">{p.product_code || '—'}</td>
                     {/* <td data-label="SKU Number" className="px-6 py-4 text-[11px] font-bold font-mono text-stone-400 uppercase">{p.skuNumber || '---'}</td> */}
                     <td data-label="MRP (₹)" className="px-6 py-4 text-sm text-stone-900 font-black">₹{p.mrp ?? '—'}</td>
                     <td data-label="Stock" className="px-6 py-4">
@@ -466,6 +468,9 @@ const SellerProductCatalog = () => {
               <div className="col-span-1 md:col-span-2 border-b border-stone-200 pb-2">
                 <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest mb-1">Product Identity</p>
                 <p className="font-black text-lg text-stone-900 leading-tight">{selected.productName}</p>
+                {selected.product_code && (
+                  <p className="text-[10px] text-stone-400 font-mono uppercase tracking-tighter mt-0.5">{selected.product_code}</p>
+                )}
               </div>
               <Detail label="Price (MRP)" value={`₹${selected.mrp ?? '—'}`} accent />
               <Detail label="Category" value={(selected.category || '—').toUpperCase()} />

@@ -165,4 +165,20 @@ export const completeMockShopPayment = (paymentId, body) =>
 export const cancelShopPayment = (paymentId) =>
   data(api.post(`payments/${paymentId}/cancel`));
 
+/* ---- 🔔 Notifications ----
+   Routed through the shared `api` axios instance (like everything else on this
+   page) so the request interceptor attaches the Bearer token from the SAME
+   "shopToken" key the rest of the storefront auth uses. Components must not
+   read localStorage / call fetch() directly for these - that's what caused a
+   logged-in shopper to be told to log in again. */
+export const subscribeStockNotification = (body) => data(api.post("notifications/subscribe", body));
+export const cancelStockNotification = (subscriptionId) =>
+  data(api.delete(`notifications/stock/${subscriptionId}`));
+export const getStockNotifications = (params = {}) => data(api.get("notifications/stock", { params }));
+export const getShopNotificationsInbox = (params = {}) => data(api.get("notifications/inbox", { params }));
+export const markShopNotificationRead = (notificationId) =>
+  data(api.patch(`notifications/${notificationId}/read`));
+export const markAllShopNotificationsRead = () => data(api.patch("notifications/mark-all-read"));
+export const deleteShopNotification = (notificationId) => data(api.delete(`notifications/${notificationId}`));
+
 export default api;

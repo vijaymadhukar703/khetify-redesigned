@@ -7,7 +7,9 @@ import { useCart } from "../../context/CartContext";
 import { useWishlist } from "../../context/WishlistContext";
 import { useT, useShopLanguage } from "../../context/ShopLanguageContext";
 import { rupee } from "../../Components/shop/ProductCard";
+import NotifyMeButton from "../../Components/shop/NotifyMeButton";
 import { HomeProductCard } from "./ShopHome";
+
 
 /* Product detail — real-marketplace UI. UI ONLY. Every existing action and data
    flow is preserved: getShopProduct(listingId) → product; quantity clamp
@@ -24,7 +26,11 @@ import { HomeProductCard } from "./ShopHome";
  */
 const variantLabelFor = (list = []) => {
   const keys = new Set();
-  list.forEach((v) => Object.keys(v.attributes || {}).forEach((k) => keys.add(k)));
+  // Guard against a null/undefined entry in the list — e.g. the sold-out
+  // "Notify Me" button calls this with [selectedVariant] where selectedVariant
+  // is null for a product that has no variants at all, which used to crash
+  // the whole product page instead of just falling back to "Options".
+  list.forEach((v) => v && Object.keys(v.attributes || {}).forEach((k) => keys.add(k)));
   return keys.size === 1 ? [...keys][0] : "Options";
 };
 
@@ -355,25 +361,36 @@ export default function ShopProductDetail() {
     sold: { icon: "block", label: t("pd.soldOut"), cls: "border-2 border-stone-200 bg-white text-stone-400" },
   }[cartState];
 
-  const actionButtons = (
-    <>
-      <button
-        onClick={cartState === "add" || cartState === "incart" ? addToCart : undefined}
-        disabled={cartState === "sold"}
-        aria-live="polite"
-        className={`flex flex-1 items-center justify-center gap-2 rounded-xl py-3.5 text-sm font-bold transition-all duration-300 disabled:cursor-not-allowed ${cartBtn.cls}`}
-      >
-        <span className="material-symbols-outlined text-lg">{cartBtn.icon}</span> {cartBtn.label}
-      </button>
-      <button
-        onClick={buyNow}
-        disabled={!inStock}
-        className="flex flex-1 items-center justify-center gap-2 rounded-xl border-2 border-[#EA2831] bg-[#EA2831] py-3.5 text-sm font-bold text-white shadow-lg shadow-[#EA2831]/25 transition-all hover:border-[#C91E26] hover:bg-[#C91E26] active:scale-[0.99] disabled:cursor-not-allowed disabled:border-stone-200 disabled:bg-stone-200 disabled:text-stone-400 disabled:shadow-none"
-      >
-        <span className="material-symbols-outlined text-lg">bolt</span> {t("pd.buyNow")}
-      </button>
-    </>
-  );
+  // Lines ~358-376 - ACTION BUTTONS SECTION:
+const actionButtons = (
+  <>
+    {!inStock ? (
+      <NotifyMeButton
+        productId={product?.productId}
+        listingId={product?.listingId}
+        variantLabel={selectedVariant?.label || variantLabelFor([selectedVariant]).toLowerCase()}
+      />
+    ) : (
+      <>
+        <button
+          onClick={cartState === "add" || cartState === "incart" ? addToCart : undefined}
+          disabled={cartState === "sold"}
+          aria-live="polite"
+          className={`flex flex-1 items-center justify-center gap-2 rounded-xl py-3.5 text-sm font-bold transition-all duration-300 disabled:cursor-not-allowed ${cartBtn.cls}`}
+        >
+          <span className="material-symbols-outlined text-lg">{cartBtn.icon}</span> {cartBtn.label}
+        </button>
+      </>
+    )}
+    <button
+      onClick={buyNow}
+      disabled={!inStock}
+      className="flex flex-1 items-center justify-center gap-2 rounded-xl border-2 border-[#EA2831] bg-[#EA2831] py-3.5 text-sm font-bold text-white shadow-lg shadow-[#EA2831]/25 transition-all hover:border-[#C91E26] hover:bg-[#C91E26] active:scale-[0.99] disabled:cursor-not-allowed disabled:border-stone-200 disabled:bg-stone-200 disabled:text-stone-400 disabled:shadow-none"
+    >
+      <span className="material-symbols-outlined text-lg">bolt</span> {t("pd.buyNow")}
+    </button>
+  </>
+);
 
   const scrollRail = (dir) => {
     const el = railRef.current;
