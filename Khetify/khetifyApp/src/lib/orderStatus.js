@@ -25,7 +25,7 @@ export const STATUS_BLURB = {
   confirmed: "The seller accepted your order and reserved your stock.",
   packed: "Your items are packed and waiting for pickup.",
   shipped: "Your order is on its way.",
-  delivered: "Delivered. Thanks for shopping with Khetify!",
+  delivered: "Delivered. Thanks for shopping with Khettify!",
   cancelled: "This order was cancelled.",
   returned: "This order was returned.",
 };

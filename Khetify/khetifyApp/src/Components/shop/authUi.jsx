@@ -99,7 +99,7 @@ export function KhetifyLogo({ light = false, to = "/customer-shop" }) {
       <span className="inline-flex h-[34px] w-[34px] items-center justify-center rounded-[10px] bg-[#EA2831]">
         <Icon.Store className="h-[18px] w-[18px] text-white" />
       </span>
-      <span className="font-heading text-2xl font-extrabold tracking-tight">Khetify</span>
+      <span className="font-heading text-2xl font-extrabold tracking-tight">Khettify</span>
     </Link>
   );
 }

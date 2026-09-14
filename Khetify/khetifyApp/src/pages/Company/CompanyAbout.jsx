@@ -36,7 +36,7 @@ const CompanyAbout = () => {
             <header className="sticky top-0 z-50 w-full border-b border-gray-100 bg-white/90 backdrop-blur-md">
                 <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
                     <div className="flex items-center gap-2">
-                        <span className="text-2xl font-bold tracking-tight text-[#ea2a33]">Khetify</span>
+                        <span className="text-2xl font-bold tracking-tight text-[#ea2a33]">Khettify</span>
                     </div>
                     <nav className="hidden md:flex items-center gap-8 h-full">
                         <a className="text-sm font-medium text-[#1b0e0e] border-b-2 border-[#ea2a33] pb-1 transition-colors" href="#hero">Platform</a>
@@ -109,11 +109,11 @@ const CompanyAbout = () => {
   </div>
 </section>
 
-                {/* Why Khetify Section */}
+                {/* Why Khettify Section */}
                 <section className="w-full px-4 py-20 sm:px-6 lg:px-8 bg-white">
                     <div className="mx-auto max-w-7xl">
                         <div className="mb-12 md:text-center max-w-3xl mx-auto">
-                            <h2 className="text-3xl font-black tracking-tight text-[#1b0e0e] sm:text-4xl">Why Khetify?</h2>
+                            <h2 className="text-3xl font-black tracking-tight text-[#1b0e0e] sm:text-4xl">Why Khettify?</h2>
                             <p className="mt-4 text-lg text-[#6b7280]">Empowering your agricultural business with enterprise-grade tools built for scale.</p>
                         </div>
                         <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
@@ -139,7 +139,7 @@ const CompanyAbout = () => {
                 <section className="w-full bg-[#f8f9fa] px-4 py-20 sm:px-6 lg:px-8">
                     <div className="mx-auto max-w-7xl">
                         <div className="mb-16 md:text-center">
-                            <h2 className="text-3xl font-black tracking-tight text-[#1b0e0e] sm:text-4xl">How Khetify Works</h2>
+                            <h2 className="text-3xl font-black tracking-tight text-[#1b0e0e] sm:text-4xl">How Khettify Works</h2>
                         </div>
                         <div className="relative">
                             <div className="absolute top-1/2 left-0 hidden h-0.5 w-full -translate-y-1/2 bg-gray-200 lg:block"></div>
@@ -252,7 +252,7 @@ const CompanyAbout = () => {
                 <div className="bg-white p-8 rounded-2xl border border-stone-200 shadow-sm flex items-start gap-5 hover:shadow-md transition-shadow">
                     <span className="material-symbols-outlined text-[#EA2831] text-2xl mt-1">cloud</span>
                     <p className="text-sm font-bold text-stone-700 leading-relaxed">
-                        Khetify provides platform infrastructure, pricing visibility, and network access
+                        Khettify provides platform infrastructure, pricing visibility, and network access
                     </p>
                 </div>
                 <div className="bg-white p-8 rounded-2xl border border-stone-200 shadow-sm flex items-start gap-5 hover:shadow-md transition-shadow">
@@ -283,7 +283,7 @@ const CompanyAbout = () => {
                                     <tr className="border-b border-gray-100 bg-gray-50/50">
                                         <th className="p-6 text-sm font-medium text-[#6b7280] w-1/3">Feature</th>
                                         <th className="p-6 text-lg font-bold text-gray-400 w-1/3">Traditional Methods</th>
-                                        <th className="p-6 text-lg font-bold text-[#ea2a33] w-1/3 bg-[#ea2a33]/5">Khetify Platform</th>
+                                        <th className="p-6 text-lg font-bold text-[#ea2a33] w-1/3 bg-[#ea2a33]/5">Khettify Platform</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-100 text-sm font-medium">
@@ -298,7 +298,7 @@ const CompanyAbout = () => {
                                             <td data-label="Traditional Methods" className="p-6 text-[#6b7280]">
                                                 <span className="material-symbols-outlined text-red-400 text-sm align-middle mr-2">close</span> {row.trad}
                                             </td>
-                                            <td data-label="Khetify Platform" className="p-6 bg-[#ea2a33]/5 text-[#1b0e0e]">
+                                            <td data-label="Khettify Platform" className="p-6 bg-[#ea2a33]/5 text-[#1b0e0e]">
                                                 <span className="material-symbols-outlined text-green-500 text-sm align-middle mr-2 font-bold">check</span> {row.khet}
                                             </td>
                                         </tr>
@@ -330,7 +330,7 @@ const CompanyAbout = () => {
                     <div className="mx-auto max-w-7xl">
                         <div className="grid grid-cols-1 gap-12 md:grid-cols-4 lg:gap-16">
                             <div className="col-span-1">
-                                <span className="text-2xl font-bold text-[#ea2a33]">Khetify</span>
+                                <span className="text-2xl font-bold text-[#ea2a33]">Khettify</span>
                                 <p className="mt-4 text-sm text-[#6b7280]">Empowering agriculture through technology. Building the future of farm-to-business commerce.</p>
                             </div>
                             <div>
@@ -358,7 +358,7 @@ const CompanyAbout = () => {
                             </div>
                         </div>
                         <div className="mt-12 border-t border-gray-200 pt-8 text-center md:text-left">
-                            <p className="text-sm text-[#6b7280]">© 2026 Khetify Technologies Pvt Ltd. All rights reserved.</p>
+                            <p className="text-sm text-[#6b7280]">© 2026 Jain Beej Bhandar Agro Pvt Ltd. All rights reserved.</p>
                         </div>
                     </div>
                 </footer>

@@ -125,12 +125,12 @@ const CompanyRegister = () => {
         <div className="w-full max-w-[440px] bg-white rounded-xl shadow-lg p-8 sm:p-10 border border-gray-100">
           <div className="mb-6 text-center">
             <h1 className="text-[#ea2a33] text-4xl font-bold tracking-tight">
-              Khetify
+              Khettify
             </h1>
           </div>
           <div className="mb-6 text-center">
             <h2 className="text-2xl font-bold text-gray-900 mb-6">
-              Create your Khetify account
+              Create your Khettify account
             </h2>
           </div>
 

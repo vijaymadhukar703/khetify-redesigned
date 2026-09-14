@@ -534,7 +534,7 @@ export default function ShopCheckout() {
     const map = new Map();
     for (const i of items) {
       const key = i.sellerId || "unknown";
-      if (!map.has(key)) map.set(key, { sellerName: i.sellerName || "Khetify seller", items: [] });
+      if (!map.has(key)) map.set(key, { sellerName: i.sellerName || "Khettify seller", items: [] });
       map.get(key).items.push(i);
     }
     return [...map.values()];
@@ -575,7 +575,7 @@ export default function ShopCheckout() {
   const sellerNameMap = () => {
     const sellerNames = {};
     for (const i of items) {
-      if (i.sellerId) sellerNames[String(i.sellerId)] = i.sellerName || "Khetify seller";
+      if (i.sellerId) sellerNames[String(i.sellerId)] = i.sellerName || "Khettify seller";
     }
     return sellerNames;
   };
