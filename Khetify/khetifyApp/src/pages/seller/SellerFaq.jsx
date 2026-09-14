@@ -13,7 +13,7 @@ const SellerFaq = () => (
     media={{
       featured: {
         title: 'Getting Started',
-        description: 'Dekhiye kaise Khetify par seller account banaye aur PC ke liye apply karein.',
+        description: 'Dekhiye kaise Khettify par seller account banaye aur PC ke liye apply karein.',
         embedUrl: '', // ← apni video ka URL yahan paste karein
       },
       demosHref: '', // ← "View all demo videos" ka link yahan daalein

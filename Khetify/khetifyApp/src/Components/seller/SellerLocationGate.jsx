@@ -83,7 +83,7 @@ export default function SellerLocationGate({ children }) {
       onPreview={previewSellerLocation}
       text={{
         title: "Share your live location",
-        body: "Allow location access so Khetify can suggest the nearest warehouses, speed up delivery details and show what is available around you. You can change this later in your browser settings.",
+        body: "Allow location access so Khettify can suggest the nearest warehouses, speed up delivery details and show what is available around you. You can change this later in your browser settings.",
         allow: "Allow location",
         deny: "Not now",
         working: "Getting your location…",

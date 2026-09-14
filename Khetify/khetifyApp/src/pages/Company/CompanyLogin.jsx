@@ -140,7 +140,7 @@ const CompanyLogin = () => {
         <div className="w-full max-w-[440px] bg-white rounded-xl shadow-lg p-8 sm:p-10 border border-gray-100">
           <div className="mb-6 text-center">
             <h1 className="text-[#ea2a33] text-4xl font-bold tracking-tight">
-              Khetify
+              Khettify
             </h1>
           </div>
 
@@ -149,7 +149,7 @@ const CompanyLogin = () => {
               Login to your account
             </h2>
             <p className="text-sm text-gray-500 font-medium">
-              Welcome back to Khetify
+              Welcome back to Khettify
             </p>
           </div>
 

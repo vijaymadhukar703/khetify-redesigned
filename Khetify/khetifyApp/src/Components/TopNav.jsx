@@ -42,7 +42,7 @@ const TopNav = ({ onMenuClick, brand, homePath = '/', resolveCrumb, Bell, profil
           title="Home"
         >
           <span className="text-[#EA2831] text-xl font-bold tracking-tight hover:opacity-80 transition-opacity">
-            {brand?.label || 'Khetify'}
+            {brand?.label || 'Khettify'}
           </span>
           {brand?.sublabel && (
             <span className="text-[10px] font-bold uppercase tracking-wider text-stone-400 bg-stone-100 rounded-full px-2 py-0.5">

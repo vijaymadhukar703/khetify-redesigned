@@ -30,7 +30,7 @@ export const SELLER_MODULES = [
   { key: "inbound", label: "Inbound Supply", icon: "local_shipping", phase: 3, desc: "Request & track bulk supply from your company.", path: "/seller/supply", live: true, feature: "supply_workflow", cap: "supply:read" },
   { key: "catalog", label: "Product Catalog", icon: "inventory_2", phase: 2, desc: "Products supplied by your company.", path: "/seller/products", live: true, feature: "basic_catalog", cap: "catalog:read" },
   { key: "myproducts", label: "My Products", icon: "shopping_bag", phase: 2, desc: "Your own products and their stock.", path: "/seller/my-products", live: true, cap: "myproduct:read", noApproval: true },
-  { key: "listings", label: "Marketplace Listings", icon: "storefront", phase: 2, desc: "Products you've published on the Khetify storefront.", path: "/seller/listings", live: true, cap: "catalog:read", noApproval: true },
+  { key: "listings", label: "Marketplace Listings", icon: "storefront", phase: 2, desc: "Products you've published on the Khettify storefront.", path: "/seller/listings", live: true, cap: "catalog:read", noApproval: true },
   { key: "warehouses", label: "Warehouses", icon: "warehouse", phase: 2, desc: "Your storage locations.", path: "/seller/warehouses", live: true, cap: "warehouse:read", noApproval: true },
   { key: "operations", label: "Stock Transfers", icon: "sync_alt", phase: 4, desc: "Receive, send, transfer & trace stock.", path: "/seller/operations", live: true, feature: "stock_transfers", cap: "transfer:read" },
   { key: "labels", label: "Barcodes & Labels", icon: "qr_code_2", phase: 4, desc: "Print & scan your unit barcodes.", path: "/seller/labels", live: true, feature: "unit_labels", cap: "label:read" },

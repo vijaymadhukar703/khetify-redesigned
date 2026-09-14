@@ -140,7 +140,7 @@ export default function ShopPayment() {
           orderId: res.data.gatewayOrderId,
           amount: Math.round((res.data.amount || 0) * 100),
           currency: res.data.currency || "INR",
-          name: "Khetify",
+          name: "Khettify",
           description: t("pay.description"),
           prefill: {},
           theme: { color: "#EA2831" },
@@ -247,7 +247,7 @@ export default function ShopPayment() {
             <span className="inline-flex h-[30px] w-[30px] items-center justify-center rounded-[9px] bg-[#EA2831]">
               <span className="material-symbols-outlined text-[17px] text-white">storefront</span>
             </span>
-            <span className="font-heading text-xl font-extrabold tracking-tight">Khetify</span>
+            <span className="font-heading text-xl font-extrabold tracking-tight">Khettify</span>
           </span>
         </div>
 

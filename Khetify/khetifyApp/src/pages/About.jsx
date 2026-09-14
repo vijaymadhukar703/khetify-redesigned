@@ -70,7 +70,7 @@ const About = () => {
                             can compress the brand before the nav on a tight
                             viewport, which is what clipped it. */}
                         <a href="/about" className="flex shrink-0 items-center gap-2">
-                            <h2 className="text-primary text-2xl font-bold tracking-tight font-heading whitespace-nowrap">Khetify</h2>
+                            <h2 className="text-primary text-2xl font-bold tracking-tight font-heading whitespace-nowrap">Khettify</h2>
                         </a>
 
                         <div className="hidden md:flex flex-1 justify-end items-center gap-8">
@@ -246,7 +246,7 @@ const About = () => {
                             </h2>
                             <div className="flex flex-col gap-1">
                                 <p className="text-[#5a606a] text-lg max-w-3xl mx-auto">
-                                    Khetify is built to bring clarity and structure to agricultural buying and selling.
+                                    Khettify is built to bring clarity and structure to agricultural buying and selling.
                                 </p>
                                 <p className="text-[#5a606a] text-lg max-w-3xl mx-auto">
                                     It creates a single digital space where products and participants are clearly represented.
@@ -291,12 +291,12 @@ const About = () => {
                     </div>
                 </section>
 
-                {/* How Khetify Works */}
+                {/* How Khettify Works */}
                 <section className="w-full py-20 px-4 md:px-10 bg-background-light border-y border-[#f0e4e4]">
                     <div className="max-w-7xl mx-auto w-full">
                         <div className="text-center mb-12">
                             <span className="text-primary font-bold tracking-wider uppercase text-sm">Workflow</span>
-                            <h2 className="text-text-main text-3xl md:text-4xl font-bold font-heading mt-2">How Khetify Works</h2>
+                            <h2 className="text-text-main text-3xl md:text-4xl font-bold font-heading mt-2">How Khettify Works</h2>
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                             <div className="bg-white p-8 rounded-xl shadow-soft border border-gray-100 flex flex-col items-center text-center relative group hover:-translate-y-1 hover:border-primary/20 transition-all duration-300">
@@ -333,7 +333,7 @@ const About = () => {
                     </div>
                 </section>
 
-                {/* Why Khetify Exists */}
+                {/* Why Khettify Exists */}
                 <section className="w-full py-20 px-4 md:px-10 bg-white">
                     <div className="max-w-7xl mx-auto w-full">
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
@@ -343,7 +343,7 @@ const About = () => {
                                 </div>
                             </div>
                             <div className="order-1 lg:order-2 flex flex-col gap-6">
-                                <h2 className="text-text-main text-3xl md:text-5xl font-bold font-heading">Why Khetify Exists</h2>
+                                <h2 className="text-text-main text-3xl md:text-5xl font-bold font-heading">Why Khettify Exists</h2>
                                 <p className="text-lg text-text-muted">
                                     We bridge the gap between opacity and transparency. The traditional market is flooded with inefficiencies that hurt everyone.
                                 </p>
@@ -524,32 +524,21 @@ const About = () => {
                 </section>
 
               {/* Founder Section */}
-{/* Founder Section */}
 <section className="w-full py-20 px-4 md:px-10 bg-background-light">
     <div className="max-w-5xl mx-auto w-full">
         <div className="flex flex-col md:flex-row items-center gap-12">
-            <div className="flex-shrink-0 relative">
-                <div className="w-64 h-64 md:w-80 md:h-80 rounded-full overflow-hidden border-8 border-white shadow-xl">
-                    <img 
-                        alt="Vansh Jain - Co-Founder Khetify" 
-                        className="w-full h-full object-cover grayscale hover:grayscale-0 transition-all duration-500" 
-                        src="/Vansh sir image.png" 
-                    />
-                </div>
-                <div className="absolute bottom-4 right-4 bg-white px-4 py-2 rounded-lg shadow-md">
-                    <p className="text-xs font-bold text-primary uppercase tracking-wide">Origin</p>
-                    <p className="text-sm font-bold text-text-main">Jain Beej Bhandar</p>
-                </div>
+            <div className="flex-shrink-0 flex items-center justify-center">
+                <img
+                    alt="Jain Beej Bhandar Agro Pvt Ltd"
+                    className="w-80 md:w-[420px] object-contain"
+                    src="/bij_bhandar_logo.png"
+                />
             </div>
             <div className="flex flex-col gap-6 text-center md:text-left">
                 <h2 className="text-3xl md:text-4xl font-bold font-heading text-text-main">Rooted in Experience</h2>
                 <p className="text-lg text-text-muted leading-relaxed">
-                    "Khetify wasn't built in a boardroom. It was born from decades of experience at <span className="text-text-main font-semibold">Jain Beej Bhandar Agro Private Limited</span>, seeing firsthand the struggles customers faced with quality and pricing. We digitized our trust to scale it for the entire nation."
+                    "Khettify wasn't built in a boardroom. It was born from decades of experience at <span className="text-text-main font-semibold">Jain Beej Bhandar Agro Private Limited</span>, seeing firsthand the struggles customers faced with quality and pricing. We digitized our trust to scale it for the entire nation."
                 </p>
-                <div>
-                    <h4 className="text-xl font-bold font-heading text-primary">Vansh Jain</h4>
-                    <span className="text-sm text-text-muted">Founder, Khetify</span>
-                </div>
             </div>
         </div>
     </div>
@@ -557,8 +546,7 @@ const About = () => {
                 {/* Quote Section */}
                 <section className="w-full py-24 px-4 md:px-10 bg-secondary flex justify-center items-center">
                     <div className="max-w-4xl mx-auto text-center">
-                        <span className="material-symbols-outlined text-6xl text-primary/20 mb-6">format_quote</span>
-                        <h2 className="text-2xl md:text-4xl font-bold font-heading text-primary leading-tight">
+                         <h2 className="text-2xl md:text-4xl font-bold font-heading text-primary leading-tight">
                             "To empower every Indian customers with the dignity of choice, the assurance of quality, and the power of fair pricing."
                         </h2>
                     </div>
@@ -570,7 +558,7 @@ const About = () => {
                 <div className="max-w-7xl mx-auto w-full">
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-12 mb-12">
                         <div className="flex flex-col gap-4">
-                            <h2 className="text-2xl font-bold text-primary font-heading">Khetify</h2>
+                            <h2 className="text-2xl font-bold text-primary font-heading">Khettify</h2>
                             <p className="text-sm text-text-muted leading-relaxed">
                                 India's first transparent agricultural ecosystem. Connecting the roots of the nation to the digital future.
                             </p>
@@ -611,7 +599,7 @@ const About = () => {
                         </div>
                     </div>
                     <div className="border-t border-gray-200 pt-8 flex flex-col md:flex-row justify-between items-center gap-4">
-                        <p className="text-sm text-text-muted text-center md:text-left">© 2026 Khetify Technologies Pvt Ltd. All rights reserved.</p>
+                        <p className="text-sm text-text-muted text-center md:text-left">© 2026 Jain Beej Bhandar Agro Pvt Ltd. All rights reserved.</p>
                         <div className="flex items-center gap-2 text-sm text-text-muted">
                             <span className="w-2 h-2 rounded-full bg-green-500"></span>
                             System Operational
