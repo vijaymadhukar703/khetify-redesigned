@@ -21,6 +21,32 @@ function load() {
     console.warn("⚠️  MASTER_KEY not set — channel credentials use a dev default. Set it in production.");
   }
 
+  /* 🗄️ S3 storage. Static keys are OPTIONAL (EC2 uses its IAM role via the SDK
+     default credential chain), but bucket + region are not, and half a key
+     pair is always a mistake. */
+  if ((process.env.STORAGE_DRIVER || "local") === "s3") {
+    const s3Missing = [];
+    if (!process.env.S3_BUCKET) s3Missing.push("S3_BUCKET");
+    if (!process.env.S3_REGION && !process.env.AWS_REGION) s3Missing.push("S3_REGION");
+    if (s3Missing.length) {
+      // eslint-disable-next-line no-console
+      console.error(`❌ STORAGE_DRIVER=s3 requires: ${s3Missing.join(", ")}.`);
+      process.exit(1);
+    }
+    if (Boolean(process.env.S3_ACCESS_KEY) !== Boolean(process.env.S3_SECRET_KEY)) {
+      // eslint-disable-next-line no-console
+      console.error("❌ S3 is half-configured: set BOTH S3_ACCESS_KEY and S3_SECRET_KEY, or neither (IAM role).");
+      process.exit(1);
+    }
+  }
+
+  // Browsers send Origin without a trailing slash, so normalise the allowlist.
+  const corsOrigins = (process.env.CORS_ORIGINS || "*").split(",").map((s) => s.trim().replace(/\/+$/, "")).filter(Boolean);
+  if ((process.env.NODE_ENV || "development") === "production" && corsOrigins.includes("*")) {
+    // eslint-disable-next-line no-console
+    console.warn("⚠️  CORS_ORIGINS allows all origins in production. Set it to the frontend origin(s).");
+  }
+
   /* 💳 Razorpay: intentionally OPTIONAL, so a developer with no credentials can
      still run the whole storefront (the mock gateway takes over — see
      services/shopPaymentGateway.js). But HALF a key pair is always a mistake:
@@ -62,9 +88,12 @@ function load() {
     port: Number(process.env.PORT) || 5000,
     mongoUri: process.env.MONGO_URI,
     jwtSecret: process.env.JWT_SECRET,
-    corsOrigins: (process.env.CORS_ORIGINS || "*").split(",").map((s) => s.trim()).filter(Boolean),
+    corsOrigins,
     nodeEnv: process.env.NODE_ENV || "development",
     storageDriver: process.env.STORAGE_DRIVER || "local",
+    // node-cron jobs run in exactly ONE backend process. Set JOBS_ENABLED=false
+    // on any other process sharing the database (e.g. during a migration).
+    jobsEnabled: process.env.JOBS_ENABLED !== "false",
     logLevel: process.env.LOG_LEVEL || "info",
 
     /* 💳 Exposed for diagnostics only. Nothing reads the SECRET from here —

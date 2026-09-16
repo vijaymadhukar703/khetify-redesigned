@@ -117,7 +117,7 @@ exports.createShipment = async (req, res) => {
     if (isWarehouseTransfer && !hasCapability(req.user.role, "inventory:transfer")) {
       return res.status(403).json({ success: false, message: "Not allowed to transfer between warehouses" });
     }
-    // The challan document, when one was posted. ANY file type and ANY size is
+    // The challan document, when one was posted. ANY file type (up to 25MB) is
     // accepted here — the warehouse attaches whatever paperwork it holds. It is
     // stored through the SAME storage service every other upload uses (local
     // disk or S3, by STORAGE_DRIVER); only the key is persisted, never a
@@ -417,9 +417,29 @@ exports.driverArrived = async (req, res) => {
   try { const s = await shipmentService.markArrived(req.user.companyId, req.params.id, { driverId: req.user.id, lat: req.body.lat, lng: req.body.lng }); res.json({ success: true, data: { status: s.status } }); }
   catch (e) { fail(res, e); }
 };
+/**
+ * Store proof-of-delivery photos (multer memory files) through fileService and
+ * return their storage KEYS. Previously the route wrote to uploads/products/
+ * while this handler recorded "/uploads/<filename>", a path that never
+ * existed. Keys resolve to a reachable link via fileService.publicFileUrl
+ * (signed on S3, /uploads/<key> locally).
+ */
+async function storePodPhotos(req) {
+  const fileService = require("../../services/fileService");
+  const shipment = String(req.params.id).replace(/[^\w-]+/g, "_");
+  const keys = [];
+  for (const f of req.files || []) {
+    const safe = String(f.originalname || "photo").replace(/[^\w.-]+/g, "_").slice(-80);
+    const key = `pod/${req.user.companyId}/${shipment}/${Date.now()}-${Math.round(Math.random() * 1e9)}-${safe}`;
+    await fileService.uploadBuffer(f.buffer, key, f.mimetype);
+    keys.push(key);
+  }
+  return keys;
+}
+
 exports.driverDeliver = async (req, res) => {
   try {
-    const photoUrls = (req.files || []).map((f) => `/uploads/${f.filename}`).concat(req.body.photoUrls || []);
+    const photoUrls = (await storePodPhotos(req)).concat(req.body.photoUrls || []);
     const s = await shipmentService.completeDelivery(req.user.companyId, req.params.id, { verifierId: req.user.id, signedBy: req.body.signedBy, photoUrls, lat: req.body.lat, lng: req.body.lng });
     res.json({ success: true, message: "Delivered", data: { status: s.status } });
   } catch (e) { fail(res, e); }

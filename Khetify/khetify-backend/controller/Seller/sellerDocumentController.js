@@ -4,6 +4,15 @@ const PCApplication = require("../../model/PC/PCApplication");
 const PrincipalCertificate = require("../../model/PC/PrincipalCertificate");
 const fileService = require("../../services/fileService");
 
+/** A document row with `fileUrl` resolved from its KEY at read time (signed on
+ * S3, /uploads/<key> locally). The stored fileUrl is the bucket's public-style
+ * URL, which a private bucket refuses, so it is never returned as-is. */
+const withResolvedUrl = async (doc) => {
+  const o = doc.toObject ? doc.toObject() : doc;
+  if (o.fileKey) o.fileUrl = await fileService.signedUrl(o.fileKey);
+  return o;
+};
+
 const keyFor = (sellerId, originalName) => {
   const ext = path.extname(originalName || "").toLowerCase() || ".bin";
   return `sellers/${sellerId}/documents/${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
@@ -29,7 +38,7 @@ exports.uploadDocuments = async (req, res) => {
         label: req.body.label || f.originalname,
         fileKey: key, fileUrl: url, fileName: f.originalname, mimeType: f.mimetype,
       });
-      created.push(doc);
+      created.push(await withResolvedUrl(doc));
     }
     res.status(201).json({ success: true, count: created.length, data: created });
   } catch (err) {
@@ -41,7 +50,7 @@ exports.uploadDocuments = async (req, res) => {
 exports.getDocuments = async (req, res) => {
   try {
     const rows = await SellerDocument.find({ sellerId: req.user.sellerId }).sort({ createdAt: -1 });
-    res.json({ success: true, count: rows.length, data: rows });
+    res.json({ success: true, count: rows.length, data: await Promise.all(rows.map(withResolvedUrl)) });
   } catch (err) {
     res.status(500).json({ success: false, message: "Server error" });
   }

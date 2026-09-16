@@ -7,7 +7,7 @@ const loadSubscription = require("../../middlewares/loadSubscription");
 const requireFeature = require("../../middlewares/requireFeature");
 const { FEATURES } = require("../../config/plans");
 // The delivery challan may be ANY file — an image OR a PDF — so it rides the
-// UNRESTRICTED uploader, exactly as the company warehouse transfer does
+// permissive uploader (any type, 25MB cap), exactly as the company warehouse transfer does
 // (routes/Transport/tmsRoutes.js). The shared document uploader is deliberately
 // NOT reused: it caps at 10MB and filters types for the KYC/agreement routes,
 // and loosening it would loosen those too.

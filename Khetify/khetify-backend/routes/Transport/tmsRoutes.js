@@ -3,10 +3,11 @@ const express = require("express");
 const auth = require("../../middlewares/authMiddlewares");
 const authorize = require("../../middlewares/authorize");
 const validate = require("../../middlewares/validate");
-const upload = require("../../middlewares/upload");
-// The challan may be ANY file of any size, so it uses the unrestricted uploader
-// rather than the shared document one (which caps at 10MB and filters types for
-// the KYC/agreement routes).
+// POD photos go through fileService (local or S3), so they are held in memory.
+const uploadImages = require("../../middlewares/uploadImages");
+// The challan may be ANY file type (capped at 25MB), so it uses the permissive
+// uploader rather than the shared document one (which caps at 10MB and filters
+// types for the KYC/agreement routes).
 const uploadChallan = require("../../middlewares/uploadAny");
 
 /**
@@ -65,8 +66,8 @@ shipments.post("/:id/approve", auth, authorize("shipment:dispatch"), ctrl.approv
 shipments.get("/:id/dispatch-checklist", auth, authorize("shipment:dispatch"), ctrl.dispatchChecklist);
 shipments.post("/:id/dispatch-scan", auth, authorize("shipment:dispatch"), validate({ body: v.dispatchScanBody }), ctrl.dispatchScan);
 // DISPATCH now carries the DELIVERY CHALLAN, so it accepts multipart/form-data
-// using the SAME unrestricted uploader the create route already uses (an image
-// or a PDF, any size). `parseDispatchBody` runs between multer and the
+// using the SAME permissive uploader the create route already uses (an image
+// or a PDF, up to 25MB). `parseDispatchBody` runs between multer and the
 // validator because multipart delivers every field as a STRING — `scannedCodes`
 // arrives as JSON text and would fail `dispatchBody`'s array check otherwise.
 // A plain JSON caller is untouched: multer passes it through and the parser
@@ -85,7 +86,7 @@ const driver = express.Router();
 driver.post("/login", validate({ body: v.driverLoginBody }), ctrl.driverLogin);
 driver.get("/shipments", auth, authorize("shipment:read_own"), ctrl.myShipments);
 driver.post("/shipments/:id/arrived", auth, authorize("shipment:update_own"), validate({ body: v.arrivedBody }), ctrl.driverArrived);
-driver.post("/shipments/:id/pod", auth, authorize("pod:upload"), upload.array("photos", 5), ctrl.driverDeliver);
+driver.post("/shipments/:id/pod", auth, authorize("pod:upload"), uploadImages.array("photos", 5), ctrl.driverDeliver);
 driver.post("/shipments/:id/exception", auth, authorize("shipment:update_own"), validate({ body: v.exceptionBody }), ctrl.driverException);
 
 /* /api/transfer-requests — inter-warehouse stock requests (B asks A) */

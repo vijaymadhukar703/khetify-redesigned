@@ -1,7 +1,13 @@
 node_modules
 npm-debug.log
+*.log
+logs
 .env
+.env.*
 .git
+.gitignore
+.dockerignore
+Dockerfile
 uploads
 newrelic_agent.log
 tests

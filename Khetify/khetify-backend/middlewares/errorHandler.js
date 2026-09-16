@@ -21,7 +21,8 @@ function errorHandler(err, req, res, next) {
         : err.message || "File upload failed.";
     return res.status(400).json({ success: false, message, reqId: req.id });
   }
-  if (err?.message === "Only PDF or image files are allowed!" || err?.message === "Only images are allowed!") {
+  // uploadDocuments' message has no trailing "!" — match both spellings.
+  if (/^Only (PDF or image files|images) are allowed!?$/.test(err?.message || "")) {
     return res.status(400).json({ success: false, message: err.message, reqId: req.id });
   }
 

@@ -14,26 +14,12 @@ async function uploadBuffer(buffer, key, mime = "application/octet-stream") {
   return { key, url };
 }
 
-let _client = null;
-function s3Client() {
-  const S3 = require("@aws-sdk/client-s3");
-  if (!_client) {
-    _client = new S3.S3Client({
-      region: process.env.S3_REGION,
-      endpoint: process.env.S3_ENDPOINT || undefined,
-      credentials: { accessKeyId: process.env.S3_ACCESS_KEY, secretAccessKey: process.env.S3_SECRET_KEY },
-      forcePathStyle: !!process.env.S3_ENDPOINT,
-    });
-  }
-  return { S3, client: _client };
-}
-
 const SIGNED_TTL = 300; // seconds
 
 async function signedUrl(key) {
   if (!key) return null;
   if (storage.DRIVER === "s3") {
-    const { S3, client } = s3Client();
+    const { S3, client } = storage.s3();
     const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
     return getSignedUrl(client, new S3.GetObjectCommand({ Bucket: process.env.S3_BUCKET, Key: key }), { expiresIn: SIGNED_TTL });
   }

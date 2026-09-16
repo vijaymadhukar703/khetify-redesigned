@@ -5,8 +5,8 @@ const auth = require("../../middlewares/authMiddlewares");
 const authorize = require("../../middlewares/authorize");
 const ctrl = require("../../controller/Seller/sellerShipmentController");
 const wh = require("../../controller/Seller/sellerWarehouseTransferController");
-// The delivery challan may be an image OR a PDF, of any size, so it rides the
-// UNRESTRICTED uploader — the same one the company warehouse transfer and the
+// The delivery challan may be an image OR a PDF (up to 25MB), so it rides the
+// permissive uploader — the same one the company warehouse transfer and the
 // seller New Transfer form already use. The shared document uploader is
 // deliberately NOT reused: it caps at 10MB and filters types for the
 // KYC/agreement routes, and loosening it would loosen those too.

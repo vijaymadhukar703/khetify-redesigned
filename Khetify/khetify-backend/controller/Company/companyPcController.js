@@ -88,7 +88,7 @@ exports.issuePc = async (req, res) => {
     const { app, cert } = await pcService.issuePc(req.user.companyId, req.params.id, {
       validMonths: req.body.validMonths, issuedBy: req.user.id,
     });
-    res.json({ success: true, message: `Certificate ${cert.pcNumber} issued`, data: { status: app.status, pcNumber: cert.pcNumber, certificateId: cert._id, url: cert.pdfUrl } });
+    res.json({ success: true, message: `Certificate ${cert.pcNumber} issued`, data: { status: app.status, pcNumber: cert.pcNumber, certificateId: cert._id, url: await fileService.signedUrl(cert.pdfKey) } });
   } catch (err) { fail(res, err); }
 };
 

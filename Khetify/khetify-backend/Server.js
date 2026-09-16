@@ -114,7 +114,9 @@ const RAZORPAY_WEBHOOK_PATH = "/api/shop/payments/webhook";
 app.use(express.json({
   limit: "2mb",
   verify: (req, res, buf) => {
-    if (req.originalUrl === RAZORPAY_WEBHOOK_PATH) req.rawBody = buf;
+    // Compare the path only, so a query string on the configured webhook URL
+    // cannot silently disable signature verification.
+    if (req.originalUrl.split("?")[0] === RAZORPAY_WEBHOOK_PATH) req.rawBody = buf;
   },
 }));
 app.use(requestId);
@@ -172,9 +174,17 @@ mongoose
   .then(async () => {
     logger.info('✅ MongoDB Connected');
     await dropLegacyIndexes(); // self-heal stale unique indexes before serving
-    startJobs(); // schedule background jobs (ABC classification, outbox) after DB is up
+    // Schedule background jobs (ABC classification, outbox, ...) after DB is up.
+    if (env.jobsEnabled) startJobs();
+    else logger.warn('⏸️  JOBS_ENABLED=false — background jobs NOT scheduled in this process');
   })
-  .catch(err => logger.error({ err }, '❌ MongoDB Error'));
+  .catch(err => {
+    logger.error({ err }, '❌ MongoDB Error');
+    // Mongoose does not retry a failed INITIAL connection. In production exit
+    // so the container restart policy retries, instead of serving 503s forever
+    // with background jobs never scheduled. Dev keeps running for convenience.
+    if (env.nodeEnv === 'production') process.exit(1);
+  });
 
 /* =========================
    Routes

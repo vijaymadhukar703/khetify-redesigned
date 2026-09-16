@@ -1,0 +1,59 @@
+name: CI
+
+# Validation only: install, test, lint, build. No deployment and no production
+# secrets. Paths are relative to the Git repository root, where the app lives
+# under Khetify/ (case-sensitive on the Linux runner).
+on:
+  pull_request:
+  push:
+    branches: [main, aws-deployment]
+  workflow_dispatch:
+
+jobs:
+  backend:
+    name: Backend — tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Khetify/khetify-backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: Khetify/khetify-backend/package-lock.json
+      - run: npm ci
+      - run: npm test
+        env:
+          # Dummy test-only value; tests use an in-memory MongoDB and local storage.
+          JWT_SECRET: test-secret
+          STORAGE_DRIVER: local
+
+  backend-docker:
+    name: Backend — Docker image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Build only; the image is never pushed.
+      - run: docker build -t khetify-backend-ci Khetify/khetify-backend
+
+  frontend:
+    name: Frontend — build + lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Khetify/khetifyApp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: Khetify/khetifyApp/package-lock.json
+      - run: npm ci
+      - run: npx eslint . || true   # report lint, don't block the build yet
+      - run: npm run build
+        env:
+          # Non-production placeholder so the build never depends on a real API.
+          VITE_API_URL: https://api.example.invalid
