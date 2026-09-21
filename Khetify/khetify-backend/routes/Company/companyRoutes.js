@@ -15,6 +15,9 @@ const {
   updateCompanyProfile,
   sendCompanyPhoneOtp,
   verifyCompanyPhoneOtp,
+  sendRegisterOtp,
+  verifyRegisterOtp,
+  resendRegisterOtp,
 } = require("../../controller/Company/companyController");
 const {
   listSellers,
@@ -26,7 +29,12 @@ const upload = require("../../middlewares/upload");
 const uploadDocuments = require("../../middlewares/uploadDocuments");
 
 // Auth
-router.post("/register", registerCompany);
+// OTP-based registration — 3 steps: send code, verify code (creates account), resend code.
+// Declared BEFORE the legacy /register so express matches these first.
+router.post("/register/send-otp",    sendRegisterOtp);
+router.post("/register/verify-otp",  verifyRegisterOtp);
+router.post("/register/resend-otp",  resendRegisterOtp);
+router.post("/register", registerCompany); // kept for backward compatibility
 router.post("/login", loginCompany);
 
 // Password reset (email link flow). forgot-password emails a one-time token;
