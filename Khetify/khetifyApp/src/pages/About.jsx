@@ -599,7 +599,7 @@ const About = () => {
                         </div>
                     </div>
                     <div className="border-t border-gray-200 pt-8 flex flex-col md:flex-row justify-between items-center gap-4">
-                        <p className="text-sm text-text-muted text-center md:text-left">© 2026 Khettify Technologies Pvt Ltd. All rights reserved.</p>
+                        <p className="text-sm text-text-muted text-center md:text-left">© 2026 Jain Beej Bhandar Agro Pvt Ltd. All rights reserved.</p>
                         <div className="flex items-center gap-2 text-sm text-text-muted">
                             <span className="w-2 h-2 rounded-full bg-green-500"></span>
                             System Operational

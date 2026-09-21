@@ -6,7 +6,6 @@ import { useShopAuth } from "../../context/ShopAuthContext";
 import {
   getShopAddresses, addShopAddress, updateShopAddress,
   setDefaultShopAddress, deleteShopAddress, shopCheckout,
-  getShopProduct, checkDelivery,
   // 💳 ONLINE PAYMENT: a separate lane from shopCheckout — it opens a payment
   //    session and creates NO order until the payment succeeds.
   initiateShopPayment,
@@ -18,10 +17,9 @@ import { rupee } from "../../Components/shop/ProductCard";
 import { getProductImage } from "../../lib/productImage";
 import { getBuyNowItem, clearBuyNowItem } from "../../lib/buyNow";
 import { lookupPincode } from "../../lib/pincodeLookup";
-import DeliveryBadge from "../../Components/shop/DeliveryBadge";
 
 /* ─────────────────────────────────────────────────────────────────────────────
- * Khettify — Checkout  (/customer-shop/checkout)
+ * Khetify — Checkout  (/customer-shop/checkout)
  *
  * WHAT THE BACKEND ACTUALLY DOES (and what this page now finally shows):
  *   • checkout() re-resolves EVERY price and stock level server-side. The cart's
@@ -429,11 +427,6 @@ function SummaryItem({ i, onQty, onRemove, flagged }) {
         {atCap && cap !== Infinity && (
           <p className="mt-1 text-[11px] font-semibold text-amber-700">Only {cap} left in stock</p>
         )}
-
-        {/* Delivery badge — shown when pincode is known */}
-        <div className="mt-1">
-          <DeliveryBadge deliveryEligible={i.deliveryEligible} />
-        </div>
       </div>
 
       <span className="shrink-0 text-[13px] font-bold text-stone-900">{rupee(i.price * i.qty)}</span>
@@ -506,12 +499,6 @@ export default function ShopCheckout() {
   const [error, setError] = useState("");
   const errorRef = useRef(null);
 
-  // ── DELIVERY ELIGIBILITY (re-checked on every address change) ─────────────
-  // Map: listingId → deliveryEligible (true | false | null)
-  const [deliveryMap, setDeliveryMap] = useState({});
-  const [checkingDelivery, setCheckingDelivery] = useState(false);
-  const [freightAmount, setFreightAmount] = useState(0); // delivery charge from logistics branch
-
   /* Load addresses. UNCHANGED behaviour: default → first → else open the form. */
   useEffect(() => {
     (async () => {
@@ -529,45 +516,6 @@ export default function ShopCheckout() {
     })();
   }, []);
 
-  /* Re-check delivery eligibility whenever the selected address changes.
-     Runs on every selectedId change — so switching from address A to B
-     immediately re-evaluates all cart items against B's pincode. */
-  useEffect(() => {
-    const addr = addresses.find((a) => a._id === selectedId);
-    const pincode = addr?.pincode;
-
-    if (!pincode || !items.length) {
-      setDeliveryMap({});
-      setFreightAmount(0);
-      return;
-    }
-
-    let alive = true;
-    setCheckingDelivery(true);
-
-    // Fetch freight + delivery eligibility in parallel
-    const freightFetch = checkDelivery(pincode)
-      .then((res) => { if (alive) setFreightAmount(res?.data?.freightAmount ?? 0); })
-      .catch(() => { if (alive) setFreightAmount(0); });
-
-    const uniqueListings = [...new Set(items.map((it) => it.listingId))];
-    Promise.all(
-      uniqueListings.map((id) =>
-        getShopProduct(id, { pincode })
-          .then((res) => ({ id, eligible: res?.data?.deliveryEligible ?? null }))
-          .catch(() => ({ id, eligible: null }))
-      )
-    ).then((results) => {
-      if (!alive) return;
-      const map = {};
-      for (const { id, eligible } of results) map[id] = eligible;
-      setDeliveryMap(map);
-      setCheckingDelivery(false);
-    });
-
-    return () => { alive = false; };
-  }, [selectedId, addresses, items.length]);
-
   /* Any stock/availability error from the server names the product — highlight it. */
   const flaggedName = useMemo(() => {
     const m = error.match(/"([^"]+)"/);
@@ -580,35 +528,21 @@ export default function ShopCheckout() {
     }
   }, [error]);
 
-  const selected = addresses.find((a) => a._id === selectedId) || null;
-  const editing = addresses.find((a) => a._id === mode) || null;
-  const step = !selected ? "address" : "review";
-
-  // Items annotated with live delivery eligibility for the selected address
-  const annotatedItems = useMemo(
-    () => items.map((it) => ({
-      ...it,
-      deliveryEligible: selected?.pincode ? (deliveryMap[it.listingId] ?? null) : null,
-    })),
-    [items, deliveryMap, selected?.pincode]
-  );
-
-  // Any non-deliverable item blocks the "Place Order" button
-  const nonDeliverableItems = annotatedItems.filter((it) => it.deliveryEligible === false);
-  const hasDeliveryBlock = nonDeliverableItems.length > 0;
-
   /* The backend groups the cart by sellerId and creates ONE ORDER PER SELLER.
      Mirror that grouping here so the total order count is never a surprise. */
   const sellerGroups = useMemo(() => {
     const map = new Map();
-    // Use annotatedItems so each item carries its deliveryEligible flag
-    for (const i of annotatedItems) {
+    for (const i of items) {
       const key = i.sellerId || "unknown";
-      if (!map.has(key)) map.set(key, { sellerName: i.sellerName || "Seller", items: [] });
+      if (!map.has(key)) map.set(key, { sellerName: i.sellerName || "Khettify seller", items: [] });
       map.get(key).items.push(i);
     }
     return [...map.values()];
-  }, [annotatedItems]);
+  }, [items]);
+
+  const selected = addresses.find((a) => a._id === selectedId) || null;
+  const editing = addresses.find((a) => a._id === mode) || null;
+  const step = !selected ? "address" : "review";
 
   /* Shared runner for the address mutations — all four endpoints return the
      FULL updated list, so state is replaced, never patched by hand. */
@@ -1022,11 +956,7 @@ export default function ShopCheckout() {
                 </div>
                 <div className="flex justify-between text-stone-500">
                   <span>{t("co.deliveryFee")}</span>
-                  {freightAmount > 0 ? (
-                    <span className="font-medium text-stone-700">{rupee(freightAmount)}</span>
-                  ) : (
-                    <span className="rounded bg-emerald-50 px-2 py-0.5 text-xs font-bold uppercase tracking-wider text-emerald-700">{t("co.free")}</span>
-                  )}
+                  <span className="rounded bg-emerald-50 px-2 py-0.5 text-xs font-bold uppercase tracking-wider text-emerald-700">{t("co.free")}</span>
                 </div>
                 {sellerGroups.length > 1 && (
                   <div className="flex justify-between text-stone-500">
@@ -1038,7 +968,7 @@ export default function ShopCheckout() {
 
               <div className="mt-4 flex items-baseline justify-between">
                 <span className="font-heading text-base font-bold text-stone-900">{t("co.grandTotal")}</span>
-                <span className="font-heading text-[22px] font-extrabold tracking-tight text-stone-900">{rupee(subtotal + freightAmount)}</span>
+                <span className="font-heading text-[22px] font-extrabold tracking-tight text-stone-900">{rupee(subtotal)}</span>
               </div>
               <p className="mt-1 text-[11px] leading-normal text-stone-400">
                 {t("co.taxNote")}
@@ -1067,29 +997,9 @@ export default function ShopCheckout() {
                 </div>
               )}
 
-              {/* Delivery block warning — shown when address is selected but
-                  some items cannot be delivered there */}
-              {hasDeliveryBlock && !checkingDelivery && (
-                <div className="mt-4 flex items-start gap-1.5 rounded-xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs font-semibold text-red-700">
-                  <span className="material-symbols-outlined shrink-0 text-base">local_shipping</span>
-                  <span>
-                    {nonDeliverableItems.map((it) => `"${it.name}"`).join(", ")}{" "}
-                    cannot be delivered to this address. Please remove{" "}
-                    {nonDeliverableItems.length === 1 ? "it" : "them"} or select a different address.
-                  </span>
-                </div>
-              )}
-
-              {checkingDelivery && (
-                <div className="mt-4 flex items-center gap-2 text-xs text-stone-500">
-                  <span className="material-symbols-outlined animate-spin text-base">refresh</span>
-                  Checking delivery availability…
-                </div>
-              )}
-
               <button
                 onClick={placeOrder}
-                disabled={placing || busy || !selectedId || hasDeliveryBlock || checkingDelivery}
+                disabled={placing || busy || !selectedId}
                 className="mt-5 hidden w-full rounded-xl bg-[#EA2831] py-3.5 text-[13.5px] font-bold uppercase tracking-wide text-white transition-colors duration-300 hover:bg-[#C91E26] active:scale-[0.99] disabled:pointer-events-none disabled:bg-stone-200 disabled:text-stone-400 lg:block"
               >
                 {/* The CTA must say what the tap DOES. "Confirm Order (COD)"
@@ -1099,7 +1009,7 @@ export default function ShopCheckout() {
                 {placing
                   ? (paymentMethod === PAYMENT_METHODS.ONLINE ? t("co.openingPayment") : t("co.openingReview"))
                   : paymentMethod === PAYMENT_METHODS.ONLINE
-                    ? t("co.proceedToPay", { amount: rupee(subtotal + freightAmount) })
+                    ? t("co.proceedToPay", { amount: rupee(subtotal) })
                     : t("co.reviewOrder")}
               </button>
 
@@ -1124,11 +1034,11 @@ export default function ShopCheckout() {
         <div className="mx-auto flex max-w-[1240px] items-center gap-3">
           <div className="min-w-0">
             <p className="text-[10px] font-bold uppercase tracking-wide text-stone-400">{t("co.grandTotal")}</p>
-            <p className="font-heading text-lg font-extrabold leading-tight text-stone-900">{rupee(subtotal + freightAmount)}</p>
+            <p className="font-heading text-lg font-extrabold leading-tight text-stone-900">{rupee(subtotal)}</p>
           </div>
           <button
             onClick={placeOrder}
-            disabled={placing || busy || !selectedId || hasDeliveryBlock || checkingDelivery}
+            disabled={placing || busy || !selectedId}
             className="ml-auto flex-1 rounded-xl bg-[#EA2831] py-3 text-xs font-bold uppercase tracking-wide text-white transition-colors duration-300 active:scale-[0.99] disabled:pointer-events-none disabled:bg-stone-200 disabled:text-stone-400"
           >
             {placing
@@ -1136,7 +1046,7 @@ export default function ShopCheckout() {
               : !selectedId
                 ? t("co.selectAnAddress")
                 : paymentMethod === PAYMENT_METHODS.ONLINE
-                  ? t("co.payShort", { amount: rupee(subtotal + freightAmount) })
+                  ? t("co.payShort", { amount: rupee(subtotal) })
                   : t("co.reviewOrder")}
           </button>
         </div>

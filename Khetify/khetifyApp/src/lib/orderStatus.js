@@ -7,14 +7,13 @@
  * plus two terminal exits that sit OUTSIDE the pipeline: cancelled, returned.
  */
 
-export const FLOW = ["pending", "confirmed", "packed", "shipped", "out_for_delivery", "delivered"];
+export const FLOW = ["pending", "confirmed", "packed", "shipped", "delivered"];
 
 export const STATUS_LABEL = {
   pending: "Order placed",
   confirmed: "Confirmed",
   packed: "Packed",
   shipped: "Shipped",
-    out_for_delivery: "Out for delivery",
   delivered: "Delivered",
   returned: "Returned",
   cancelled: "Cancelled",
@@ -26,7 +25,6 @@ export const STATUS_BLURB = {
   confirmed: "The seller accepted your order and reserved your stock.",
   packed: "Your items are packed and waiting for pickup.",
   shipped: "Your order is on its way.",
-    out_for_delivery: "Our delivery agent is on the way to you.",
   delivered: "Delivered. Thanks for shopping with Khettify!",
   cancelled: "This order was cancelled.",
   returned: "This order was returned.",
@@ -47,7 +45,6 @@ export const STATUS_LABEL_KEY = {
   confirmed: "status.confirmed",
   packed: "status.packed",
   shipped: "status.shipped",
-    out_for_delivery: "status.out_for_delivery",
   delivered: "status.delivered",
   returned: "status.returned",
   cancelled: "status.cancelled",
@@ -58,7 +55,6 @@ export const STATUS_BLURB_KEY = {
   confirmed: "blurb.confirmed",
   packed: "blurb.packed",
   shipped: "blurb.shipped",
-    out_for_delivery: "blurb.out_for_delivery",
   delivered: "blurb.delivered",
   cancelled: "blurb.cancelled",
   returned: "blurb.returned",
@@ -69,7 +65,6 @@ export const STATUS_ICON = {
   confirmed: "inventory",
   packed: "package_2",
   shipped: "local_shipping",
-    out_for_delivery: "directions_bike",
   delivered: "check_circle",
   cancelled: "cancel",
   returned: "assignment_return",
@@ -82,7 +77,6 @@ export const isDead = (status) => status === "cancelled" || status === "returned
 export function statusTone(status) {
   if (status === "cancelled" || status === "returned") return "bg-red-50 text-[#EA2831]";
   if (status === "delivered") return "bg-emerald-100 text-emerald-800";
-    if (status === "out_for_delivery") return "bg-indigo-50 text-indigo-700";
   if (status === "shipped") return "bg-blue-50 text-blue-700";
   return "bg-amber-50 text-amber-800"; // pending / confirmed / packed
 }

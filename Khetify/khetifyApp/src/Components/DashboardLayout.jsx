@@ -131,7 +131,7 @@ const DashboardLayout = () => {
     <div className="flex flex-col h-screen bg-stone-50 font-sora overflow-hidden text-stone-900">
       <TopNav
         onMenuClick={() => setMobileOpen(true)}
-        brand={{ label: 'Khettify' }}
+        brand={{ label: "Khettify" }}
         homePath="/hub"
         resolveCrumb={resolveCompanyCrumb(isMainCompany)}
         Bell={NotificationBell}

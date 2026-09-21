@@ -358,7 +358,7 @@ const CompanyAbout = () => {
                             </div>
                         </div>
                         <div className="mt-12 border-t border-gray-200 pt-8 text-center md:text-left">
-                            <p className="text-sm text-[#6b7280]">© 2026 Khettify Technologies Pvt Ltd. All rights reserved.</p>
+                            <p className="text-sm text-[#6b7280]">© 2026 Jain Beej Bhandar Agro Pvt Ltd. All rights reserved.</p>
                         </div>
                     </div>
                 </footer>

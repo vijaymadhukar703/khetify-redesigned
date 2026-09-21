@@ -109,7 +109,7 @@ const SellerAbout = () => {
   </div>
 </section>
 
-                {/* Why Khettify Section */}
+                {/* Why Khetify Section */}
                 <section className="w-full px-4 py-20 sm:px-6 lg:px-8 bg-white">
                     <div className="mx-auto max-w-7xl">
                         <div className="mb-12 md:text-center max-w-3xl mx-auto">
@@ -358,7 +358,7 @@ const SellerAbout = () => {
                             </div>
                         </div>
                         <div className="mt-12 border-t border-gray-200 pt-8 text-center md:text-left">
-                            <p className="text-sm text-[#6b7280]">© 2026 Khettify Technologies Pvt Ltd. All rights reserved.</p>
+                            <p className="text-sm text-[#6b7280]">© 2026 Jain Beej Bhandar Agro Pvt Ltd. All rights reserved.</p>
                         </div>
                     </div>
                 </footer>
