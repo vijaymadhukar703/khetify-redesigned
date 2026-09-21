@@ -34,6 +34,8 @@ const data = (p) => p.then((r) => r.data);
 
 /* ---- auth ---- */
 export const registerSeller = (body) => data(api.post("register", body));
+export const sendSellerOtp = (body) => data(api.post("send-otp", body));
+export const verifySellerOtp = (body) => data(api.post("verify-otp", body));
 export const loginSeller = (body) => data(api.post("login", body));
 export const getSellerMe = () => data(api.get("me"));
 // Registration profile (identity + GSTIN/PAN + KYC docs as signed URLs),
@@ -41,6 +43,19 @@ export const getSellerMe = () => data(api.get("me"));
 export const getSellerProfile = () => data(api.get("profile"));
 // Edit own profile — multipart (identity/compliance fields + replacement docs).
 export const updateSellerProfile = (formData) => data(api.patch("profile", formData));
+
+/* ---- 📱 Phone verification (seller profile) ----
+   number optional: na do to account ka maujooda number verify hota hai; do to
+   wo naya number — aur verify hote hi wahi account ka number ban jata hai.
+   Server number ko token wale account se hi jodta hai, isliye koi kisi aur ka
+   number "verified" nahi karwa sakta.
+
+   verify safal hone par poora profile lautata hai (GET profile wala hi shape),
+   isliye badge badalne ke liye doosri request nahi karni padti. */
+export const sendSellerPhoneOtp = (number) =>
+  data(api.post("profile/phone/send-otp", number ? { number } : {}));
+export const verifySellerPhoneOtp = (code) =>
+  data(api.post("profile/phone/verify", { code }));
 
 /* ---- onboarding wizard ---- */
 export const saveSellerInfo = (body) => data(api.put("onboarding/info", body));
@@ -198,6 +213,9 @@ export const previewSellerBoxLabel = (id, body) => data(api.post(`shipments/${id
 export const getSellerDeliveryLabel = (id, packageId) =>
   data(api.get(`shipments/${id}/delivery-label`, packageId ? { params: { packageId } } : undefined));
 export const dispatchSellerOrder = (id, body) => data(api.post(`shipments/${id}/dispatch-order`, body));
+// Direct dispatch — no barcode scanning required. Deducts stock by qty from planned lines.
+// Optional tokens = any barcodes the seller DID scan (for serialized stock tracking).
+export const dispatchSellerDirect = (id, body = {}) => data(api.post(`shipments/${id}/dispatch-direct`, body));
 export const receiveSellerShipment = (id, body) => data(api.post(`shipments/${id}/receive`, body));
 
 /* ---- SELLER WAREHOUSE → WAREHOUSE TRANSFER ----------------------------- */
@@ -299,6 +317,7 @@ export const SELLER_FEATURES = {
   UNIT_LABELS: "unit_labels",
   MULTI_WAREHOUSE: "multi_warehouse",
   ADVANCED_ANALYTICS: "advanced_analytics",
+  SALES_CHANNEL: "sales_channel",
 };
 
 /* ---- RBAC stub (Phase 1): seller_admin holds everything within its scope.
@@ -313,3 +332,11 @@ export const getSellerPendingStockRequests = (params = {}) => data(api.get("stoc
 export const getSellerInterestedCustomers = (productId, params = {}) =>
   data(api.get(`stock-requests/${productId}`, { params }));
 export const getSellerStockRequestStats = () => data(api.get("stock-requests/stats/summary"));
+/* ---- 📦 Quantity Requests (Demand Monitor) ----
+   Seller views quantity requests from customers and responds to them. */
+export const getSellerQuantityRequests = (params = {}) => data(api.get("quantity-requests", { params }));
+export const getQuantityRequestsInterested = (productId, params = {}) =>
+  data(api.get(`quantity-requests/interested/${productId}`, { params }));
+export const updateQuantityRequestStatus = (requestId, body) =>
+  data(api.put(`quantity-requests/${requestId}/status`, body));
+export const getQuantityRequestsSummary = () => data(api.get("quantity-requests/summary"));
