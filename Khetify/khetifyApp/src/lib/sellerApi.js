@@ -318,7 +318,6 @@ export const SELLER_FEATURES = {
   MULTI_WAREHOUSE: "multi_warehouse",
   ADVANCED_ANALYTICS: "advanced_analytics",
   SALES_CHANNEL: "sales_channel",
-  POS_BILLING: "pos_billing",
 };
 
 /* ---- RBAC stub (Phase 1): seller_admin holds everything within its scope.

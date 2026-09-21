@@ -28,8 +28,6 @@ const FEATURES = {
   // Free sellers only manage their own stock; paid sellers can sell through
   // the Khetify marketplace and dealer network.
   SALES_CHANNEL: "sales_channel",
-  // POS counter billing — paid only.
-  POS_BILLING: "pos_billing",
   // The Administration hub (Sellers, Team & Roles, Returns, …). Paid-only:
   // absent from `free` below, so requireFeature() locks it exactly the way
   // ADVANCED_ANALYTICS locks Analytics.
@@ -97,7 +95,6 @@ const SELLER_PLANS = {
     label: "Free",
     features: [
       FEATURES.STOCK_TRANSFERS,   // Stock Transfers open on free plan
-      FEATURES.ORDER_DEDUCTION,   // Sales open on free plan
       FEATURES.LOW_STOCK_ALERTS,
     ],
     limits: { warehouses: 1, customers: 50 },
@@ -108,9 +105,8 @@ const SELLER_PLANS = {
       FEATURES.BASIC_CATALOG,
       FEATURES.SUPPLY_WORKFLOW,
       FEATURES.STOCK_TRANSFERS,
+      FEATURES.SALES_CHANNEL,     // Sales locked behind paid plan
       FEATURES.ORDER_DEDUCTION,
-      FEATURES.SALES_CHANNEL,
-      FEATURES.POS_BILLING,       // POS locked behind paid plan
       FEATURES.LOW_STOCK_ALERTS,
       FEATURES.INVENTORY_VIEW,
       FEATURES.MULTI_WAREHOUSE,
