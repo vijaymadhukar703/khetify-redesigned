@@ -10,7 +10,7 @@ import { getBillingHistory, formatINR, fmtDate } from '../../lib/imsApi';
 // tab/feature to attribute), or for a module key we don't have copy for yet.
 const DEFAULT_HEADER = {
   eyebrowIcon: 'lock_open',
-  eyebrow: 'Unlock the Khetify IMS',
+  eyebrow: 'Unlock the Khettify IMS',
   heading: 'Manage your inventory like a pro',
   description:
     'Inventory management is a premium feature. Subscribe to unlock live stock ' +

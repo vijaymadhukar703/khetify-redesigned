@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import LocationPermissionGate from "../common/LocationPermissionGate";
-import { getSellerMe, saveSellerLocation, previewSellerLocation, SELLER_LOCATION_PROMPT_KEY } from "../../lib/sellerApi";
+import { getSellerMe, saveSellerLocation, SELLER_LOCATION_PROMPT_KEY } from "../../lib/sellerApi";
 import { locDebug } from "../../lib/geolocation";
 
 /* WHERE THE SELLER IS ASKED.
@@ -80,20 +80,15 @@ export default function SellerLocationGate({ children }) {
       alreadyGranted={settled}
       sessionKey={SELLER_LOCATION_PROMPT_KEY}
       onDecision={saveSellerLocation}
-      onPreview={previewSellerLocation}
       text={{
         title: "Share your live location",
-        body: "Allow location access so Khetify can suggest the nearest warehouses, speed up delivery details and show what is available around you. You can change this later in your browser settings.",
+        body: "Allow location access so Khettify can suggest the nearest warehouses, speed up delivery details and show what is available around you. You can change this later in your browser settings.",
         allow: "Allow location",
         deny: "Not now",
         working: "Getting your location…",
         blocked: "Location is blocked for this site in your browser. Enable it from the lock icon in the address bar, then try again.",
         retry: "Try again",
         locating: "Finding your location\u2026",
-        confirmTitle: "Is this your location?",
-        confirmBody: "We detected the place below from your device. Confirm to save it to your seller account.",
-        confirm: "Yes, save this",
-        cancel: "Cancel",
       }}
     >
       {children}

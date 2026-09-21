@@ -191,14 +191,19 @@ const ImsWarehouses = () => {
                 )}
                 {info && info.over === 0 && <div className="mb-4" />}
                 <div className="space-y-1.5">
-                  {occ.lots.slice(0, 4).map((l) => (
-                    <div key={l._id} className="flex justify-between text-xs border-b border-dashed border-stone-100 pb-1.5">
-                      <span className="text-stone-500 truncate pr-2">
-                        {l.productId?.productName} · <b>{l.lotNumber || l.batchNumber}</b>
-                      </span>
-                      <span className="font-bold text-stone-900">{l.availableStock}</span>
-                    </div>
-                  ))}
+                  {occ.lots.slice(0, 4).map((l) => {
+                    const displayName = l.productId?.productName || l.productNameSnapshot || '—';  // ✅ Fallback chain
+                    const isExpired = l.expiryDate && new Date(l.expiryDate) < new Date();
+                    const nameDisplay = isExpired ? `${displayName} (Expired)` : displayName;
+                    return (
+                      <div key={l._id} className={`flex justify-between text-xs border-b border-dashed border-stone-100 pb-1.5 ${isExpired ? 'bg-red-50/20' : ''}`}>
+                        <span className={`truncate pr-2 ${isExpired ? 'text-red-600 font-semibold' : 'text-stone-500'}`}>
+                          {nameDisplay} · <b>{l.lotNumber || l.batchNumber}</b>
+                        </span>
+                        <span className="font-bold text-stone-900">{l.availableStock}</span>
+                      </div>
+                    );
+                  })}
                   {occ.lots.length === 0 && <p className="text-xs text-stone-300">Empty</p>}
                   {occ.lots.length > 4 && <p className="text-[10px] text-stone-400">+{occ.lots.length - 4} more lots</p>}
                 </div>
@@ -316,14 +321,19 @@ const WarehouseDetailModal = ({ warehouse: w, occ, onClose }) => {
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-100">
-              {occ.lots.map((l) => (
-                <tr key={l._id}>
-                  <td data-label="Product" className="px-4 py-2 text-stone-700">{l.productId?.productName || '—'}</td>
-                  <td data-label="Lot No." className="px-4 py-2 font-mono text-xs font-bold text-stone-900">{l.lotNumber || l.batchNumber || '—'}</td>
-                  <td data-label="Expiry" className="px-4 py-2 text-xs text-stone-500">{l.expiryDate ? fmtDate(l.expiryDate) : '—'}</td>
-                  <td data-label="Qty" className="px-4 py-2 text-right font-bold text-stone-900">{(l.availableStock ?? 0).toLocaleString('en-IN')}</td>
-                </tr>
-              ))}
+              {occ.lots.map((l) => {
+                const displayName = l.productId?.productName || l.productNameSnapshot || '—';  // ✅ Fallback chain
+                const isExpired = l.expiryDate && new Date(l.expiryDate) < new Date();
+                const nameDisplay = isExpired ? `${displayName} (Expired)` : displayName;
+                return (
+                  <tr key={l._id} className={isExpired ? 'bg-red-50/20' : ''}>
+                    <td data-label="Product" className={`px-4 py-2 ${isExpired ? 'text-red-700 font-semibold' : 'text-stone-700'}`}>{nameDisplay}</td>
+                    <td data-label="Lot No." className="px-4 py-2 font-mono text-xs font-bold text-stone-900">{l.lotNumber || l.batchNumber || '—'}</td>
+                    <td data-label="Expiry" className="px-4 py-2 text-xs text-stone-500">{l.expiryDate ? fmtDate(l.expiryDate) : '—'}</td>
+                    <td data-label="Qty" className="px-4 py-2 text-right font-bold text-stone-900">{(l.availableStock ?? 0).toLocaleString('en-IN')}</td>
+                  </tr>
+                );
+              })}
               {occ.lots.length === 0 && (
                 <tr><td colSpan={4} className="px-4 py-6 text-center text-xs text-stone-400">No stock in this warehouse.</td></tr>
               )}

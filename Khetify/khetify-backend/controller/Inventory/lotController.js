@@ -170,6 +170,30 @@ exports.getLots = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/lots/pending-receipt
+ *
+ * Returns only the lots sitting in inTransitStock for this operator's
+ * assigned warehouses — i.e. lots the company sent here that haven't been
+ * Confirm-Received yet. Used by the Hub "Transfers needing you" panel.
+ */
+exports.getPendingReceipt = async (req, res) => {
+  try {
+    const scope = await warehouseScope(req.user);
+    // If not a warehouse operator there are no pending-receipt lots to show.
+    if (!scope || !scope.length) return res.json({ success: true, count: 0, data: [] });
+
+    const rows = await lotService.getLots(req.user.companyId, {
+      warehouseIds: scope,
+      excludePending: false, // ← we WANT the in-transit ones
+    });
+    const pending = rows.filter((r) => (r.inTransitStock || 0) > 0);
+    res.json({ success: true, count: pending.length, data: pending });
+  } catch (err) {
+    res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
+  }
+};
+
 /** POST /api/lots/receive  { productId, warehouseId?, lotNumber, batchNumber, expiryDate?, qty, lowStockThreshold? } */
 exports.receiveLot = async (req, res) => {
   try {

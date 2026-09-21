@@ -11,7 +11,7 @@ import { useShopLanguage, useT } from "../../context/ShopLanguageContext";
 // Shared chrome for the customer storefront. HEADER + mobile bottom-nav only —
 // footer, layout wrapper, contexts, auth state, cart state, search handler, and
 // every route/link are unchanged. Design: solid white surfaces, stone palette,
-// field-green ink (#14201A) + Khetify red (#EA2831) accents, Sora headings /
+// field-green ink (#14201A) + Khettify red (#EA2831) accents, Sora headings /
 // Manrope body, Material Symbols icons.
 
 // Login and Register are SEPARATE pages with their own routes, so these links
@@ -362,7 +362,7 @@ export default function ShopLayout() {
           <div className="hidden items-center gap-6 py-3.5 md:flex">
             <Link to="/customer-shop" title={t("common.home")} className="flex shrink-0 items-center gap-2">
               <span className="text-xl font-bold tracking-tight text-[#EA2831] transition-opacity hover:opacity-80">
-                Khetify
+                Khettify
               </span>
             </Link>
 
@@ -446,11 +446,11 @@ export default function ShopLayout() {
             </div>
           </div>
 
-          {/* ===== Mobile: Khetify wordmark + search (actions moved to bottom bar) ===== */}
+          {/* ===== Mobile: Khettify wordmark + search (actions moved to bottom bar) ===== */}
           <div className="flex items-center gap-2.5 py-2.5 md:hidden">
-            <Link to="/customer-shop" aria-label="Khetify home" title={t("common.home")} className="flex shrink-0 items-center gap-2">
+            <Link to="/customer-shop" aria-label="Khettify home" title={t("common.home")} className="flex shrink-0 items-center gap-2">
               <span className="whitespace-nowrap text-xl font-bold tracking-tight text-[#EA2831] transition-opacity hover:opacity-80">
-                Khetify
+                Khettify
               </span>
             </Link>
             <div className="min-w-0 flex-1">
@@ -567,7 +567,7 @@ export default function ShopLayout() {
             <div className="lg:col-span-4">
               <Link to="/customer-shop" title={t("common.home")} className="inline-flex items-center">
                 <span className="font-heading text-[24px] font-extrabold -tracking-[0.03em] text-[#EA2831] transition-opacity hover:opacity-80">
-                  Khetify
+                  Khettify
                 </span>
               </Link>
               <p className="mt-4 max-w-[40ch] text-[13px] leading-[1.8] text-stone-400">
@@ -616,7 +616,7 @@ export default function ShopLayout() {
                 {t("footer.business")}
               </h4>
               <ul className="mt-4 space-y-2.5 text-[13px] text-stone-400">
-                <li><Link to="/seller/register" className="transition-colors hover:text-white">{t("footer.sellOnKhetify")}</Link></li>
+                <li><Link to="/seller/register" className="transition-colors hover:text-white">{t("footer.sellOnKhettify")}</Link></li>
                 <li><Link to="/seller/login" className="transition-colors hover:text-white">{t("footer.sellerLogin")}</Link></li>
                 <li><Link to="/register" className="transition-colors hover:text-white">{t("footer.forCompanies")}</Link></li>
               </ul>

@@ -43,7 +43,12 @@ const consumerSchema = new mongoose.Schema(
       expiresAt: { type: Date },
       attempts: { type: Number, default: 0 },
     },
-
+    phoneOtp: {
+      codeHash: { type: String },
+      expiresAt: { type: Date },
+      attempts: { type: Number, default: 0 },
+    },
+    phoneVerified: { type: Boolean, default: false },
     addresses: { type: [shopAddressSchema], default: [] },
     status: { type: String, enum: ["active", "disabled"], default: "active" },
     // ── LIVE LOCATION (browser geolocation consent) ──────────────────────
@@ -58,7 +63,11 @@ const consumerSchema = new mongoose.Schema(
     locationAccess: {
       // "revoked" = switched off from the settings page; unlike "denied" it is a
       // standing decision, so the login prompt does not reopen for it.
-      status: { type: String, enum: ["granted", "denied", "revoked"], default: null },
+      status: {
+        type: String,
+        enum: ["granted", "denied", "revoked"],
+        default: null,
+      },
       // GeoJSON Point, [longitude, latitude] — the SAME shape and field order
       // as Warehouse.location, so one $geoNear works against either collection
       // and the nearest-warehouse lookup needs no translation layer.
@@ -83,20 +92,20 @@ const consumerSchema = new mongoose.Schema(
       address: {
         state: { type: String },
         district: { type: String },
-        city: { type: String },       // city / town / village
+        city: { type: String }, // city / town / village
         pincode: { type: String },
         country: { type: String },
-        formatted: { type: String },  // full one-line address from the provider
-        provider: { type: String },   // "google" | "nominatim" — which one answered
+        formatted: { type: String }, // full one-line address from the provider
+        provider: { type: String }, // "google" | "nominatim" — which one answered
         resolvedAt: { type: Date },
       },
       capturedAt: { type: Date }, // when the coordinates were taken
-      decidedAt: { type: Date },  // when allow/deny was last answered
+      decidedAt: { type: Date }, // when allow/deny was last answered
     },
 
     lastLoginAt: { type: Date },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 // A consumer logs in by email OR phone; both are unique when present (sparse so

@@ -222,7 +222,7 @@ const SellerLayout = () => {
     <div className="flex flex-col h-screen bg-stone-50 font-sora overflow-hidden text-stone-900">
       <TopNav
         onMenuClick={() => setMobileOpen(true)}
-        brand={{ label: "Khetify", sublabel: "Seller" }}
+        brand={{ label: "Khettify", sublabel: "Seller" }}
         homePath="/seller/hub"
         resolveCrumb={resolveSellerCrumb}
         Bell={SellerBell}

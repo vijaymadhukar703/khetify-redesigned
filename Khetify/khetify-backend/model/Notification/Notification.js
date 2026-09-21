@@ -10,7 +10,7 @@ const notificationSchema = new mongoose.Schema(
     recipientId: { type: mongoose.Schema.Types.ObjectId, required: true },
     type: {
       type: String,
-      enum: ["low_stock", "expiry", "shipment", "order", "supply_status", "pc_status", "stock_available"],
+      enum: ["low_stock", "expiry", "shipment", "order", "supply_status", "pc_status", "stock_available", "lot_incoming"],
       required: true,
     },
     title: { type: String },

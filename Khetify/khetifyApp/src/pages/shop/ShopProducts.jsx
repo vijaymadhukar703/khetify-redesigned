@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams, Link, useNavigate } from "react-router-dom";
 import { getShopProducts } from "../../lib/shopApi";
 import { HomeProductCard, CardSkeleton, catIcon } from "./ShopHome";
+import { useDeliveryPincode } from "../../lib/useDeliveryPincode";
 
 /* ─────────────────────────────────────────────────────────────────────────────
  * Khetify — Search & browse results  (/customer-shop/products)
@@ -378,6 +379,7 @@ export default function ShopProducts() {
   // The API returns catalogue text already localised, so the fetch effects
   // below depend on `lang` — a language switch must refetch, not just re-render.
   const { lang } = useShopLanguage();
+  const deliveryPincode = useDeliveryPincode();
 
   const navigate = useNavigate(); 
   const [params, setParams] = useSearchParams();
@@ -412,7 +414,7 @@ export default function ShopProducts() {
 
   /* `lang` is a dependency because the API returns catalogue text ALREADY
      localised — switching language has to refetch, not just re-render. */
-  const deps = [search, categories.join(), brands.join(), sellers.join(), minDiscount, minPrice, maxPrice, inStockOnly, sort, page, lang];
+  const deps = [search, categories.join(), brands.join(), sellers.join(), minDiscount, minPrice, maxPrice, inStockOnly, sort, page, lang, deliveryPincode];
 
   useEffect(() => {
     let alive = true;
@@ -426,6 +428,7 @@ export default function ShopProducts() {
           seller: sellers,
           minDiscount, minPrice, maxPrice, inStockOnly,
           sort, page, limit: PER_PAGE,
+          ...(deliveryPincode ? { pincode: deliveryPincode } : {}),
         });
         if (!alive) return;
         setState({
@@ -451,7 +454,10 @@ export default function ShopProducts() {
     let alive = true;
     (async () => {
       try {
-        const res = await getShopProducts({ limit: 8, sort: "newest", inStockOnly: true });
+        const res = await getShopProducts({
+          limit: 8, sort: "newest", inStockOnly: true,
+          ...(deliveryPincode ? { pincode: deliveryPincode } : {}),
+        });
         if (alive) setFallback(res.data || []);
       } catch { /* a bonus row — never block the page on it */ }
     })();

@@ -52,10 +52,16 @@ const sellerScope = (req) => ({ ownerType: "seller", ownerId: req.user.sellerId 
 const warehouseOrderScope = async (req) => {
   const scope = await warehouseScope(req.user); // null = unscoped (seller_admin)
   if (!scope) return {};
+
+  // Warehouse managers see:
+  // 1. Orders already assigned to their warehouse (sourceWarehouseId on header or line)
+  // 2. Pending orders where ANY line's sourceWarehouseId matches their warehouse
+  //    — this is how new customer orders appear in the manager's queue immediately
+  //    after checkout assigns the warehouse automatically.
   return {
     $or: [
-      { "items.sourceWarehouseId": { $in: scope } },
       { sourceWarehouseId: { $in: scope } },
+      { "items.sourceWarehouseId": { $in: scope } },
     ],
   };
 };
@@ -357,15 +363,20 @@ exports.getSourceOptions = async (req, res) => {
 
 /**
  * PATCH /api/seller/orders/:id/status — drive the workflow.
- * On "shipped": commit reserved seller stock (or FEFO fallback) AND close the
- * traceability chain — the seller's units for the sold lots become "sold",
- * linked to the buyer. On "cancelled": release reserved stock.
  *
- * On "confirmed" the body may carry `sourceWarehouseId` — the warehouse the
- * seller picked in "Assign a warehouse". It is recorded on the order and scopes
- * the shipment's pick lines. OPTIONAL: omitted, everything behaves exactly as
- * before (lines built FEFO across every warehouse), so existing callers and
- * already-confirmed orders are unaffected.
+ * NEW FLOW (post-logistics integration):
+ *   pending  → confirmed  : warehouse manager approves (warehouse already assigned at checkout)
+ *   confirmed → packed    : warehouse manager
+ *   packed   → shipped    : warehouse manager (after dispatch)
+ *   shipped  → delivered  : system / delivery confirmation
+ *
+ * Seller admin NO LONGER approves orders. Orders land in the warehouse
+ * manager's queue with warehouse already set by checkout auto-assignment.
+ * The `sourceWarehouseId` and `allocation` body params are kept for
+ * backward compat but are no longer required — checkout sets them.
+ *
+ * On "shipped": commit reserved seller stock AND close the traceability chain.
+ * On "cancelled": release reserved stock.
  */
 exports.updateStatus = async (req, res) => {
   try {
@@ -379,12 +390,9 @@ exports.updateStatus = async (req, res) => {
       return res.status(400).json({ success: false, message: `Cannot move an order from "${order.status}" to "${status}".` });
     }
 
-    // ── WAREHOUSE ASSIGNMENT (approval only) ──
-    // `allocation` is [{ productId, warehouseId }] — one entry per ordered line,
-    // which is what a SPLIT order needs. `sourceWarehouseId` is the older
-    // single-warehouse form and is still accepted: it simply assigns every line
-    // to that one warehouse. Neither given, nothing is assigned and the order
-    // behaves exactly as it did before this field existed.
+    // ── WAREHOUSE ASSIGNMENT (kept for backward compat, rarely needed now) ──
+    // Checkout auto-assigns the warehouse, so this block only runs if the order
+    // somehow arrived without one (e.g. manual/POS orders, legacy data).
     if (status === "confirmed" && (allocation || sourceWarehouseId)) {
       const lines = (order.items || []).filter((it) => it.productId);
       const wanted = Array.isArray(allocation) && allocation.length
@@ -699,6 +707,16 @@ exports.shipOrder = async (orderId, sellerId, shipment = null) => {
   const order = await Order.findOne({ _id: orderId, ownerType: "seller", ownerId: sellerId });
   if (!order || ["shipped", "delivered", "cancelled", "returned"].includes(order.status)) return;
 
+  /**
+   * Ek baar dispatch ho gaya to dobara nahi.
+   *
+   * Pehle ye rok `status === "shipped"` se lagti thi. Ab hum status ko "packed"
+   * pe chhod rahe hain (shipped logistics lagata hai jab delivery boy uthaye),
+   * isliye wo purani rok kaam nahi karegi — aur bina iske dobara call aane par
+   * STOCK DO BAAR KAT JAATA.
+   */
+  if (order.dispatchedAt) return;
+
   const siblings = await findOrderShipments(orderId, sellerId);
   const isSplit = siblings.length > 1;
 
@@ -717,7 +735,22 @@ exports.shipOrder = async (orderId, sellerId, shipment = null) => {
   );
   if (isSplit && !allGone) { await order.save(); return; } // partial: keep status, persist deduction
 
-  order.status = "shipped";
+  /**
+   * "packed" pe rukte hain — "shipped" YAHAN NAHI lagta.
+   *
+   * Warehouse ne dabba bandh kar diya, lekin parcel abhi godown me hi pada
+   * hai. Customer ko us waqt "Your order is on its way" dikhana jhooth hai —
+   * delivery boy ne use uthaya tak nahi.
+   *
+   * "shipped" ab Khetify Logistics lagata hai, us lamhe jab agent sach me
+   * parcel utha leta hai. Wahi ek jagah hai jise pata hai ki saman nikla ya
+   * nahi.
+   *
+   * Stock yahin katta hai, jaisa pehle tha — wo sahi hai. Saman godown se
+   * nikalne ke liye taiyaar ho gaya, bas customer ko batane ka waqt abhi nahi
+   * aaya.
+   */
+  if (order.status === "confirmed") order.status = "packed";
   order.dispatchedAt = new Date();
   await order.save();
 };

@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { loginSeller, setSellerToken } from "../../lib/sellerApi";
 import AuthBackground from "../../Components/AuthBackground";
 
-// Seller portal login. Mirrors the company login UX (Khetify brand, #EA2831)
+// Seller portal login. Mirrors the company login UX (Khettify brand, #EA2831)
 // but authenticates against /api/seller/login and stores the distinct
 // sellerToken so it never collides with a company session.
 const SellerLogin = () => {
@@ -42,7 +42,7 @@ const SellerLogin = () => {
     <AuthBackground>
       <div className="w-full max-w-[440px] bg-white rounded-xl shadow-lg p-8 sm:p-10 border border-gray-100">
         <div className="mb-6 text-center">
-          <h1 className="text-[#EA2831] text-4xl font-bold tracking-tight">Khetify</h1>
+          <h1 className="text-[#EA2831] text-4xl font-bold tracking-tight">Khettify</h1>
           <p className="mt-1 text-[11px] font-bold uppercase tracking-widest text-stone-400">Seller Portal</p>
         </div>
         <div className="mb-6 text-center">

@@ -80,7 +80,7 @@ const SellerListings = () => {
       <div className="max-w-7xl mx-auto space-y-6 text-left">
         <div>
           <h1 className="text-xl font-bold text-stone-900">Marketplace listings</h1>
-          <p className="text-sm text-stone-500">Products you've published on the Khetify storefront.</p>
+          <p className="text-sm text-stone-500">Products you've published on the Khettify storefront.</p>
         </div>
 
         {!loading && listings.length === 0 ? (

@@ -5,6 +5,7 @@ import Swal from 'sweetalert2';
 import { State, City } from 'country-state-city';
 import { Modal, Field, inputCls, PrimaryBtn } from '../Company/ims/ImsUi';
 import { getSellerWarehouses, getSellerWarehouseStockSummary, getSellerLots, createSellerWarehouse, updateSellerWarehouse, SELLER_FEATURES } from '../../lib/sellerApi';
+import { getMyStock } from '../../lib/sellerMyProductApi';
 import { getSellerSocket } from '../../lib/socket';
 import { useSellerSubscription } from '../../context/SellerSubscriptionContext';
 import { useSellerPermission } from '../../context/SellerPermissionContext';
@@ -26,6 +27,22 @@ const occupancyInfo = (units, capacity) => {
 const OTHER_CITY = '__other__';
 const toast = (icon, title) => Swal.fire({ icon, title, toast: true, position: 'top-end', timer: 2200, showConfirmButton: false });
 
+// A lot/stock row from either source normalised to one shape, so the card and
+// the detail modal can render both without caring where a row came from.
+// `getSellerLots` (company-supplied stock) and `getMyStock` (the seller's own
+// My Products stock) return the same underlying Inventory document shape —
+// only `source` is added here, purely for the badge in the UI.
+const normaliseRow = (l, source) => ({
+  _id: l._id,
+  warehouseId: l.warehouseId?._id || l.warehouseId,
+  productName: l.productId?.productName || l.productName || '—',
+  variantSku: l.variantSku || null,
+  lotNumber: l.lotNumber || l.batchNumber || '—',
+  availableStock: l.availableStock || 0,
+  expiryDate: l.expiryDate || null,
+  source, // 'mine' | 'company'
+});
+
 // Seller Warehouses — mirrors the company warehouse module (pages/Company/ims/
 // ImsWarehouses.jsx) but is scoped to the seller via the seller API client.
 // NOT gated by approval. A seller must be able to create a warehouse before any
@@ -40,6 +57,12 @@ const SellerWarehouses = () => {
   const canCreate = useSellerPermission('warehouse:create'); // seller_admin only
   const [warehouses, setWarehouses] = useState([]);
   const [lots, setLots] = useState([]);
+  // The seller's OWN uploaded-product stock (My Products > Add stock). Kept
+  // separate from `lots` (company-supplied) because it comes from a different,
+  // ungated endpoint — but merged for display so a warehouse card shows
+  // EVERYTHING physically stored there, not just the company side. See
+  // normaliseRow() and `warehouseLots` below.
+  const [myLots, setMyLots] = useState([]);
   const [showCreate, setShowCreate] = useState(false);
 
   // Deep link from the Inbound Supply gate: /seller/warehouses?new=1 opens Add
@@ -72,6 +95,9 @@ const SellerWarehouses = () => {
   const refresh = useCallback(() => {
     getSellerWarehouses().then((r) => { if (r?.success) setWarehouses(r.data); }).catch(() => {});
     getSellerLots({}).then((r) => { if (r?.success) setLots(r.data || []); }).catch(() => {});
+    // Ungated on purpose (works on the Free plan too, unlike getSellerLots) —
+    // My Products stock should show up here whether or not the seller has Pro.
+    getMyStock({}).then((r) => { if (r?.success) setMyLots(r.data || []); }).catch(() => {});
   }, []);
 
   // Straight to the data — there is no approval to wait on any more.
@@ -108,7 +134,13 @@ const SellerWarehouses = () => {
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
           {warehouses.map((w) => {
             const info = occupancyInfo(w.usedUnits, w.capacityUnits);
-            const warehouseLots = lots.filter((l) => String(l.warehouseId?._id || l.warehouseId) === String(w._id));
+            // Merge both sources so the card lists EVERYTHING physically in
+            // this warehouse — company-supplied lots AND the seller's own
+            // My Products stock — instead of only the company side.
+            const warehouseLots = [
+              ...lots.map((l) => normaliseRow(l, 'company')),
+              ...myLots.map((l) => normaliseRow(l, 'mine')),
+            ].filter((l) => String(l.warehouseId) === String(w._id));
             return (
               <div key={w._id} role="button" tabIndex={0}
                 onClick={() => setDetail(w)}
@@ -158,11 +190,14 @@ const SellerWarehouses = () => {
                 )}
                 <div className="mt-3 space-y-1.5">
                   {warehouseLots.slice(0, 4).map((l) => (
-                    <div key={l._id} className="flex justify-between text-xs border-b border-dashed border-stone-100 pb-1.5">
+                    <div key={`${l.source}-${l._id}`} className="flex justify-between text-xs border-b border-dashed border-stone-100 pb-1.5">
                       <span className="text-stone-500 truncate pr-2">
-                        {l.productId?.productName || l.productName || '—'} · <b>{l.lotNumber || l.batchNumber || '—'}</b>
+                        {l.productName}{l.variantSku ? <span className="text-stone-400"> ({l.variantSku})</span> : null} · <b>{l.lotNumber}</b>{' '}
+                        <span className={`ml-1 inline-block rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider ${l.source === 'mine' ? 'bg-emerald-50 text-emerald-700' : 'bg-stone-100 text-stone-500'}`}>
+                          {l.source === 'mine' ? 'My Product' : 'Company'}
+                        </span>
                       </span>
-                      <span className="font-bold text-stone-900">{fmtUnits(l.availableStock || 0)}</span>
+                      <span className="font-bold text-stone-900">{fmtUnits(l.availableStock)}</span>
                     </div>
                   ))}
                   {warehouseLots.length === 0 && <p className="text-xs text-stone-300">Empty</p>}
@@ -223,7 +258,11 @@ const WarehouseDetailModal = ({ warehouse: w, version, canViewLots, onViewLots, 
   const addr = [w.address?.line1, w.address?.city, w.address?.district, w.address?.state, w.address?.pincode]
     .filter(Boolean).join(', ');
   const [sum, setSum] = useState(null); // { usedUnits, lotCount, capacity, usedPct } — works on any plan
-  const [lots, setLots] = useState(null); // the seller's OWN lot rows in this warehouse (paid)
+  const [lots, setLots] = useState(null); // company-supplied lot rows in this warehouse (paid)
+  // The seller's OWN My Products stock in this warehouse — ungated (works on
+  // Free too), fetched separately from `lots` for the same reason as the list
+  // page: different endpoint, merged only for display.
+  const [myLots, setMyLots] = useState(null);
 
   // Fetch on open and whenever `version` bumps (a live stock event / receive).
   useEffect(() => {
@@ -232,14 +271,25 @@ const WarehouseDetailModal = ({ warehouse: w, version, canViewLots, onViewLots, 
     if (canViewLots) {
       getSellerLots({ warehouseId: w._id }).then((r) => { if (!cancelled && r?.success) setLots(r.data || []); }).catch(() => {});
     }
+    getMyStock({ warehouseId: w._id }).then((r) => { if (!cancelled && r?.success) setMyLots(r.data || []); }).catch(() => {});
     return () => { cancelled = true; };
   }, [w._id, version, canViewLots]);
 
+  // The combined, badge-tagged row list this modal actually renders — company
+  // lots only load when canViewLots (Pro), My Products stock always does.
+  const rows = [
+    ...(canViewLots && lots ? lots.map((l) => normaliseRow(l, 'company')) : []),
+    ...(myLots ? myLots.map((l) => normaliseRow(l, 'mine')) : []),
+  ];
+  const rowsLoading = (canViewLots && lots === null) || myLots === null;
+
   const capacity = sum?.capacity ?? w.capacityUnits ?? null;
   const summaryPct = sum?.usedPct ?? w.usedPct ?? null;
-  // Prefer live lot totals (paid); fall back to the aggregate summary (free).
-  const lotUnits = lots ? lots.reduce((s, l) => s + (l.availableStock || 0), 0) : null;
-  const used = canViewLots && lotUnits != null ? lotUnits : (sum?.usedUnits ?? w.usedUnits ?? 0);
+  // Prefer live totals from the rows actually shown (company + mine) once
+  // both have loaded; fall back to the aggregate summary while loading, or on
+  // Free where per-lot detail for company stock isn't fetched at all.
+  const lotUnits = rowsLoading ? null : rows.reduce((s, l) => s + (l.availableStock || 0), 0);
+  const used = lotUnits != null ? lotUnits : (sum?.usedUnits ?? w.usedUnits ?? 0);
   const pct = capacity ? Math.min(100, Math.round((used / capacity) * 1000) / 10) : summaryPct;
 
   return (
@@ -279,49 +329,58 @@ const WarehouseDetailModal = ({ warehouse: w, version, canViewLots, onViewLots, 
         </div>
       )}
 
-      {canViewLots ? (
-        <>
-          <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400 mb-2">
-            Lots in this warehouse ({lots ? lots.length : '…'})
-          </p>
-          <div className="border border-stone-200 rounded-xl overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-sm min-w-[520px] resp-table">
-                <thead>
-                  <tr className="bg-stone-50 text-[10px] uppercase text-stone-400">
-                    <th className="px-4 py-2 font-bold">Product</th>
-                    <th className="px-4 py-2 font-bold">Lot No.</th>
-                    <th className="px-4 py-2 font-bold">Expiry</th>
-                    <th className="px-4 py-2 font-bold text-right">Qty</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-stone-100">
-                  {(lots || []).map((l) => (
-                    <tr key={l._id}>
-                      <td data-label="Product" className="px-4 py-2 text-stone-700">{l.productId?.productName || '—'}</td>
-                      <td data-label="Lot No." className="px-4 py-2 font-mono text-xs font-bold text-stone-900">{l.lotNumber || l.batchNumber || '—'}</td>
-                      <td data-label="Expiry" className="px-4 py-2 text-xs text-stone-500">{l.expiryDate ? fmtDate(l.expiryDate) : '—'}</td>
-                      <td data-label="Qty" className="px-4 py-2 text-right font-bold text-stone-900">{(l.availableStock ?? 0).toLocaleString('en-IN')}</td>
-                    </tr>
-                  ))}
-                  {lots && lots.length === 0 && (
-                    <tr><td colSpan={4} className="px-4 py-6 text-center text-xs text-stone-400">No stock in this warehouse.</td></tr>
-                  )}
-                  {!lots && (
-                    <tr><td colSpan={4} className="px-4 py-6 text-center text-xs text-stone-400">Loading lots…</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </>
-      ) : (
-        <div className="border border-amber-200 bg-amber-50/50 rounded-xl p-4 text-center">
+      <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400 mb-2">
+        Lots in this warehouse ({rowsLoading ? '…' : rows.length})
+      </p>
+      <div className="border border-stone-200 rounded-xl overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse text-sm min-w-[640px] resp-table">
+            <thead>
+              <tr className="bg-stone-50 text-[10px] uppercase text-stone-400">
+                <th className="px-4 py-2 font-bold">Product</th>
+                <th className="px-4 py-2 font-bold">Variant</th>
+                <th className="px-4 py-2 font-bold">Source</th>
+                <th className="px-4 py-2 font-bold">Lot No.</th>
+                <th className="px-4 py-2 font-bold">Expiry</th>
+                <th className="px-4 py-2 font-bold text-right">Qty</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-stone-100">
+              {rows.map((l) => (
+                <tr key={`${l.source}-${l._id}`}>
+                  <td data-label="Product" className="px-4 py-2 text-stone-700">{l.productName}</td>
+                  <td data-label="Variant" className="px-4 py-2 text-xs text-stone-500">{l.variantSku || '—'}</td>
+                  <td data-label="Source" className="px-4 py-2">
+                    <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${l.source === 'mine' ? 'bg-emerald-50 text-emerald-700' : 'bg-stone-100 text-stone-500'}`}>
+                      {l.source === 'mine' ? 'My Product' : 'Company'}
+                    </span>
+                  </td>
+                  <td data-label="Lot No." className="px-4 py-2 font-mono text-xs font-bold text-stone-900">{l.lotNumber}</td>
+                  <td data-label="Expiry" className="px-4 py-2 text-xs text-stone-500">{l.expiryDate ? fmtDate(l.expiryDate) : '—'}</td>
+                  <td data-label="Qty" className="px-4 py-2 text-right font-bold text-stone-900">{fmtUnits(l.availableStock)}</td>
+                </tr>
+              ))}
+              {!rowsLoading && rows.length === 0 && (
+                <tr><td colSpan={6} className="px-4 py-6 text-center text-xs text-stone-400">No stock in this warehouse.</td></tr>
+              )}
+              {rowsLoading && (
+                <tr><td colSpan={6} className="px-4 py-6 text-center text-xs text-stone-400">Loading lots…</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* The Pro gate only affects COMPANY-supplied lot detail — My Products
+          rows above are never gated, so a Free-plan seller still sees every
+          lot they added themselves, just not the company side's. */}
+      {!canViewLots && (
+        <div className="border border-amber-200 bg-amber-50/50 rounded-xl p-4 text-center mt-3">
           <span className="material-symbols-outlined text-amber-500 text-3xl">lock</span>
-          <p className="text-sm font-bold text-amber-800 mt-1">Per-lot detail is a Pro feature</p>
-          <p className="text-xs text-amber-700 mt-0.5">Occupancy is shown above. Upgrade to see every lot (product · lot no. · qty · expiry) in this warehouse.</p>
+          <p className="text-sm font-bold text-amber-800 mt-1">Company-supplied lot detail is a Pro feature</p>
+          <p className="text-xs text-amber-700 mt-0.5">Your own My Products stock is always shown above. Upgrade to also see company-supplied lots (product · lot no. · qty · expiry) here.</p>
           <button onClick={onViewLots} className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-white bg-[#EA2831] hover:bg-red-600 rounded-lg px-4 py-2">
-            <span className="material-symbols-outlined text-base">workspace_premium</span> Upgrade to view lots
+            <span className="material-symbols-outlined text-base">workspace_premium</span> Upgrade to view company lots
           </button>
         </div>
       )}

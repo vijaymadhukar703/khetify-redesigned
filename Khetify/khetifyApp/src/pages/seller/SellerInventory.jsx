@@ -49,18 +49,30 @@ const SellerInventory = () => {
 
   // One row per lot — deduped, since the same lot may arrive from more than one
   // source. Field names match statusOf/computeInventorySummary's contract.
+  // For deleted products, use productNameSnapshot as fallback to preserve visibility.
   const rows = useMemo(() => {
     const byKey = new Map();
     for (const l of lots) {
       const key = lotKey(l);
       if (!key || byKey.has(key)) continue;
       const p = l.productId || {};
+      
+      // Use product name, fallback to snapshot if product deleted, then to "-"
+      const displayName = p.productName || l.productNameSnapshot || '—';
+      
+      // Check if product is expired (expiryDate has passed)
+      const isExpired = l.expiryDate && new Date(l.expiryDate) < new Date();
+      
+      // If expired, add visual indicator
+      const nameWithStatus = isExpired ? `${displayName} (Expired)` : displayName;
+      
       byKey.set(key, {
         id: key,
         lotId: l._id,
         lotNo: l.lotNumber || l.batchNumber || '—',
         batchNo: l.batchNumber || '—',
-        name: p.productName || '—',
+        name: nameWithStatus,  // ✅ Shows with status
+        originalName: displayName,  // ✅ For filtering/search
         sku: p.skuNumber || '',
         productCode: p.product_code || '',
         category: p.category || 'Uncategorised',
@@ -72,6 +84,7 @@ const SellerInventory = () => {
         stock: l.availableStock || 0,
         reorderLevel: l.lowStockThreshold || 0,
         price: p.mrp || 0, // value at MRP only — never cost
+        isExpired,  // ✅ For styling
       });
     }
     return Array.from(byKey.values());
@@ -84,7 +97,9 @@ const SellerInventory = () => {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return rows.filter((r) => {
-      const matchesSearch = !q || [r.name, r.lotNo, r.batchNo, r.brand, r.warehouse]
+      // Search against originalName (without the "(Expired)" suffix)
+      const searchName = r.originalName || r.name;
+      const matchesSearch = !q || [searchName, r.lotNo, r.batchNo, r.brand, r.warehouse]
         .some((f) => (f || '').toLowerCase().includes(q));
       const d = daysToExpiry(r.expiryDate);
       const matchesExpiry =
@@ -155,7 +170,7 @@ const SellerInventory = () => {
                   {/* Brand + Reorder At are intentionally not shown on Seller
                       Inventory. The reorder value still drives Stock Status and
                       the Low/Out-of-Stock card — it's just not a column here. */}
-                  {['Lot No.', 'Product', 'Product Code', 'Category', 'Warehouse', 'Mfg', 'Expiry', 'Qty', 'Stock Status', 'Expiry Status', 'MRP', ''].map((h, i) => (
+                  {['Lot No.', 'Product', 'Category', 'Warehouse', 'Mfg', 'Expiry', 'Qty', 'Stock Status', 'Expiry Status', 'MRP', ''].map((h, i) => (
                     <th key={i} className={`px-4 py-4 text-[10px] font-bold text-stone-400 uppercase tracking-widest whitespace-nowrap ${h === '' ? 'text-right' : ''}`}>{h}</th>
                   ))}
                 </tr>
@@ -165,15 +180,17 @@ const SellerInventory = () => {
                   const status = statusOf(r);
                   const badge = expiryBadge(r.expiryDate);
                   return (
-                    <tr key={r.id} className="hover:bg-stone-50/30 transition-colors">
+                    <tr key={r.id} className={`hover:bg-stone-50/30 transition-colors ${r.isExpired ? 'bg-red-50/30' : ''}`}>
                       <td data-label="Lot No." className="px-4 py-5">
                         <span className="text-xs font-bold bg-stone-100 text-stone-600 px-2.5 py-1 rounded-full whitespace-nowrap">{r.lotNo}</span>
                       </td>
                       <td data-label="Product" className="px-4 py-5">
-                        <p className="font-bold text-stone-900 text-sm">{r.name}</p>
+                        <p className={`font-bold text-sm ${r.isExpired ? 'text-red-700' : 'text-stone-900'}`}>
+                          {r.name}
+                        </p>
                         {r.sku && <p className="text-[10px] font-bold text-stone-400 uppercase tracking-tight">SKU: {r.sku}</p>}
                       </td>
-                      <td data-label="Product Code" className="px-4 py-5 text-sm text-stone-500 font-medium whitespace-nowrap">{r.productCode || '—'}</td>
+                      {/* <td data-label="Product Code" className="px-4 py-5 text-sm text-stone-500 font-medium whitespace-nowrap">{r.productCode || '—'}</td> */}
                       <td data-label="Category" className="px-4 py-5 text-sm text-stone-500 font-medium">{r.category}</td>
                       {/* <td data-label="Packing Size" className="px-4 py-5 text-sm text-stone-500 font-medium">{r.packingSize || '—'}</td> */}
                       <td data-label="Warehouse" className="px-4 py-5 text-sm text-stone-900 font-medium">{r.warehouse}</td>

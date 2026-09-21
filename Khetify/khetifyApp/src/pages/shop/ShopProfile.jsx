@@ -57,7 +57,7 @@ const EMPTY_ADDR = {
   city: "", district: "", state: "", pincode: "",
 };
 
-const ORDER_STEPS = ["pending", "confirmed", "packed", "shipped", "delivered"];
+const ORDER_STEPS = ["pending", "confirmed", "packed", "shipped", "out_for_delivery", "delivered"];
 
 /* Pill tone per status. The LABELS come from STATUS_LABEL_KEY; only the colour
    is decided here, so the words stay in one place. */

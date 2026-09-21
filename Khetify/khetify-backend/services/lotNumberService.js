@@ -208,7 +208,7 @@ async function generateKhetifyLotNumber(companyId, { productId, mfgDate, boxed =
  * two concurrent claims both upsert, one wins, and the loser re-reads the
  * winner's row and is judged against it.
  */
-async function registerLotNumber({ companyId, productId, lotNumber, source = "manual", serial = null, requireNew = false, session }) {
+async function registerLotNumber({ companyId, productId, lotNumber, source = "manual", serial = null, requireNew = false, productNameSnapshot = null, session }) {
   const lot = String(lotNumber || "").trim().toUpperCase();
   if (!lot) throw httpErr("A lot number is required", 400);
 
@@ -221,7 +221,7 @@ async function registerLotNumber({ companyId, productId, lotNumber, source = "ma
   // a part. A pre-read could not promise that.
   if (requireNew) {
     try {
-      await LotNumber.create([{ companyId, lotNumber: lot, productId, source, serial }], {
+      await LotNumber.create([{ companyId, lotNumber: lot, productId, source, serial, productNameSnapshot }], {
         session: session || undefined,
       });
     } catch (err) {
@@ -234,7 +234,7 @@ async function registerLotNumber({ companyId, productId, lotNumber, source = "ma
   try {
     await LotNumber.updateOne(
       { companyId, lotNumber: lot },
-      { $setOnInsert: { companyId, lotNumber: lot, productId, source, serial } },
+      { $setOnInsert: { companyId, lotNumber: lot, productId, source, serial, productNameSnapshot } },
       { upsert: true, session: session || undefined }
     );
   } catch (err) {

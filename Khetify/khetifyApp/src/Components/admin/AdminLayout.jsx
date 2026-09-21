@@ -55,7 +55,7 @@ const AdminLayout = () => {
     <div className="flex flex-col h-screen bg-stone-50 font-sora overflow-hidden text-stone-900">
       <TopNav
         onMenuClick={() => setMobileOpen(true)}
-        brand={{ label: 'Khetify', sublabel: 'Admin' }}
+        brand={{ label: 'Khettify', sublabel: 'Admin' }}
         homePath="/admin/dashboard"
         profile={profile}
       />

@@ -196,10 +196,7 @@ async function ledger(
 const POPULATE_PRODUCT = {
   path: "productId",
   select:
-    // gstPercentage rides along for the POS line-tax display; the authoritative
-    // tax is still computed in salesService.createOrder from the Product itself.
-    // product_code is the product-level code shown in the company Inventory table.
-    "productName product_code category unitType unit packagingType mrp gstPercentage brandName skuNumber hsnCode productImages companyId",
+    "productName category unitType unit packagingType mrp brandName skuNumber hsnCode productImages companyId",
   populate: { path: "companyId", select: "companyName" },
 };
 
@@ -471,6 +468,23 @@ async function receiveLot({
     err.status = 400;
     throw err;
   }
+
+  // Fetch the product to capture its name for the snapshot
+  // This ensures existing stock will display the product name even if the product is later deleted
+  const product = await require("../model/Company/productModel").findById(productId).lean();
+  if (!product) {
+    const err = new Error("Product not found");
+    err.status = 404;
+    throw err;
+  }
+  const productNameSnapshot = product.productName;
+
+  // Prevent creating lots for deleted products
+  if (product.deletedAt) {
+    const err = new Error("Cannot create lot for a deleted product");
+    err.status = 400;
+    throw err;
+  }
   // BULK PACKAGING validation runs FIRST, before a lot number is minted or any
   // stock is touched — a mismatched boxes × units-per-box must cost nothing.
   // This is the authoritative check: the browser form enforces the same rule,
@@ -611,7 +625,7 @@ async function receiveLot({
   // written only when this call actually CREATES the row. receiveLot upserts on
   // the lot identity, so a second receive into the same lot adds stock but must
   // leave the original creation figures alone.
-  const insertOnlyFields = { originalQuantity: qty, lotOrigin };
+  const insertOnlyFields = { originalQuantity: qty, lotOrigin, productNameSnapshot };
   // The recipe that built this number — generated or hand-composed — kept so
   // each box and unit ID descends from it. Insert-only: the number is the row's
   // identity, so a top-up receive must never re-write how it was formed.
@@ -716,6 +730,7 @@ async function receiveLot({
         lotNumber: lot,
         source: isManualLot ? "manual" : "khetify",
         serial: lotSerial,
+        productNameSnapshot,
         // A composed number must be genuinely new — not even the same product
         // may re-use it, because there is no serial to tell the two lots apart.
         requireNew: composedManual,

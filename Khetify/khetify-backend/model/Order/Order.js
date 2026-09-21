@@ -103,8 +103,10 @@ const orderSchema = new mongoose.Schema(
 
     items: [orderItemSchema],
     totalUnits: { type: Number, default: 0 },
-    totalAmount: { type: Number, default: 0 },
+    totalAmount: { type: Number, default: 0 },   // product subtotal (excl. delivery)
     totalTax: { type: Number, default: 0 },
+    deliveryCharge: { type: Number, default: 0 }, // logistics branch baseFreight
+    grandTotal: { type: Number, default: 0 },     // totalAmount + deliveryCharge
 
     channel: { type: String, enum: ["online", "offline"], default: "online" }, // legacy
     salesChannel: { type: String, enum: ["pos", "website", "shopify", "amazon", "flipkart", "manual", "b2b"], default: "manual" },
@@ -132,7 +134,7 @@ const orderSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["pending", "confirmed", "packed", "shipped", "delivered", "returned", "cancelled"],
+      enum: ["pending", "confirmed", "packed", "shipped", "out_for_delivery", "delivered", "returned", "cancelled"],
       default: "pending",
     },
 
@@ -149,6 +151,17 @@ const orderSchema = new mongoose.Schema(
 
     placedAt: { type: Date, default: Date.now },
     dispatchedAt: { type: Date },
+
+    /**
+     * Delivery ke asli waqt — logistics likhta hai.
+     *
+     * `dispatchedAt` warehouse ke dabba bandh karne ka waqt hai. Customer ko
+     * "Shipped" ke saamne wahi dikhta tha, jabki agent do ghante baad uthata
+     * tha. Ab har kadam ka apna sacha waqt hai.
+     */
+    shippedAt: { type: Date },
+    outForDeliveryAt: { type: Date },
+    deliveredAt: { type: Date },
     // 🛒 STOREFRONT: set when a shopper cancels their own order (only allowed
     //    while it is still "pending", i.e. before the seller reserves stock).
     cancelledAt: { type: Date },

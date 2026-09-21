@@ -35,6 +35,7 @@ router.get("/:id/box", authorize("transfer:read"), ctrl.getBox);
 router.post("/:id/box-label", authorize("transfer:create"), ctrl.boxLabelPreview);
 router.get("/:id/delivery-label", authorize("transfer:read"), ctrl.deliveryLabel);
 router.post("/:id/dispatch-order", authorize("transfer:create"), ctrl.dispatchOrder);
+router.post("/:id/dispatch-direct", authorize("transfer:create"), ctrl.dispatchDirect);
 router.get("/:id/manifest", authorize("transfer:create"), ctrl.manifest); // print label before dispatch
 router.post("/:id/dispatch", authorize("transfer:create"), ctrl.dispatch);
 router.post("/:id/receive", authorize("transfer:create"), ctrl.receive);
