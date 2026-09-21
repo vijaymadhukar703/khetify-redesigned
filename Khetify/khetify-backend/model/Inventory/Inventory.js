@@ -12,6 +12,16 @@ const inventorySchema = new mongoose.Schema(
       ref: "Product",
       required: true,
     },
+
+    // SNAPSHOT of the product name at the time this inventory record was created.
+    // Preserved so if the product is later deleted, warehouse stock still displays
+    // the product name instead of "-" or null. Allows stock to remain sellable
+    // with full product visibility even after product is deleted from catalog.
+    productNameSnapshot: {
+      type: String,
+      default: null,
+    },
+
     ownerType: {
       type: String,
       enum: ["company", "seller"],

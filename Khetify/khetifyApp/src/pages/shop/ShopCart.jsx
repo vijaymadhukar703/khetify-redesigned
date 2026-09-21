@@ -4,8 +4,10 @@ import { useCart } from "../../context/CartContext";
 import { useWishlist } from "../../context/WishlistContext";
 import { useT } from "../../context/ShopLanguageContext";
 import { getProductImage } from "../../lib/productImage";
-import { getShopProducts } from "../../lib/shopApi";
+import { getShopProducts, getShopProduct } from "../../lib/shopApi";
 import { rupee } from "../../Components/shop/ProductCard";
+import { useDeliveryPincode } from "../../lib/useDeliveryPincode";
+import DeliveryBadge from "../../Components/shop/DeliveryBadge";
 
 /* Khetify cart.
 
@@ -95,6 +97,11 @@ const CartLine = memo(function CartLine({ item, setQty, removeItem, onSaveForLat
             </p>
           )}
 
+          {/* Delivery eligibility badge — only when a pincode is known */}
+          <div className="mt-1.5">
+            <DeliveryBadge deliveryEligible={item.deliveryEligible} />
+          </div>
+
           <div className="mt-2.5 flex flex-wrap items-baseline gap-x-2">
             <span className="font-heading text-[17px] font-bold text-stone-900">{rupee(item.price * item.qty)}</span>
             {hasDiscount && <span className="text-[12px] text-stone-400 line-through">{rupee(item.mrp * item.qty)}</span>}
@@ -137,6 +144,44 @@ export default function ShopCart() {
   const t = useT();
   const navigate = useNavigate();
   const [suggestions, setSuggestions] = useState([]);
+  const deliveryPincode = useDeliveryPincode();
+  // Map: listingId → deliveryEligible (true/false/null)
+  const [deliveryMap, setDeliveryMap] = useState({});
+
+  // Fetch delivery eligibility for all cart items whenever pincode changes
+  useEffect(() => {
+    if (!deliveryPincode || !items.length) { setDeliveryMap({}); return; }
+    let alive = true;
+    const uniqueListings = [...new Set(items.map((it) => it.listingId))];
+    Promise.all(
+      uniqueListings.map((id) =>
+        getShopProduct(id, { pincode: deliveryPincode })
+          .then((res) => ({ id, eligible: res?.data?.deliveryEligible ?? null }))
+          .catch(() => ({ id, eligible: null }))
+      )
+    ).then((results) => {
+      if (!alive) return;
+      const map = {};
+      for (const { id, eligible } of results) map[id] = eligible;
+      setDeliveryMap(map);
+    });
+    return () => { alive = false; };
+  }, [deliveryPincode, items.length]);
+
+  // Annotate items with live delivery eligibility
+  const annotatedItems = useMemo(
+    () => items.map((it) => ({
+      ...it,
+      deliveryEligible: deliveryPincode ? (deliveryMap[it.listingId] ?? null) : null,
+    })),
+    [items, deliveryMap, deliveryPincode]
+  );
+
+  // Items that are not deliverable to the customer's pincode
+  const nonDeliverableItems = useMemo(
+    () => annotatedItems.filter((it) => it.deliveryEligible === false),
+    [annotatedItems]
+  );
 
   const totalMrp = items.reduce((sum, it) => sum + (it.mrp || it.price) * it.qty, 0);
   const totalSavings = totalMrp - subtotal;
@@ -164,7 +209,11 @@ export default function ShopCart() {
     let alive = true;
     const firstCategory = cartCategories.split(",")[0];
 
-    getShopProducts({ category: firstCategory, limit: 12 })
+    getShopProducts({
+        category: firstCategory,
+        limit: 12,
+        ...(deliveryPincode ? { pincode: deliveryPincode } : {}),
+      })
       .then((res) => {
         if (!alive) return;
         const rows = (res?.data || []).filter((p) => !cartIds.includes(p.listingId));
@@ -228,7 +277,20 @@ export default function ShopCart() {
       <div className="grid items-start gap-4 lg:grid-cols-3 lg:gap-6">
 
         <div className="space-y-3.5 lg:col-span-2">
-          {items.map((it) => (
+          {/* Delivery warning — show when any cart item cannot be delivered */}
+          {nonDeliverableItems.length > 0 && (
+            <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+              <span className="material-symbols-outlined shrink-0 text-xl">local_shipping</span>
+              <div>
+                <p className="font-bold">Delivery not available for some items</p>
+                <p className="mt-0.5 text-[13px]">
+                  {nonDeliverableItems.map((it) => `"${it.name}"`).join(", ")} cannot be delivered to your saved address.
+                  Please remove {nonDeliverableItems.length === 1 ? "it" : "them"} or choose a different address before checking out.
+                </p>
+              </div>
+            </div>
+          )}
+          {annotatedItems.map((it) => (
             <CartLine
               key={it.lineId || it.listingId}
               item={it}

@@ -1,8 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, Suspense, lazy } from 'react';
 import { useParams } from 'react-router-dom';
 import { getSupplyOrderDetails } from '../../lib/imsApi';
 import BackButton from '../../Components/BackButton';
 import { usePermission } from '../../context/PermissionContext';
+
+const Barcode128 = lazy(() => import('../../lib/barcode128'));
 
 // SUPPLY REQUEST DETAIL — read-only traceability for ONE request: what was
 // asked for, which PARENT LOTS it was allocated from, and the EXACT child unit
@@ -168,23 +170,51 @@ const ParentLotCard = ({ lot, hideAllocation = false }) => {
 
   return (
     <Card title={`Parent Lot · ${lot.lotNumber}`}>
+      {/* ── LOT SUMMARY ─────────────────────────────────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-4 gap-y-3 mb-4">
-        <Detail label="Parent Lot No." value={<span className="font-mono text-xs">{lot.lotNumber}</span>} />
+        <Detail label="Lot Number" value={<span className="font-mono text-xs">{lot.lotNumber}</span>} />
         <Detail label="Batch No." value={lot.mfgBatchNo} />
-        {/* Product / Source Warehouse / Qty Allocated / Received Qty hidden for
-            the Main Company view. Display-only — the API data is unchanged. */}
         {!hideAllocation && <Detail label="Product" value={lot.productName} />}
         {!hideAllocation && <Detail label="Source Warehouse" value={lot.sourceWarehouse} />}
         {!hideAllocation && <Detail label="Qty Allocated" value={fmtNum(lot.allocatedQty)} />}
         {!hideAllocation && <Detail label="Received Qty" value={lot.receivedQty == null ? '—' : fmtNum(lot.receivedQty)} />}
+        {lot.mrp != null && <Detail label="MRP" value={`₹${lot.mrp}`} />}
+        {lot.category && <Detail label="Category" value={lot.category} />}
         <Detail label="Manufacturing Date" value={fmtDate(lot.mfgDate)} />
         <Detail label="Expiry Date" value={fmtDate(lot.expiryDate)} />
         <Detail label="Transfer Status" value={<span className="capitalize">{String(lot.status || '').replace(/_/g, ' ')}</span>} />
+        {lot.originalQty != null && <Detail label="Original Lot Qty" value={fmtNum(lot.originalQty)} />}
       </div>
 
+      {/* ── PACKAGING SUMMARY ───────────────────────────────── */}
+      {(lot.packagingType || lot.unitLabelCount > 0) && (
+        <div className="border-t border-stone-100 pt-3 mb-4">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400 mb-2">Packaging Summary</p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2">
+            {lot.packagingType && <Detail label="Packaging" value={lot.packagingType} />}
+            {lot.unitLabelCount > 0 && <Detail label="Unit Labels" value={fmtNum(lot.unitLabelCount)} />}
+          </div>
+        </div>
+      )}
+
+      {/* ── LOT BARCODE ─────────────────────────────────────── */}
+      <div className="border-t border-stone-100 pt-3 mb-4 flex justify-center">
+        <div className="text-center">
+          <Suspense fallback={<div className="h-12 w-64 bg-stone-100 rounded animate-pulse" />}>
+            <Barcode128 value={lot.lotNumber} height={52} className="w-64" />
+          </Suspense>
+          <p className="text-[11px] font-mono text-stone-500 mt-1 break-all">{lot.lotNumber}</p>
+        </div>
+      </div>
+
+      {/* ── CHILD UNITS ─────────────────────────────────────── */}
       <div className="border-t border-stone-100 pt-3">
         {units.length === 0 ? (
-          <p className="text-sm text-stone-400">No child units picked yet.</p>
+          <p className="text-sm text-stone-400">
+            {lot.trackSerial
+              ? 'This product is serial-tracked, but this lot was picked by quantity only — no unit-level barcodes were scanned, so none are recorded here.'
+              : "This product isn't serial-tracked, so it has no individual unit barcodes to show."}
+          </p>
         ) : (
           <>
             <div className="flex flex-wrap items-center justify-between gap-2 mb-2">

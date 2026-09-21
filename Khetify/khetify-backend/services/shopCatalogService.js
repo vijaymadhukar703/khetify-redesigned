@@ -5,6 +5,7 @@ const Seller = require("../model/Seller/Seller");
 const Company = require("../model/Company/Company");
 const Inventory = require("../model/Inventory/Inventory");
 const i18n = require("./translationService");
+const delivery = require("./deliveryService");
 
 /**
  * Public storefront catalog (customer-shop). Surfaces every seller's PUBLISHED
@@ -176,7 +177,9 @@ function toShopVariants(product) {
 /** Shape one listing+product+seller into the card/detail payload sent to the UI. */
 // `variantStock` is null for every caller but the detail page — see
 // variantStockMap. The catalogue grid passes nothing and is unaffected.
-function toShopProduct(listing, product, seller, company, availableStock, variantStock = null) {
+// `deliveryEligible` is null when no customer pincode was provided (no filter),
+// true/false when a pincode was given.
+function toShopProduct(listing, product, seller, company, availableStock, variantStock = null, deliveryEligible = null) {
   const price = listingPrice(listing, product);
   const stock = Number.isFinite(availableStock) ? availableStock : (product.availableStock ?? 0);
   return {
@@ -213,6 +216,9 @@ function toShopProduct(listing, product, seller, company, availableStock, varian
     // NULL when this product's stock is not tracked per variant. Null means
     // "use availableStock", NOT "zero".
     variantStock,
+    // DELIVERY ELIGIBILITY — null when no customer pincode was provided (show
+    // no badge), true = "Delivery Available", false = "Delivery Unavailable".
+    deliveryEligible,
     seller: seller
       ? {
           id: String(seller._id),
@@ -599,9 +605,45 @@ async function listProducts(q = {}) {
   const [res] = await SellerListing.aggregate(pipeline).allowDiskUse(true);
   const total = res?.total?.[0]?.n || 0;
 
-  const items = (res?.items || []).map((row) =>
-    toShopProduct(row, row.p, row.s?.[0], row.c?.[0], row._stock)
-  );
+  // ── DELIVERY ELIGIBILITY ──────────────────────────────────────────────────
+  // When the customer provides a pincode (via query or their default address),
+  // tag each listing with deliveryEligible and sort eligible ones first.
+  const customerPincode = (q.pincode || "").trim();
+  let deliverablePins = null;
+  if (customerPincode) {
+    deliverablePins = await delivery.getDeliverableWarehousePincodes(customerPincode);
+  }
+
+  const rawItems = res?.items || [];
+
+  // Build pairs for delivery eligibility check
+  let deliveryMap = new Map();
+  if (customerPincode) {
+    const pairs = rawItems.map((row) => ({
+      sellerId:  row.sellerId,
+      productId: row.productId,
+    }));
+    deliveryMap = await delivery.buildDeliveryEligibilityMap(pairs, deliverablePins);
+  }
+
+  const items = rawItems.map((row) => {
+    const eligible = customerPincode
+      ? (deliveryMap.get(`${row.sellerId}:${row.productId}`) ?? false)
+      : null;
+    return toShopProduct(row, row.p, row.s?.[0], row.c?.[0], row._stock, null, eligible);
+  });
+
+  // When pincode is provided, deliverable items appear before non-deliverable.
+  // In-stock already outranks out-of-stock inside each group (preserved).
+  if (customerPincode) {
+    items.sort((a, b) => {
+      const da = a.deliveryEligible ? 1 : 0;
+      const db = b.deliveryEligible ? 1 : 0;
+      if (da !== db) return db - da; // eligible first
+      // Within same group keep original order (stock then publish date)
+      return 0;
+    });
+  }
 
   // The seller facet groups by id; resolve the ids to names in one query.
   const sellerRows = res?.sellers || [];
@@ -716,7 +758,7 @@ async function suggest(term, limit = 8, lang = "en") {
   return out;
 }
 
-async function getProduct(listingId, lang = "en") {
+async function getProduct(listingId, lang = "en", customerPincode = null) {
   if (!mongoose.isValidObjectId(listingId)) throw httpErr("Product not found", 404);
   const listing = await SellerListing.findOne({ _id: listingId, status: "published" }).lean();
   if (!listing) throw httpErr("Product not found", 404);
@@ -730,8 +772,22 @@ async function getProduct(listingId, lang = "en") {
   ]);
   if (!product) throw httpErr("Product not found", 404);
   const stock = stocks.get(`${listing.sellerId}:${listing.productId}`);
+
+  // Delivery eligibility for this specific listing
+  let deliveryEligible = null;
+  if (customerPincode) {
+    deliveryEligible = await delivery.isListingDeliverable(
+      listing.sellerId,
+      listing.productId,
+      customerPincode
+    );
+  }
+
   // Localised on the way out; untranslated strings stay English.
-  return i18n.localize(toShopProduct(listing, product, seller, company, stock, variantStock), i18n.pickLang(lang));
+  return i18n.localize(
+    toShopProduct(listing, product, seller, company, stock, variantStock, deliveryEligible),
+    i18n.pickLang(lang)
+  );
 }
 
 /**

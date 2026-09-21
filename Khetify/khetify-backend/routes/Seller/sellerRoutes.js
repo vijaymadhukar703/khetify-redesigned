@@ -4,9 +4,13 @@ const router = express.Router();
 const {
   registerSeller,
   loginSeller,
+  sendRegistrationOtp,
+  verifyRegistrationOtp,
   getSellerMe,
   getSellerProfile,
   updateSellerProfile,
+  sendSellerPhoneOtp,
+  verifySellerPhoneOtp,
   updateSellerInfo,
   updateSellerContact,
   updateSellerVerification,
@@ -45,6 +49,9 @@ const manageCompanies = authorize("company:manage");
 // company login/register limiter.
 router.post("/register", registerSeller);
 router.post("/login", loginSeller);
+// Email OTP verification for registration
+router.post("/send-otp", sendRegistrationOtp);
+router.post("/verify-otp", verifyRegistrationOtp);
 
 // ── PASSWORD RESET (public, no auth) ──
 // Getting back into your own account must never depend on being signed in, so
@@ -65,6 +72,13 @@ router.post("/change-password", authMiddleware, sellerChangePassword);
 // Authenticated principal.
 router.get("/me", authMiddleware, getSellerMe);
 router.get("/profile", authMiddleware, getSellerProfile); // registration details + KYC docs (signed)
+
+// 📱 PHONE VERIFICATION. authMiddleware ke peeche — number token wale account
+// ka apna hai; body se sirf tab aata hai jab seller use badal raha ho, aur tab
+// bhi account par tabhi lagta hai jab OTP sahi nikle. Koi capability check
+// nahi: apna number verify karna har principal ka apna kaam hai.
+router.post("/profile/phone/send-otp", authMiddleware, sendSellerPhoneOtp);
+router.post("/profile/phone/verify", authMiddleware, verifySellerPhoneOtp);
 router.patch(
   "/profile",
   authMiddleware,

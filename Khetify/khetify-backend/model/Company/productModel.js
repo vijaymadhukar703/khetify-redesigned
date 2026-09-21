@@ -239,6 +239,22 @@ const productSchema = new mongoose.Schema(
       enum: ["saveDraft", "uploaded"],
       default: "saveDraft",
     },
+
+    // ================= SOFT DELETE =================
+    // When a product is deleted, it's marked as deleted via deletedAt timestamp
+    // but NOT actually removed from the database. This prevents breaking:
+    // - Existing warehouse stock (Inventory records)
+    // - Existing lots (LotNumber records)  
+    // - Historical orders and shipments
+    // Deleted products:
+    // - Do NOT appear in product catalogs
+    // - Cannot accept new stock/lots
+    // - Existing stock remains sellable with product name preserved
+    deletedAt: {
+      type: Date,
+      default: null,
+      index: true,
+    },
   },
   { timestamps: true },
 );

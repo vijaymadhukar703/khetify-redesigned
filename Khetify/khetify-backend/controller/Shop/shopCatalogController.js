@@ -24,7 +24,11 @@ exports.listCategories = async (req, res) => {
 /** GET /api/shop/products/:listingId — public product detail. */
 exports.getProduct = async (req, res) => {
   try {
-    const product = await catalog.getProduct(req.params.listingId, req.query.lang);
+    const product = await catalog.getProduct(
+      req.params.listingId,
+      req.query.lang,
+      req.query.pincode || null
+    );
     res.json({ success: true, data: product });
   } catch (err) {
     res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });

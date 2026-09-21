@@ -13,7 +13,7 @@ import { getPendingPayment, clearPendingPayment } from "../../lib/pendingPayment
 import { clearBuyNowItem } from "../../lib/buyNow";
 
 /* ─────────────────────────────────────────────────────────────────────────────
- * Khetify — Payment  (/customer-shop/payment/:paymentId)
+ * Khettify — Payment  (/customer-shop/payment/:paymentId)
  *
  * Was ShopMockPayment.jsx. Renamed because it is no longer only a mock: the
  * server decides which gateway is live (Razorpay when its keys are in .env,
@@ -89,7 +89,9 @@ export default function ShopPayment() {
   }, [paymentId, t]);
 
   const quote = payment?.quote || {};
-  const amount = payment?.amount || 0;
+  const amount = payment?.amount || 0;            // grandTotal (what's actually charged)
+  const subtotalAmount = quote?.amount || amount; // product subtotal only
+  const deliveryCharge = quote?.deliveryCharge || 0;
   const orderCount = quote.orderCount || 1;
   const totalUnits = quote.totalUnits || 0;
   const ship = quote.shippingAddress || {};
@@ -274,6 +276,19 @@ export default function ShopPayment() {
               {t(totalUnits === 1 ? "pay.itemCount" : "pay.itemCountPlural", { count: totalUnits })}
               {orderCount > 1 && <> · {t("pay.ordersNote", { count: orderCount })}</>}
             </p>
+            {/* Subtotal + delivery breakdown */}
+            {deliveryCharge > 0 && (
+              <div className="mt-3 inline-flex flex-col gap-1 rounded-xl bg-white/70 px-4 py-2 text-[12px] text-[#6B6A62] border border-[#E2E0D6]">
+                <div className="flex justify-between gap-6">
+                  <span>Subtotal</span>
+                  <span className="font-semibold text-[#14201A]">{rupee(subtotalAmount)}</span>
+                </div>
+                <div className="flex justify-between gap-6">
+                  <span>Delivery</span>
+                  <span className="font-semibold text-[#14201A]">{rupee(deliveryCharge)}</span>
+                </div>
+              </div>
+            )}
           </div>
 
           {processing ? (

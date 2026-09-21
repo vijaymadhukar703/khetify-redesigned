@@ -3,9 +3,90 @@ const authService = require("../../services/shopAuthService");
 exports.register = async (req, res) => {
   try {
     const result = await authService.register(req.body);
-    res.status(201).json({ success: true, message: "Account created", ...result });
+    res
+      .status(201)
+      .json({ success: true, message: "Account created", ...result });
   } catch (err) {
-    res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
+    res
+      .status(err.status || 500)
+      .json({ success: false, message: err.message || "Server error" });
+  }
+};
+
+/* ─────────── OTP-FIRST REGISTRATION ───────────
+ * STEP 1: OTP भेजो — कोई account नहीं बनता.
+ * STEP 2: OTP verify करो — तभी account बनता है और token मिलता है.
+ * दोनों PUBLIC हैं: shopper के पास अभी token है ही नहीं. */
+
+exports.sendRegistrationOtp = async (req, res) => {
+  try {
+    const result = await authService.sendRegistrationOtp(req.body);
+    res.json({ success: true, message: "Verification code sent", ...result });
+  } catch (err) {
+    res
+      .status(err.status || 500)
+      .json({ success: false, message: err.message || "Server error" });
+  }
+};
+
+exports.verifyRegistrationOtp = async (req, res) => {
+  try {
+    const result = await authService.verifyRegistrationOtp(req.body);
+    res
+      .status(201)
+      .json({ success: true, message: "Account created", ...result });
+  } catch (err) {
+    res
+      .status(err.status || 500)
+      .json({ success: false, message: err.message || "Server error" });
+  }
+};
+
+exports.resendRegistrationOtp = async (req, res) => {
+  try {
+    const result = await authService.resendRegistrationOtp(req.body);
+    res.json({ success: true, message: "Verification code sent", ...result });
+  } catch (err) {
+    res
+      .status(err.status || 500)
+      .json({ success: false, message: err.message || "Server error" });
+  }
+};
+
+/* ─────────── 🔑 FORGOT PASSWORD ───────────
+ * तीनों PUBLIC: shopper password भूल चुका है, log in कर ही नहीं सकता.
+ * changePassword नीचे वैसा ही है — वो logged-in shopper के लिए है. */
+
+exports.sendPasswordResetOtp = async (req, res) => {
+  try {
+    const result = await authService.sendPasswordResetOtp(req.body);
+    res.json({ success: true, message: "Verification code sent", ...result });
+  } catch (err) {
+    res
+      .status(err.status || 500)
+      .json({ success: false, message: err.message || "Server error" });
+  }
+};
+
+exports.resetPassword = async (req, res) => {
+  try {
+    const result = await authService.resetPasswordWithOtp(req.body);
+    res.json({ success: true, message: "Password updated", ...result });
+  } catch (err) {
+    res
+      .status(err.status || 500)
+      .json({ success: false, message: err.message || "Server error" });
+  }
+};
+
+exports.resendPasswordResetOtp = async (req, res) => {
+  try {
+    const result = await authService.resendPasswordResetOtp(req.body);
+    res.json({ success: true, message: "Verification code sent", ...result });
+  } catch (err) {
+    res
+      .status(err.status || 500)
+      .json({ success: false, message: err.message || "Server error" });
   }
 };
 
@@ -14,7 +95,9 @@ exports.login = async (req, res) => {
     const result = await authService.login(req.body);
     res.json({ success: true, message: "Logged in", ...result });
   } catch (err) {
-    res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
+    res
+      .status(err.status || 500)
+      .json({ success: false, message: err.message || "Server error" });
   }
 };
 
@@ -28,7 +111,9 @@ exports.updateMe = async (req, res) => {
     const consumer = await authService.updateProfile(req.consumer.id, req.body);
     res.json({ success: true, message: "Profile updated", data: consumer });
   } catch (err) {
-    res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
+    res
+      .status(err.status || 500)
+      .json({ success: false, message: err.message || "Server error" });
   }
 };
 
@@ -39,18 +124,29 @@ exports.updateMe = async (req, res) => {
 exports.changePassword = async (req, res) => {
   try {
     const result = await authService.changePassword(req.consumer.id, req.body);
-    res.json({ success: true, message: "Password updated", data: result.consumer });
+    res.json({
+      success: true,
+      message: "Password updated",
+      data: result.consumer,
+    });
   } catch (err) {
-    res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
+    res
+      .status(err.status || 500)
+      .json({ success: false, message: err.message || "Server error" });
   }
 };
 
 exports.verifyOtp = async (req, res) => {
   try {
-    const result = await authService.verifyEmailOtp(req.consumer.id, req.body.code);
+    const result = await authService.verifyEmailOtp(
+      req.consumer.id,
+      req.body.code,
+    );
     res.json({ success: true, message: "Email verified", ...result });
   } catch (err) {
-    res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
+    res
+      .status(err.status || 500)
+      .json({ success: false, message: err.message || "Server error" });
   }
 };
 
@@ -59,7 +155,9 @@ exports.resendOtp = async (req, res) => {
     const result = await authService.resendEmailOtp(req.consumer.id);
     res.json({ success: true, message: "Verification code sent", ...result });
   } catch (err) {
-    res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
+    res
+      .status(err.status || 500)
+      .json({ success: false, message: err.message || "Server error" });
   }
 };
 
@@ -80,16 +178,27 @@ exports.previewLocation = async (req, res) => {
     const data = await authService.previewLocation(req.body);
     res.json({ success: true, data });
   } catch (err) {
-    res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
+    res
+      .status(err.status || 500)
+      .json({ success: false, message: err.message || "Server error" });
   }
 };
 
 exports.updateLocation = async (req, res) => {
   try {
-    const consumer = await authService.saveLocationAccess(req.consumer.id, req.body);
-    res.json({ success: true, message: "Location preference saved", data: consumer });
+    const consumer = await authService.saveLocationAccess(
+      req.consumer.id,
+      req.body,
+    );
+    res.json({
+      success: true,
+      message: "Location preference saved",
+      data: consumer,
+    });
   } catch (err) {
-    res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
+    res
+      .status(err.status || 500)
+      .json({ success: false, message: err.message || "Server error" });
   }
 };
 
@@ -98,6 +207,8 @@ exports.me = async (req, res) => {
     const consumer = await authService.getMe(req.consumer.id);
     res.json({ success: true, data: consumer });
   } catch (err) {
-    res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
+    res
+      .status(err.status || 500)
+      .json({ success: false, message: err.message || "Server error" });
   }
 };

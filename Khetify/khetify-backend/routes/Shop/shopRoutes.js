@@ -5,6 +5,7 @@ const consumerAuth = require("../../middlewares/consumerAuth");
 const cat = require("../../controller/Shop/shopCatalogController");
 const auth = require("../../controller/Shop/shopAuthController");
 const order = require("../../controller/Shop/shopOrderController");
+const deliveryCtrl = require("../../controller/Shop/shopDeliveryController");
 // 💳 ONLINE PAYMENT (mock gateway). COD does not touch this controller.
 const payment = require("../../controller/Shop/shopPaymentController");
 
@@ -13,8 +14,26 @@ router.get("/products", cat.listProducts);
 router.get("/categories", cat.listCategories);
 router.get("/products/:listingId", cat.getProduct);
 
+/* ─────────── Delivery eligibility (public) ─────────── */
+router.get("/delivery/check", deliveryCtrl.checkDelivery);
+
 /* ─────────── Consumer auth ─────────── */
 router.post("/auth/register", auth.register);
+
+/* OTP-FIRST REGISTRATION — तीनों PUBLIC (consumerAuth नहीं!).
+   Shopper के पास अभी token है ही नहीं, क्योंकि account अभी बना ही नहीं.
+   Token verify-otp सफल होने पर यही route लौटाता है. */
+router.post("/auth/register/send-otp", auth.sendRegistrationOtp);
+router.post("/auth/register/verify-otp", auth.verifyRegistrationOtp);
+router.post("/auth/register/resend-otp", auth.resendRegistrationOtp);
+
+/* 🔑 FORGOT PASSWORD — तीनों PUBLIC. Shopper password भूल चुका है, इसलिए
+   consumerAuth लगाना उसे उसी दरवाज़े से बाहर कर देगा जिसे वो खोलना चाहता है.
+   /auth/change-password नीचे अलग है — वो logged-in shopper के लिए है. */
+router.post("/auth/forgot-password/send-otp", auth.sendPasswordResetOtp);
+router.post("/auth/forgot-password/resend-otp", auth.resendPasswordResetOtp);
+router.post("/auth/forgot-password/reset", auth.resetPassword);
+
 router.post("/auth/login", auth.login);
 router.post("/auth/verify-otp", consumerAuth, auth.verifyOtp);
 router.post("/auth/resend-otp", consumerAuth, auth.resendOtp);
@@ -36,7 +55,11 @@ router.post("/addresses", consumerAuth, order.addAddress);
 // 👤 PROFILE: the address book needs edit + default, not just add/delete.
 // The more specific "/:addressId/default" is declared BEFORE the bare
 // "/:addressId" so it can never be swallowed by it.
-router.patch("/addresses/:addressId/default", consumerAuth, order.setDefaultAddress);
+router.patch(
+  "/addresses/:addressId/default",
+  consumerAuth,
+  order.setDefaultAddress,
+);
 router.put("/addresses/:addressId", consumerAuth, order.updateAddress);
 router.delete("/addresses/:addressId", consumerAuth, order.deleteAddress);
 
@@ -69,7 +92,11 @@ router.post("/payments/:paymentId/verify", consumerAuth, payment.verify);
 router.post("/payments/:paymentId/dismiss", consumerAuth, payment.dismiss);
 // ⛔ MOCK GATEWAY ONLY. The service refuses this whenever Razorpay is active,
 //    so it is unreachable in any environment that has real credentials.
-router.post("/payments/:paymentId/mock/complete", consumerAuth, payment.completeMock);
+router.post(
+  "/payments/:paymentId/mock/complete",
+  consumerAuth,
+  payment.completeMock,
+);
 router.post("/payments/:paymentId/cancel", consumerAuth, payment.cancel);
 router.get("/payments/:paymentId", consumerAuth, payment.getPayment);
 

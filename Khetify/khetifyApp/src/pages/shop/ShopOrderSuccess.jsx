@@ -96,7 +96,11 @@ export default function ShopOrderSuccess() {
 
   if (!orders.length) return null;
 
-  const grandTotal = orders.reduce((s, o) => s + (o.totalAmount || 0), 0);
+  // Each order's own delivery-inclusive total is saved server-side as
+  // grandTotal (totalAmount is items-only) — summed here across every order
+  // this checkout produced, with totalAmount as the fallback for an older
+  // order saved before grandTotal existed.
+  const grandTotal = orders.reduce((s, o) => s + (o.grandTotal ?? o.totalAmount ?? 0), 0);
   const totalUnits = orders.reduce((s, o) => s + (o.totalUnits || 0), 0);
   const ship = orders[0]?.shippingAddress || {};
   const placedAt = orders[0]?.placedAt || orders[0]?.createdAt;
@@ -248,7 +252,7 @@ export default function ShopOrderSuccess() {
                       : t(o.totalUnits === 1 ? "os.itemsPayOnDelivery" : "os.itemsPayOnDeliveryPlural", { count: o.totalUnits })}
                   </span>
                   <span className="font-heading text-lg font-extrabold text-[#14201A]">
-                    {rupee(o.totalAmount || 0)}
+                    {rupee(o.grandTotal ?? o.totalAmount ?? 0)}
                   </span>
                 </footer>
               </section>

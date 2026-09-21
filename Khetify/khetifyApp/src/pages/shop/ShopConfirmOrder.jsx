@@ -130,7 +130,9 @@ export default function ShopConfirmOrder() {
 
   const ship = quote?.shippingAddress || {};
   const sellers = quote?.sellers || [];
-  const amount = quote?.amount || 0;
+  const amount = quote?.amount || 0;              // product subtotal
+  const deliveryCharge = quote?.deliveryCharge || 0;
+  const grandTotal = quote?.grandTotal || amount; // subtotal + delivery
   const totalUnits = quote?.totalUnits || 0;
 
   return (
@@ -151,11 +153,24 @@ export default function ShopConfirmOrder() {
           {/* ── Amount ── */}
           <div className="border-b border-[#E2E0D6] bg-[#FAFAF7] px-6 py-6 text-center">
             <p className="text-[11px] font-bold uppercase tracking-wide text-[#9B9A92]">{t("cf.payOnDelivery")}</p>
-            <p className="mt-1 font-heading text-3xl font-black tracking-tight text-[#14201A]">{rupee(amount)}</p>
+            <p className="mt-1 font-heading text-3xl font-black tracking-tight text-[#14201A]">{rupee(grandTotal)}</p>
             <p className="mt-1.5 text-[12px] text-[#6B6A62]">
               {t(totalUnits === 1 ? "cf.itemCount" : "cf.itemCountPlural", { count: totalUnits })}
               {sellers.length > 1 && <> · {t("cf.ordersNote", { count: sellers.length })}</>}
             </p>
+            {/* Subtotal + delivery breakdown */}
+            {deliveryCharge > 0 && (
+              <div className="mt-3 inline-flex flex-col gap-1 rounded-xl bg-white/70 px-4 py-2 text-[12px] text-[#6B6A62] border border-[#E2E0D6]">
+                <div className="flex justify-between gap-6">
+                  <span>Subtotal</span>
+                  <span className="font-semibold text-[#14201A]">{rupee(amount)}</span>
+                </div>
+                <div className="flex justify-between gap-6">
+                  <span>Delivery</span>
+                  <span className="font-semibold text-[#14201A]">{rupee(deliveryCharge)}</span>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="px-6 py-6">
@@ -226,7 +241,7 @@ export default function ShopConfirmOrder() {
               <span className="min-w-0">
                 <span className="block text-[13px] font-bold text-[#14201A]">{t("co.cod")}</span>
                 <span className="block text-[12px] leading-snug text-[#6B6A62]">
-                  {t("cf.codNote", { amount: rupee(amount) })}
+                  {t("cf.codNote", { amount: rupee(grandTotal) })}
                 </span>
               </span>
             </div>

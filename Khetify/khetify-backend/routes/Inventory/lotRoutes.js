@@ -12,6 +12,7 @@ const { sellFefoBody, receiveBody, transferBody, receiveBoxBody } = require("../
 
 const {
   getLots,
+  getPendingReceipt,
   receiveLot,
   transferLot,
   sellFefo,
@@ -27,6 +28,8 @@ const {
 
 // Reading lots: any logged-in company / inventory-reading role.
 router.get("/", auth, authorize("lot:read"), getLots);
+// Lots in transit to THIS operator's warehouse (pendingReceipt) — for Hub panel.
+router.get("/pending-receipt", auth, authorize("lot:read"), getPendingReceipt);
 // Company Warehouse "Receive Lot" scan — resolve an exact pending parent lot.
 router.get("/incoming", auth, authorize("lot:read"), incomingLot);
 // Company Warehouse Confirm Receive — the only place pending qty becomes stock

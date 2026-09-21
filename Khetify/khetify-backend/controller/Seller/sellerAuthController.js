@@ -2,12 +2,116 @@ const Seller = require("../../model/Seller/Seller");
 const Company = require("../../model/Company/Company");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 const { capabilitiesForRole, deniedForRole } = require("../../config/permissions");
 const User = require("../../model/User/User");
 const { isBlank, isEmail, isPhone10, isPincode, isGstin, isPan, isValidYear } = require("../../utils/fieldValidators");
 const { notify } = require("../../services/notificationService");
+const { sendSMS, otpMessageText } = require("../../services/smsService");
 const SellerCompanyLink = require("../../model/Seller/SellerCompanyLink");
 const SellerDocument = require("../../model/PC/SellerDocument");
+const { sendMail } = require("../../services/mailerService");
+
+// ── IN-MEMORY OTP STORE ───────────────────────────────────────────────────────
+// Maps email → { otp, expiresAt, formData }
+// Production note: replace with Redis for multi-instance deployments.
+const otpStore = new Map();
+
+/**
+ * POST /api/seller/auth/send-otp
+ * Validates form data, generates a 6-digit OTP, and emails it.
+ * Does NOT create the account yet.
+ */
+exports.sendRegistrationOtp = async (req, res) => {
+  try {
+    const { businessName, email, phone, password } = req.body || {};
+    const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!businessName?.trim()) return res.status(400).json({ message: "Business name is required" });
+    if (!email?.trim() || !emailRe.test(email.trim())) return res.status(400).json({ message: "A valid email is required" });
+    if (!phone?.trim() || !/^[0-9]{10}$/.test(phone.trim())) return res.status(400).json({ message: "Phone must be 10 digits" });
+    if (!password || password.length < 6) return res.status(400).json({ message: "Password must be at least 6 characters" });
+
+    // Check duplicates before sending OTP
+    const emailClash = await User.findOne({ email: email.trim().toLowerCase() });
+    if (emailClash) return res.status(400).json({ message: "This email is already registered." });
+    const phoneClash = await User.findOne({ phone: phone.trim() });
+    if (phoneClash) return res.status(400).json({ message: "This phone number is already registered." });
+
+    // Generate 6-digit OTP
+    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
+
+    // Store temporarily
+    otpStore.set(email.trim().toLowerCase(), {
+      otp,
+      expiresAt,
+      formData: { businessName: businessName.trim(), email: email.trim(), phone: phone.trim(), password },
+    });
+
+    // Send email
+    await sendMail({
+      to: email.trim(),
+      subject: "Your Khetify Seller Registration OTP",
+      html: `
+        <div style="font-family:sans-serif;max-width:480px;margin:auto;">
+          <h2 style="color:#EA2831;">Verify your email</h2>
+          <p>Hello <strong>${businessName.trim()}</strong>,</p>
+          <p>Use the OTP below to complete your Khetify Seller registration. It expires in <strong>10 minutes</strong>.</p>
+          <div style="font-size:36px;font-weight:bold;letter-spacing:8px;color:#EA2831;margin:24px 0;text-align:center;">
+            ${otp}
+          </div>
+          <p style="color:#888;font-size:12px;">If you did not request this, ignore this email.</p>
+        </div>
+      `,
+      text: `Your Khetify Seller registration OTP is: ${otp}\nIt expires in 10 minutes.`,
+    });
+
+    res.json({ success: true, message: "OTP sent to " + email.trim() });
+  } catch (err) {
+    console.error("[sendRegistrationOtp]", err);
+    res.status(500).json({ message: err.message || "Failed to send OTP" });
+  }
+};
+
+/**
+ * POST /api/seller/auth/verify-otp
+ * Verifies OTP and, if correct, creates the seller account.
+ */
+exports.verifyRegistrationOtp = async (req, res) => {
+  try {
+    const { email, otp } = req.body || {};
+    if (!email || !otp) return res.status(400).json({ message: "Email and OTP are required" });
+
+    const key = email.trim().toLowerCase();
+    const record = otpStore.get(key);
+    if (!record) return res.status(400).json({ message: "No OTP found for this email. Please request a new one." });
+    if (Date.now() > record.expiresAt) {
+      otpStore.delete(key);
+      return res.status(400).json({ message: "OTP has expired. Please request a new one." });
+    }
+    if (String(otp).trim() !== record.otp) {
+      return res.status(400).json({ message: "Incorrect OTP. Please try again." });
+    }
+
+    // OTP valid — create the account using the stored form data
+    otpStore.delete(key);
+    const { businessName, phone, password, email: storedEmail } = record.formData;
+
+    // Re-check duplicates (edge case: someone registered between OTP send and verify)
+    const emailClash = await User.findOne({ email: storedEmail.toLowerCase() });
+    if (emailClash) return res.status(400).json({ message: "This email is already registered." });
+    const phoneClash = await User.findOne({ phone });
+    if (phoneClash) return res.status(400).json({ message: "This phone number is already registered." });
+
+    // Delegate to the existing registerSeller logic (reuse)
+    req.body = { businessName, email: storedEmail, phone, password };
+    return exports.registerSeller(req, res);
+  } catch (err) {
+    console.error("[verifyRegistrationOtp]", err);
+    res.status(500).json({ message: err.message || "Verification failed" });
+  }
+};
 const Warehouse = require("../../model/Warehouse/Warehouse");
 const fileService = require("../../services/fileService");
 const path = require("path");
@@ -41,6 +145,8 @@ function publicSeller(seller) {
     _id: seller._id,
     email: seller.email,
     phone: seller.phone,
+    // Phone verification ki halat — portal ka banner bina ek aur request ke faisla kar leta hai.
+    phoneVerified: seller.phoneVerified === true,
     status: seller.status,
     sellerInfo: seller.sellerInfo,
     contact: seller.contact,
@@ -334,6 +440,14 @@ const DOC_TYPE_LABELS = {
   ...Object.fromEntries(SELLER_LICENCES.map((L) => [L.docType, L.label])),
 };
 
+/** "9898765432" → "******5432". Seller pehchan le, par poora number screen par
+ *  dobara na chhape. */
+const maskSellerPhone = (p) => {
+  const v = String(p || "");
+  if (v.length < 4) return v;
+  return v.slice(0, -4).replace(/./g, "*") + v.slice(-4);
+};
+
 /** Build the seller Profile response — identity + compliance + KYC docs (signed
  * at read-time). Shared by GET and PATCH so both return the same fresh shape. */
 async function sellerProfilePayload(seller) {
@@ -460,6 +574,300 @@ exports.getSellerProfile = async (req, res) => {
  * certificate / PAN file (upserted SellerDocuments) and append other docs;
  * every file is stored as an S3 key and served signed.
  */
+/* ═══════════════ 📱 PHONE VERIFICATION (seller profile) ═══════════════
+ * Registration email OTP se hoti hai; phone baad me yahan se verify hota hai.
+ * Dono authMiddleware ke peeche hain — seller pehle se logged in hai, isliye
+ * number sirf tab body se aata hai jab wo number BADAL raha ho, aur tab bhi
+ * account par tabhi lagta hai jab OTP sahi nikle.
+ *
+ * Company side (companyController) ka seller-roop. Dono alag isliye hain ki
+ * dono ke model, field-naam aur uniqueness alag hain.
+ * ═════════════════════════════════════════════════════════════════════ */
+
+const SELLER_PHONE_OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const SELLER_PHONE_OTP_MAX_ATTEMPTS = 5;
+const SELLER_PHONE_RESEND_COOLDOWN_MS = 60 * 1000;
+const SELLER_PHONE_MAX_RESENDS = 5;
+
+const hashSellerPhoneOtp = (code) =>
+  crypto.createHash("sha256").update(String(code)).digest("hex");
+
+/**
+ * POST /api/seller/profile/phone/send-otp   { number? }
+ *
+ * `number` na aaye to account ka maujooda phone verify hota hai. Aaye to seller
+ * apna number badal kar verify kar raha hai — code us naye number par jata hai.
+ */
+exports.sendSellerPhoneOtp = async (req, res) => {
+  try {
+    const sellerId = req.user.sellerId || req.user.id;
+    if (!sellerId) {
+      return res
+        .status(401)
+        .json({
+          success: false,
+          message: "No seller in this session — please log in again",
+        });
+    }
+
+    const seller = await Seller.findById(sellerId);
+    if (!seller)
+      return res
+        .status(404)
+        .json({ success: false, message: "Seller not found" });
+
+    const asked = String(req.body.number || "").trim();
+    const target = asked || String(seller.phone || "").trim();
+
+    if (!target) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "Add a phone number to your profile first",
+        });
+    }
+    if (!/^[0-9]{10}$/.test(target)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Phone must be a 10-digit number" });
+    }
+    // Wahi number, aur wo pehle se verified — dobara bhejne ka koi matlab nahi.
+    if (seller.phoneVerified && target === String(seller.phone || "").trim()) {
+      return res.json({
+        success: true,
+        alreadyVerified: true,
+        message: "Phone number is already verified",
+      });
+    }
+    // Naya number kisi aur seller ke paas to nahi — yeh yahin pakadna behtar
+    // hai, warna seller poora OTP bharne ke baad janega ki number liya ja chuka.
+    if (target !== String(seller.phone || "").trim()) {
+      const clash = await Seller.findOne({
+        phone: target,
+        _id: { $ne: seller._id },
+      }).select("_id");
+      if (clash) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message: "This phone number is already registered.",
+          });
+      }
+    }
+
+    // Throttle usi number par lagu hota hai. Number badla to yeh nayi koshish
+    // hai, purani ginti us par thopna galat hoga.
+    const otp = seller.phoneOtp || {};
+    const sameTarget =
+      String(otp.pendingNumber || seller.phone || "").trim() === target;
+    if (sameTarget && otp.lastSentAt) {
+      const sinceLast = Date.now() - new Date(otp.lastSentAt).getTime();
+      if (sinceLast < SELLER_PHONE_RESEND_COOLDOWN_MS) {
+        const wait = Math.ceil(
+          (SELLER_PHONE_RESEND_COOLDOWN_MS - sinceLast) / 1000,
+        );
+        return res
+          .status(429)
+          .json({
+            success: false,
+            message: `Please wait ${wait} seconds before requesting a new code`,
+          });
+      }
+      if ((otp.resendCount || 0) >= SELLER_PHONE_MAX_RESENDS) {
+        return res
+          .status(429)
+          .json({
+            success: false,
+            message: "Too many code requests. Please try again later.",
+          });
+      }
+    }
+
+    const code = String(crypto.randomInt(100000, 1000000)); // 6 digits
+    seller.phoneOtp = {
+      codeHash: hashSellerPhoneOtp(code),
+      expiresAt: new Date(Date.now() + SELLER_PHONE_OTP_TTL_MS),
+      attempts: 0,
+      lastSentAt: new Date(),
+      resendCount: sameTarget ? (otp.resendCount || 0) + 1 : 1,
+      pendingNumber: target,
+    };
+    await seller.save({ validateModifiedOnly: true });
+
+    let otpSent = false;
+    try {
+      // Text smsService ka hai — DLT template se hubahu match hona zaroori hai
+      // aur wo poore system me ek hi jagah rehna chahiye.
+      const result = await sendSMS({
+        number: target,
+        text: otpMessageText(code),
+      });
+      otpSent = result.delivered;
+    } catch (smsErr) {
+      // SMS fail ho to bhi code surakshit hai — seller dobara bhej sakta hai.
+      console.error("[seller-phone] SMS failed:", smsErr.message);
+    }
+
+    return res.json({
+      success: true,
+      message: "Verification code sent",
+      otpSent,
+      phoneMasked: maskSellerPhone(target),
+    });
+  } catch (err) {
+    console.error("Send Seller Phone OTP Error:", err);
+    res
+      .status(500)
+      .json({ success: false, message: err.message || "Server error" });
+  }
+};
+
+/**
+ * POST /api/seller/profile/phone/verify   { code }
+ *
+ * Sahi code par phoneVerified sach ho jata hai aur OTP mita diya jata hai — ek
+ * code dobara istemal nahi ho sakta. Response me poora profile lautaya jata hai
+ * (wahi shape jo GET /profile ka hai), taki frontend ko doosri request na karni
+ * pade aur badge turant badal jaye.
+ */
+exports.verifySellerPhoneOtp = async (req, res) => {
+  try {
+    const sellerId = req.user.sellerId || req.user.id;
+    if (!sellerId) {
+      return res
+        .status(401)
+        .json({
+          success: false,
+          message: "No seller in this session — please log in again",
+        });
+    }
+
+    const code = String(req.body.code || "").trim();
+    if (!code)
+      return res
+        .status(400)
+        .json({ success: false, message: "Verification code is required" });
+
+    const seller = await Seller.findById(sellerId);
+    if (!seller)
+      return res
+        .status(404)
+        .json({ success: false, message: "Seller not found" });
+
+    const otp = seller.phoneOtp || {};
+    // Pending code ho to use pehle niptao — "already verified" ka jawab tabhi
+    // sahi hai jab badalne ko kuch bacha hi na ho.
+    if (seller.phoneVerified && !otp.codeHash) {
+      return res.json({
+        success: true,
+        message: "Phone number is already verified",
+        data: await sellerProfilePayload(seller),
+      });
+    }
+    if (!otp.codeHash || !otp.expiresAt) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "No pending verification. Request a new code.",
+        });
+    }
+    if (new Date(otp.expiresAt) < new Date()) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Code expired. Request a new code." });
+    }
+    if ((otp.attempts || 0) >= SELLER_PHONE_OTP_MAX_ATTEMPTS) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "Too many attempts. Request a new code.",
+        });
+    }
+
+    if (hashSellerPhoneOtp(code) !== otp.codeHash) {
+      seller.phoneOtp.attempts = (otp.attempts || 0) + 1;
+      await seller.save({ validateModifiedOnly: true });
+      return res
+        .status(401)
+        .json({ success: false, message: "Incorrect code" });
+    }
+
+    // Sahi code — yani is number ka maalik hona saabit. Ab, aur sirf ab, wo
+    // account ka number banta hai.
+    const proven = String(otp.pendingNumber || seller.phone || "").trim();
+    seller.phone = proven;
+    seller.phoneVerified = true;
+    seller.phoneOtp = {
+      codeHash: null,
+      expiresAt: null,
+      attempts: 0,
+      lastSentAt: null,
+      resendCount: 0,
+      pendingNumber: null,
+    };
+    try {
+      await seller.save({ validateModifiedOnly: true });
+    } catch (saveErr) {
+      // Code bharne ke dauran kisi aur ne wahi number le liya ho.
+      if (saveErr.code === 11000) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message: "This phone number is already registered.",
+          });
+      }
+      throw saveErr;
+    }
+
+    return res.json({
+      success: true,
+      message: "Phone number verified",
+      data: await sellerProfilePayload(seller),
+    });
+  } catch (err) {
+    console.error("Verify Seller Phone OTP Error:", err);
+    res
+      .status(500)
+      .json({ success: false, message: err.message || "Server error" });
+  }
+};
+
+exports.getSellerProfile = async (req, res) => {
+  try {
+    const sellerId = req.user.sellerId;
+    if (!sellerId)
+      return res.status(401).json({
+        success: false,
+        message: "No seller in this session — please log in again",
+      });
+
+    const seller = await Seller.findById(sellerId).select("-passwordHash");
+    if (!seller)
+      return res
+        .status(404)
+        .json({ success: false, message: "Seller not found" });
+
+    res.json({ success: true, data: await sellerProfilePayload(seller) });
+  } catch (error) {
+    res
+      .status(500)
+      .json({ success: false, message: error.message || "Server error" });
+  }
+};
+
+/**
+ * PATCH /api/seller/profile — edit the OWN seller's identity + compliance and
+ * replace KYC documents. Resolved from the token (req.user.sellerId); only that
+ * seller's record + documents are touched. Files (multipart) replace the GST
+ * certificate / PAN file (upserted SellerDocuments) and append other docs;
+ * every file is stored as an S3 key and served signed.
+ */
+
 exports.updateSellerProfile = async (req, res) => {
   try {
     const sellerId = req.user.sellerId;

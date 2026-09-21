@@ -5,9 +5,11 @@ import { getProductImage } from "../../lib/productImage";
 import { useCart } from "../../context/CartContext";
 import { useT, useShopLanguage } from "../../context/ShopLanguageContext";
 import { useWishlist } from "../../context/WishlistContext";
+import { useDeliveryPincode } from "../../lib/useDeliveryPincode";
+import DeliveryBadge from "../../Components/shop/DeliveryBadge";
 
 /* ────────────────────────────────────────────────────────────────
-   Khetify Bazaar — customer home / dashboard.
+   Khettify Bazaar — customer home / dashboard.
 
    DATA FLOW IS UNCHANGED from the previous version:
    • one Promise-free effect fetches getShopCategories()
@@ -20,7 +22,7 @@ import { useWishlist } from "../../context/WishlistContext";
    Everything else is presentation. Deals / best sellers / biggest savings are
    DERIVED from the same fetched array — no new endpoints.
 
-   Theme: Khetify red #EA2831 (+ #B3121A depth) on white, near-black #16191B
+   Theme: Khettify red #EA2831 (+ #B3121A depth) on white, near-black #16191B
    for text and image veils. Sora display (font-heading) / Manrope body.
 
    LAYOUT: offer bar → full-width slider → categories → advertisements, then
@@ -423,6 +425,9 @@ export const HomeProductCard = memo(function HomeProductCard({ product }) {
           )}
         </div>
 
+        {/* Delivery availability badge — only rendered when a pincode is known */}
+        <DeliveryBadge deliveryEligible={product.deliveryEligible} className="mt-1" />
+
         <AddToCartButton product={product} className="mt-auto w-full" />
       </div>
     </div>
@@ -613,7 +618,7 @@ const AdBannerCard = ({ ad: a, className = "", decorative = false }) => {
 const FEATURED_AD_COUNT = 2;
 const FEATURED_ADS = AD_BANNERS.slice(0, FEATURED_AD_COUNT);
 
-/* ── WHY KHETIFY ─────────────────────────────────────────────────────────
+/* ── WHY KHETTIFY ─────────────────────────────────────────────────────────
    This slot briefly held customer testimonials. It does not any more: the
    marketplace is still being built, so there are no customers to quote, and a
    storefront that opens with invented praise misleads the people reading it —
@@ -623,7 +628,7 @@ const FEATURED_ADS = AD_BANNERS.slice(0, FEATURED_AD_COUNT);
 
    THE THREE POINTS ARE FACTS ABOUT THE SYSTEM, not marketing adjectives.
    Principal Certificates, lot/unit labelling and FEFO dating are things
-   Khetify genuinely does — which is why they can be printed flatly, and why
+   Khettify genuinely does — which is why they can be printed flatly, and why
    they will still be true a year from now. */
 const WHY_KHETIFY = [
   { id: "w1", icon: "verified" },
@@ -778,7 +783,7 @@ export function BrandShowcase() {
           about that company rather than about us. */}
       <div className="flex flex-col items-center">
         <span className="font-heading text-[24px] font-extrabold -tracking-[0.035em] text-[#16191B] sm:text-[30px]">
-          Khetify<span className="text-[#EA2831]">Direct</span>
+          Khettify<span className="text-[#EA2831]">Direct</span>
         </span>
         <span className="mt-1 text-[9.5px] font-extrabold uppercase tracking-[0.26em] text-stone-500 sm:text-[10.5px]">
           {t("brands.tagline")}
@@ -870,6 +875,7 @@ export default function ShopHome() {
   const { lang } = useShopLanguage();
   const { setQ } = useOutletContext() || {};
   const navigate = useNavigate();
+  const deliveryPincode = useDeliveryPincode();
 
   const [categories, setCategories] = useState([]);
   const [products, setProducts] = useState([]);
@@ -894,7 +900,12 @@ export default function ShopHome() {
     setLoadingFirst(true);
     setError("");
     try {
-      const res = await getShopProducts({ limit: FEED_SIZE, page: 1, sort: "newest" });
+      const res = await getShopProducts({
+        limit: FEED_SIZE,
+        page: 1,
+        sort: "newest",
+        ...(deliveryPincode ? { pincode: deliveryPincode } : {}),
+      });
       setProducts((res.data || []).slice(0, FEED_SIZE));
     } catch (e) {
       setError(e?.response?.data?.message || t("home.loadError"));

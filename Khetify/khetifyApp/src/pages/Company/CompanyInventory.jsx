@@ -37,13 +37,24 @@ const CompanyInventory = () => {
 
   // Map each lot to the shape the shared summary helper expects — identical to
   // the dashboard, so totals/percentages match exactly.
+  // For deleted products, use productNameSnapshot as fallback to preserve visibility.
   const rows = useMemo(
     () =>
       lots.map((l) => {
         const p = l.productId || {};
+        // Use product name, fallback to snapshot if product deleted, then to "-"
+        const displayName = p.productName || l.productNameSnapshot || '—';
+        
+        // Check if product is expired (expiryDate has passed)
+        const isExpired = l.expiryDate && new Date(l.expiryDate) < new Date();
+        
+        // If expired, add visual indicator
+        const nameWithStatus = isExpired ? `${displayName} (Expired)` : displayName;
+        
         return {
           id: l._id,
-          name: p.productName || '—',
+          name: nameWithStatus,
+          originalName: displayName, // Keep for filtering/search
           category: p.category || 'Uncategorised',
           lotNo: l.lotNumber || l.batchNumber || '—',
           warehouse: l.warehouseId?.name || 'Unassigned',
@@ -51,6 +62,7 @@ const CompanyInventory = () => {
           stock: l.availableStock || 0,
           reorderLevel: l.lowStockThreshold || 0,
           price: p.mrp || 0,
+          isExpired,
         };
       }),
     [lots]
@@ -65,8 +77,9 @@ const CompanyInventory = () => {
   const filtered = useMemo(() => {
     return rows.filter((item) => {
       const q = search.toLowerCase();
+      // Search against originalName (without the "(Expired)" suffix)
       const matchesSearch =
-        item.name.toLowerCase().includes(q) || item.lotNo.toLowerCase().includes(q);
+        item.originalName.toLowerCase().includes(q) || item.lotNo.toLowerCase().includes(q);
       const matchesCategory = category === 'All' || item.category === category;
       const matchesStatus = statusFilter === 'All' || statusOf(item) === statusFilter;
       return matchesSearch && matchesCategory && matchesStatus;
@@ -166,9 +179,11 @@ const CompanyInventory = () => {
                   const status = statusOf(item);
                   const badge = expiryBadge(item.expiryDate);
                   return (
-                    <tr key={item.id} className="hover:bg-stone-50/30 transition-colors">
+                    <tr key={item.id} className={`hover:bg-stone-50/30 transition-colors ${item.isExpired ? 'bg-red-50/30' : ''}`}>
                       <td data-label="Product Details" className="px-4 py-5">
-                        <p className="font-bold text-stone-900 text-sm">{item.name}</p>
+                        <p className={`font-bold text-sm ${item.isExpired ? 'text-red-700' : 'text-stone-900'}`}>
+                          {item.name}
+                        </p>
                         <p className="text-[10px] font-bold text-stone-400 uppercase tracking-tight">Lot: {item.lotNo}</p>
                       </td>
                       <td data-label="Category" className="px-4 py-5 text-sm text-stone-500 font-medium">{item.category}</td>

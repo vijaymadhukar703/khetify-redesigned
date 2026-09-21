@@ -1,14 +1,19 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useParams, useNavigate, useSearchParams, Link } from "react-router-dom";
-import { getShopProduct, getShopProducts } from "../../lib/shopApi";
+import { getShopProduct, getShopProducts, submitQuantityRequest } from "../../lib/shopApi";
 import { getProductImage } from "../../lib/productImage";
 import { toBuyNowItem, setBuyNowItem } from "../../lib/buyNow";
 import { useCart } from "../../context/CartContext";
 import { useWishlist } from "../../context/WishlistContext";
+import { useShopAuth } from "../../context/ShopAuthContext";
 import { useT, useShopLanguage } from "../../context/ShopLanguageContext";
 import { rupee } from "../../Components/shop/ProductCard";
 import NotifyMeButton from "../../Components/shop/NotifyMeButton";
+import RequestQuantityModal from "../../Components/shop/RequestQuantityModal";
 import { HomeProductCard } from "./ShopHome";
+import Swal from "sweetalert2";
+import { useDeliveryPincode } from "../../lib/useDeliveryPincode";
+import DeliveryBadge from "../../Components/shop/DeliveryBadge";
 
 
 /* Product detail — real-marketplace UI. UI ONLY. Every existing action and data
@@ -76,6 +81,7 @@ export default function ShopProductDetail() {
   const navigate = useNavigate();
   const { addItem, items } = useCart();
   const { isWishlisted, toggleItem } = useWishlist();
+  const deliveryPincode = useDeliveryPincode();
 
   const [product, setProduct] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -98,6 +104,15 @@ export default function ShopProductDetail() {
   const [related, setRelated] = useState([]);
   const [justAdded, setJustAdded] = useState(false); // add-to-cart feedback (UI)
   const addedTimer = useRef(null);
+  
+  // Request Quantity Feature
+  const [showRequestModal, setShowRequestModal] = useState(false);
+  const [submittingRequest, setSubmittingRequest] = useState(false);
+  const { consumer } = useShopAuth();
+  const customerId = consumer?._id || null;
+  const customerName = consumer?.name || "Customer";
+  const customerEmail = consumer?.email || "";
+  const customerPhone = consumer?.phone || "";
   const railRef = useRef(null);
 
   useEffect(() => () => clearTimeout(addedTimer.current), []);
@@ -112,7 +127,10 @@ export default function ShopProductDetail() {
     window.scrollTo({ top: 0, behavior: "auto" });
     (async () => {
       try {
-        const res = await getShopProduct(listingId);
+        const res = await getShopProduct(
+          listingId,
+          deliveryPincode ? { pincode: deliveryPincode } : {}
+        );
         if (!alive) return;
         setProduct(res.data);
         setQty(1); // default cart quantity is always 1
@@ -347,6 +365,68 @@ export default function ShopProductDetail() {
     }
   };
 
+  // Request Quantity Feature Handler
+  const handleSubmitQuantityRequest = async (requestQty, isUrgent) => {
+    if (!customerId) {
+      Swal.fire({
+        icon: "warning",
+        title: t("shop.loginRequired") || "Please Login",
+        text: t("shop.loginToRequest") || "You need to be logged in to request quantity",
+        confirmButtonColor: "#EA2831",
+      });
+      navigate("/customer-shop/login");
+      return;
+    }
+
+    setSubmittingRequest(true);
+
+    try {
+      const variantDetails = selectedVariant
+        ? {
+            label: selectedVariant.label,
+            attributes: selectedVariant.attributes || {},
+            image: selectedVariant.images?.[0],
+          }
+        : null;
+
+      const payload = {
+        customerId,
+        customerName,
+        customerEmail,
+        customerPhone,
+        productId: product.productId,
+        listingId: product.listingId,
+        productName: product.name,
+        productImage: product.images?.[0],
+        variantId: selectedVariant?.sku || selectedVariant?.label,
+        variantDetails,
+        requestedQuantity: parseInt(requestQty),
+        isUrgent,
+      };
+
+      await submitQuantityRequest(payload);
+
+      setShowRequestModal(false);
+      
+      Swal.fire({
+        icon: "success",
+        title: t("shop.requestSubmitted") || "Request Submitted!",
+        text: t("shop.requestNotification") || "The seller will review your request and notify you soon.",
+        confirmButtonColor: "#EA2831",
+      });
+    } catch (error) {
+      console.error("Error submitting request:", error);
+      Swal.fire({
+        icon: "error",
+        title: t("shop.error") || "Error",
+        text: error.response?.data?.message || t("shop.requestFailed") || "Failed to submit request",
+        confirmButtonColor: "#EA2831",
+      });
+    } finally {
+      setSubmittingRequest(false);
+    }
+  };
+
   // Add-to-cart button states: sold out → added (flash) → already in cart → add.
   const cartState = !inStock ? "sold" : justAdded ? "added" : inCart ? "incart" : "add";
   /* ONE PRIMARY, ONE QUIET.
@@ -361,10 +441,27 @@ export default function ShopProductDetail() {
     sold: { icon: "block", label: t("pd.soldOut"), cls: "border-2 border-stone-200 bg-white text-stone-400" },
   }[cartState];
 
-  // Lines ~358-376 - ACTION BUTTONS SECTION:
+  // Delivery eligibility — null = no pincode known (show nothing)
+  // true = deliverable, false = not deliverable (block cart/buy)
+  const deliveryEligible = product?.deliveryEligible ?? null;
+  const deliveryBlocked  = deliveryEligible === false;
+
 const actionButtons = (
   <>
-    {!inStock ? (
+    {/* Delivery badge — shown when pincode is known */}
+    {deliveryEligible !== null && (
+      <div className="mb-1">
+        <DeliveryBadge deliveryEligible={deliveryEligible} />
+      </div>
+    )}
+
+    {deliveryBlocked ? (
+      /* Delivery not available — replace Add to Cart / Buy Now */
+      <div className="flex flex-1 items-center justify-center gap-2 rounded-xl border-2 border-red-200 bg-red-50 px-4 py-3.5 text-sm font-semibold text-red-600">
+        <span className="material-symbols-outlined text-lg">block</span>
+        Delivery not available to your address
+      </div>
+    ) : !inStock ? (
       <NotifyMeButton
         productId={product?.productId}
         listingId={product?.listingId}
@@ -384,7 +481,7 @@ const actionButtons = (
     )}
     <button
       onClick={buyNow}
-      disabled={!inStock}
+      disabled={!inStock || deliveryBlocked}
       className="flex flex-1 items-center justify-center gap-2 rounded-xl border-2 border-[#EA2831] bg-[#EA2831] py-3.5 text-sm font-bold text-white shadow-lg shadow-[#EA2831]/25 transition-all hover:border-[#C91E26] hover:bg-[#C91E26] active:scale-[0.99] disabled:cursor-not-allowed disabled:border-stone-200 disabled:bg-stone-200 disabled:text-stone-400 disabled:shadow-none"
     >
       <span className="material-symbols-outlined text-lg">bolt</span> {t("pd.buyNow")}
@@ -784,6 +881,28 @@ const actionButtons = (
             </div>
           )}
 
+          {/* Request Quantity Button - Show when max stock reached */}
+          {inStock && qty >= maxQty && maxQty > 0 && (
+            <div className="mt-4 rounded-xl border border-stone-200 bg-[#FDECEC] p-4">
+              <div className="flex items-start gap-3">
+                <span className="material-symbols-outlined text-[#EA2831] text-xl mt-0.5">inventory_2</span>
+                <div className="flex-1">
+                  <p className="font-semibold text-stone-900 mb-1">{t("shop.stockLimitReached") || "Stock Limit Reached"}</p>
+                  <p className="text-sm text-stone-600 mb-3">
+                    {t("shop.stockLimitMessage") || "You've reached the available stock limit. Request more quantity from the seller."}
+                  </p>
+                  <button
+                    onClick={() => setShowRequestModal(true)}
+                    className="w-full rounded-xl bg-[#EA2831] px-4 py-2.5 font-bold text-white transition-all hover:bg-[#D91C22] flex items-center justify-center gap-2"
+                  >
+                    <span className="material-symbols-outlined text-base">mail</span>
+                    {t("shop.requestMoreQuantity") || "Request More Quantity"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {inCart && (
             <p className="mt-3 inline-flex flex-wrap items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-[#EA2831]">
               <span className="material-symbols-outlined text-base">shopping_cart</span>
@@ -948,6 +1067,22 @@ const actionButtons = (
           )}
         </section>
       )}
+
+      {/* Request Quantity Modal */}
+      <RequestQuantityModal
+        isOpen={showRequestModal}
+        onClose={() => setShowRequestModal(false)}
+        product={product}
+        selectedVariant={selectedVariant}
+        customerId={customerId}
+        customerInfo={{
+          name: customerName,
+          email: customerEmail,
+          phone: customerPhone,
+        }}
+        onSubmit={handleSubmitQuantityRequest}
+        isSubmitting={submittingRequest}
+      />
 
       {/* ── Sticky action bar (phone/tablet). On phones it sits ABOVE the app's
              bottom navigation bar so the buttons are never hidden behind it. ── */}

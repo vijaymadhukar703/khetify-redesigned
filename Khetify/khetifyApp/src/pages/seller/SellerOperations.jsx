@@ -21,8 +21,10 @@ import { fileHref } from '../../lib/fileHref';
 import {
   getSellerWarehouses,
   getSellerShipments,
+  getSellerShipmentBox,
+  getSellerDeliveryLabel,
   scanSellerShipment, getSellerScanState,
-  previewSellerBoxLabel, dispatchSellerOrder, receiveSellerShipment,
+  previewSellerBoxLabel, dispatchSellerOrder, dispatchSellerDirect, receiveSellerShipment,
   getSellerTransfers, createSellerTransfer, directSellerTransfer, getSellerTransferStock, getSellerTransferWarehouses, acceptSellerTransfer, rejectSellerTransfer,
   getSellerSupplyOrders, receiveSellerSupply,
   getSellerTransferBoxes,
@@ -182,6 +184,7 @@ const SellerOperations = () => {
     ? (warehouses.find((w) => String(w._id) === myWh[0]) || null)
     : null;
   const [manifest, setManifest] = useState(null); // { qrPayload } shipping label
+  const [customerDeliveryLabels, setCustomerDeliveryLabels] = useState(null); // [label, ...] for customer order boxes
   const [receiving, setReceiving] = useState(null); // { kind, item }
   // ONE guided Pick → Pack → Label → Dispatch flow; it opens at whichever step
   // the shipment's current status implies.
@@ -214,16 +217,41 @@ const SellerOperations = () => {
     try { await rejectSellerTransfer(req._id, { note: value || '' }); toast('success', 'Rejected'); reload(); }
     catch (e) { apiErr(e); }
   };
-  /** Reprint the box labels of a dispatched warehouse transfer. */
+  /** Reprint box labels of a dispatched shipment.
+   *  Customer orders → DeliveryLabelModal (customer name, address, barcode)
+   *  Warehouse transfers → SellerTransferBoxLabels (from/to warehouse) */
   const openBoxLabels = async (s) => {
     try {
-      const r = await getSellerTransferBoxes(s._id);
-      const boxes = r?.data || [];
-      if (!boxes.length) { toast('info', 'No boxes were packed for this transfer.'); return; }
-      setBoxLabels({ boxes, ref: s.lrNumber || `SH-${String(s._id).slice(-6).toUpperCase()}` });
+      if (isWarehouseTransfer(s)) {
+        // Warehouse transfer — SellerRepackBox model
+        const r = await getSellerTransferBoxes(s._id);
+        const boxes = r?.data || [];
+        if (!boxes.length) { toast('info', 'No boxes found for this transfer.'); return; }
+        setBoxLabels({ boxes, ref: s.lrNumber || `SH-${String(s._id).slice(-6).toUpperCase()}` });
+      } else {
+        // Customer order — fetch each Package's delivery label (customer name + address + barcode)
+        const r = await getSellerShipmentBox(s._id);
+        const pkgs = r?.data || [];
+        if (!pkgs.length) { toast('info', 'No boxes found for this order.'); return; }
+        // Fetch delivery label for each box in parallel
+        const labels = await Promise.all(
+          pkgs.map((pkg) =>
+            getSellerDeliveryLabel(s._id, pkg._id)
+              .catch(() => null)
+          )
+        );
+        const valid = labels.filter(Boolean).map((r) => r?.data || r);
+        if (!valid.length) { toast('error', 'Could not load delivery labels.'); return; }
+        setCustomerDeliveryLabels(valid);
+      }
     } catch (e) { apiErr(e); }
   };
-  const incomingShipments = useMemo(() => shipments.filter((s) => RECEIVABLE.includes(s.status)), [shipments]);
+  const incomingShipments = useMemo(
+    // Only warehouse-to-warehouse transfers need to be received by the manager.
+    // Customer orders are received by the customer — they never appear here.
+    () => shipments.filter((s) => RECEIVABLE.includes(s.status) && isWarehouseTransfer(s)),
+    [shipments]
+  );
   const incomingSupply = useMemo(() => supply.filter((o) => SUPPLY_RECEIVABLE.includes(o.status)), [supply]);
   const outgoing = useMemo(() => shipments.filter((s) => DISPATCHABLE.includes(s.status)), [shipments]);
 
@@ -270,6 +298,13 @@ const SellerOperations = () => {
       {active.key === 'trace' && <TraceTab />}
 
       {manifest && <ManifestModal info={manifest} onClose={() => setManifest(null)} />}
+      {/* Customer order box labels — same DeliveryLabelModal used at dispatch time */}
+      {customerDeliveryLabels && customerDeliveryLabels.length > 0 && (
+        <CustomerBoxLabelsModal
+          labels={customerDeliveryLabels}
+          onClose={() => setCustomerDeliveryLabels(null)}
+        />
+      )}
       {/* ONE ROW, TWO FLOWS. A warehouse transfer opens the transfer popup —
           scan → tick units → box → dispatch → box labels. A customer order
           opens the untouched order popup. */}
@@ -377,6 +412,7 @@ const productRows = (s) => {
     return s.products.map((p) => ({
       key: p.productId,
       name: p.productName,
+      variant: p.variantLabel || null,
       requested: p.requestedQty,
       picked: p.pickedQty || 0,
       note: p.lotCount > 1 ? `${p.lotCount} lots` : null,
@@ -385,6 +421,7 @@ const productRows = (s) => {
   return (s.lines || []).map((l, i) => ({
     key: `${l.productId || 'line'}-${i}`,
     name: l.productName || l.lotNumber || l.batchNumber || 'Item',
+    variant: null,
     requested: l.qty || 0,
     picked: l.pickedQty || 0,
     note: l.productName ? (l.lotNumber || l.batchNumber || null) : null,
@@ -433,6 +470,7 @@ const SendRow = ({ shipment: s, canWrite, actionLabel, actionIcon, onAction }) =
           {rows.map((r) => (
             <div key={r.key} className={cellPad}>
               <span className="block text-xs font-semibold text-stone-800">{r.name}</span>
+              {r.variant && <span className="block text-[10px] font-medium text-[#EA2831]">{r.variant}</span>}
               {r.note && <span className="block text-[10px] text-stone-400">{r.note}</span>}
             </div>
           ))}
@@ -549,14 +587,15 @@ const SendTab = ({ shipments, canWrite, canActOn, onProcess }) => {
  * actual order. Nothing is hardcoded — and there is deliberately no country
  * line, because no address in this system stores one.
  */
-const DeliveryLabelModal = ({ label, onClose }) => {
+const DeliveryLabelModal = ({ label, onClose, embedded = false }) => {
   const d = label.deliverTo || {};
   const cityLine = [d.city, d.district].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(', ');
-  return (
-    <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4 font-sora" onClick={onClose}>
-      <div className="bg-white rounded-2xl w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <style>{LABEL_PRINT_CSS}</style>
-        <div className="no-print flex items-center justify-between px-5 py-3 border-b border-stone-200">
+  // In embedded mode (inside CustomerBoxLabelsModal) we render just the label
+  // content — the outer wrapper and header are provided by the parent.
+  const content = (
+    <div className="p-4">
+      {!embedded && (
+        <div className="no-print flex items-center justify-between px-5 py-3 border-b border-stone-200 -mx-4 -mt-4 mb-4">
           <h3 className="font-bold text-stone-900 text-sm">
             Delivery label{label.draft ? ' · dispatch to confirm' : ''}
           </h3>
@@ -569,6 +608,7 @@ const DeliveryLabelModal = ({ label, onClose }) => {
             </button>
           </div>
         </div>
+      )}
 
         {/* The label itself. Black on white with heavy rules — it is meant to be
             printed and stuck on a carton. */}
@@ -644,6 +684,14 @@ const DeliveryLabelModal = ({ label, onClose }) => {
           </div>
         </div>
       </div>
+    );
+  if (embedded) return content;
+  return (
+    <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4 font-sora" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <style>{LABEL_PRINT_CSS}</style>
+        {content}
+      </div>
     </div>
   );
 };
@@ -677,9 +725,12 @@ const OrderProcessModal = ({ shipment: initial, onClose, onDone }) => {
   const [busy, setBusy] = useState(false);
   const [label, setLabel] = useState(null);
   const [showLabel, setShowLabel] = useState(false);
-  // Final labels, available only after dispatch — these carry the real barcode.
   const [finalLabels, setFinalLabels] = useState([]);
   const [dispatchedAt, setDispatchedAt] = useState(null);
+  // Which tab is active — persistent, like the Create Lot popup's top toggle.
+  // 'direct' is selected by default; the seller can switch to 'scan' and back
+  // at any time without losing scanned units or draft boxes.
+  const [mode, setMode] = useState('direct'); // 'direct' | 'scan'
 
   const dispatched = ['dispatched', 'in_transit', 'arrived', 'verifying', 'delivered'].includes(shipment.status);
 
@@ -690,25 +741,18 @@ const OrderProcessModal = ({ shipment: initial, onClose, onDone }) => {
   }, [shipment._id]);
 
   const allComplete = products.length > 0 && products.every((p) => p.complete);
-  // Everything scanned has been boxed, and nothing is still outstanding.
   const readyToDispatch = allComplete && boxes.length > 0 && pending.length === 0;
-  // Every carton needs its own printed label — one label for a three-box order
-  // would leave two cartons unlabelled.
-  const allLabelled = boxes.length > 0 && boxes.every((b) => b.labelPrinted);
+  const allLabelled = true; // labels are optional — dispatch does not require them
 
   const onScan = async (code) => {
     const value = String(code || '').trim();
     if (!value || scanning) return;
     setScanning(true);
     try {
-      // `selectedTokens` includes what is already pending, so the server can
-      // refuse a duplicate and cap the remaining quantity correctly.
       const known = pending.map((u) => u.token);
       const r = await scanSellerShipment(shipment._id, { code: value, selectedTokens: known });
       const d = r?.data;
       if (!d) { toast('error', 'Could not read that label'); return; }
-      // One row per UNIT the scan contributed, so a scanned carton can still be
-      // split across two parcels.
       const added = (d.addedTokens || []).map((tok) => ({
         token: tok,
         code: tok.startsWith('unit:') ? tok.slice(5) : d.label,
@@ -719,8 +763,6 @@ const OrderProcessModal = ({ shipment: initial, onClose, onDone }) => {
         qty: tok.startsWith('lot:') ? d.addedQuantity : 1,
       }));
       setPending((prev) => [...prev, ...added]);
-      // Newly scanned units start ticked — the common case is boxing what you
-      // just scanned, and un-ticking is easier than ticking twenty rows.
       setChecked((prev) => { const n = new Set(prev); added.forEach((u) => n.add(u.token)); return n; });
       setProducts(d.products || []);
       setHistory((h) => [{ key: `${value}-${Date.now()}`, code: d.label || value, type: d.scanType, product: d.productName, qty: d.addedQuantity, ok: true }, ...h]);
@@ -743,16 +785,12 @@ const OrderProcessModal = ({ shipment: initial, onClose, onDone }) => {
   const selected = pending.filter((u) => checked.has(u.token));
   const selectedUnits = selected.reduce((n, u) => n + (u.qty || 1), 0);
 
-  // ADD TO BOX — entirely local. No API call, nothing written. The box exists
-  // only in this component until Dispatch commits the whole operation.
   const addToBox = () => {
     if (!selected.length) return;
     const box = {
       id: `draft-${Date.now()}-${boxes.length + 1}`,
       tokens: selected.map((u) => u.token),
       units: selected.map((u) => ({ code: u.code, productName: u.productName, qty: u.qty || 1 })),
-      // Set the first time this box's label is opened, and kept thereafter — the
-      // number printed on the carton is the number saved at dispatch.
       packageNumber: null,
       labelPrinted: false,
     };
@@ -763,7 +801,6 @@ const OrderProcessModal = ({ shipment: initial, onClose, onDone }) => {
     toast('success', `Box ${boxes.length + 1} prepared — dispatch to confirm`);
   };
 
-  /** Undo a draft box: its units go back to the scanned list. */
   const removeBox = (id) => {
     const box = boxes.find((b) => b.id === id);
     if (!box) return;
@@ -774,11 +811,6 @@ const OrderProcessModal = ({ shipment: initial, onClose, onDone }) => {
     toast('success', 'Box removed — units returned to the list');
   };
 
-  // Renders a label from the draft box's contents. Saves nothing — the parcel's
-  // real barcode is minted at dispatch, so this preview has none.
-  // Renders this box's label. The barcode is real and printable: the number is
-  // minted here but SAVED NOWHERE until dispatch, and the box keeps it so
-  // re-opening shows the same barcode that is already on the carton.
   const openLabel = async (box) => {
     const idx = boxes.findIndex((b) => b.id === box.id);
     try {
@@ -799,28 +831,30 @@ const OrderProcessModal = ({ shipment: initial, onClose, onDone }) => {
     }
   };
 
-  // THE ONLY WRITE. Sends every draft box; the server validates, picks, packs,
-  // creates the real parcels and dispatches — all or nothing.
   const dispatchNow = async () => {
     setBusy(true);
     try {
-      const r = await dispatchSellerOrder(shipment._id, {
+      await dispatchSellerOrder(shipment._id, {
         boxes: boxes.map((b) => ({ tokens: b.tokens, packageNumber: b.packageNumber || undefined })),
       });
       toast('success', 'Dispatched — on its way to the customer');
-      // The parcels are real now, so their labels finally carry a scannable
-      // barcode. Show them for printing INSTEAD of closing — closing here would
-      // send the manager back to a list where the row has already gone, with no
-      // way to print the label they are about to stick on the carton.
-      const finals = r?.labels || [];
-      if (finals.length) {
-        setFinalLabels(finals);
-        setLabel(finals[0]);
-        setShowLabel(true);
-        setDispatchedAt(new Date());
-      } else {
-        onDone();
-      }
+      onDone();
+    } catch (e) {
+      toast('error', e?.response?.data?.message || e.message || 'Could not dispatch');
+    } finally { setBusy(false); }
+  };
+
+  /** DIRECT DISPATCH — no boxes required. Uses shipment lines as-is. */
+  const dispatchDirect = async () => {
+    setBusy(true);
+    try {
+      // Pass any scanned tokens so serialized units get tracked correctly
+      const scannedTokens = [...pending.map((u) => u.token), ...boxes.flatMap((b) => b.tokens)];
+      await dispatchSellerDirect(shipment._id, {
+        tokens: scannedTokens.length ? scannedTokens : undefined,
+      });
+      toast('success', 'Dispatched — stock deducted from inventory');
+      onDone();
     } catch (e) {
       toast('error', e?.response?.data?.message || e.message || 'Could not dispatch');
     } finally { setBusy(false); }
@@ -849,10 +883,99 @@ const OrderProcessModal = ({ shipment: initial, onClose, onDone }) => {
 
   const order = shipment.order;
   const addr = addressText(order?.address);
-  const title = order?.customerName ? `${orderRef(order) || 'Order'} → ${order.customerName}` : `Send → ${shipment.toLabel}`;
+  const orderTitle = `Process order · ${initial.ref || orderRef(initial.order) || `SH-${String(initial._id).slice(-6).toUpperCase()}`}`;
 
   return (
-    <Modal title={title} onClose={close}>
+    <Modal title={orderTitle} onClose={close}>
+      {/* Dispatch mode — a persistent top toggle, same pattern as the Create Lot
+          popup's "Khetify-generated / Enter manually" switch: pick one, its
+          content shows below, switching keeps whatever the other tab holds
+          (scanned units / draft boxes are never lost by switching tabs). */}
+      <div className="grid grid-cols-2 gap-3 mb-5 no-print">
+        <button
+          type="button"
+          onClick={() => setMode('direct')}
+          disabled={busy}
+          className={`rounded-2xl border-2 px-4 py-3 text-left transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
+            mode === 'direct'
+              ? 'border-[#EA2831] bg-[#EA2831] hover:bg-[#D91C22] shadow-lg shadow-[#EA2831]/25'
+              : 'border-stone-200 bg-white hover:border-[#EA2831]/40 hover:bg-red-50'
+          }`}
+        >
+          <div className="flex items-center gap-2.5">
+            <span className={`material-symbols-outlined text-2xl shrink-0 ${mode === 'direct' ? 'text-white' : 'text-[#EA2831]'}`}>local_shipping</span>
+            <div>
+              <p className={`font-bold text-sm leading-tight ${mode === 'direct' ? 'text-white' : 'text-stone-900'}`}>Dispatch Directly</p>
+              <p className={`text-[11px] mt-0.5 leading-snug ${mode === 'direct' ? 'text-red-100' : 'text-stone-500'}`}>No scanning — stock deducted automatically</p>
+            </div>
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setMode('scan')}
+          disabled={busy}
+          className={`rounded-2xl border-2 px-4 py-3 text-left transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
+            mode === 'scan'
+              ? 'border-[#EA2831] bg-[#EA2831] hover:bg-[#D91C22] shadow-lg shadow-[#EA2831]/25'
+              : 'border-stone-200 bg-white hover:border-stone-300 hover:bg-stone-50'
+          }`}
+        >
+          <div className="flex items-center gap-2.5">
+            <span className={`material-symbols-outlined text-2xl shrink-0 ${mode === 'scan' ? 'text-white' : 'text-stone-500'}`}>qr_code_scanner</span>
+            <div>
+              <p className={`font-bold text-sm leading-tight ${mode === 'scan' ? 'text-white' : 'text-stone-900'}`}>Scan & Pack</p>
+              <p className={`text-[11px] mt-0.5 leading-snug ${mode === 'scan' ? 'text-red-100' : 'text-stone-500'}`}>Scan barcodes before dispatch</p>
+            </div>
+          </div>
+        </button>
+      </div>
+
+      {mode === 'direct' ? (
+        <>
+          {/* Order contents — product, variant (when there is one), quantity. */}
+          <div className="mb-5">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400 mb-2">Order contents</p>
+            <div className="rounded-xl border border-stone-200 divide-y divide-stone-100">
+              {products.map((p) => (
+                <div key={p.productId} className="flex items-center justify-between px-4 py-3">
+                  <div>
+                    <p className="text-sm font-semibold text-stone-900">{p.productName}</p>
+                    {p.variantLabel && (
+                      <p className="text-xs font-medium text-[#EA2831]">{p.variantLabel}</p>
+                    )}
+                  </div>
+                  <span className="text-sm font-bold text-stone-900">{p.requestedQty} units</span>
+                </div>
+              ))}
+              {!products.length && (
+                <div className="px-4 py-3 text-sm text-stone-400">Loading order details…</div>
+              )}
+            </div>
+          </div>
+
+          {/* Customer's basic details */}
+          <div className="mb-5 rounded-xl bg-stone-50 px-4 py-3">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400 mb-1">Deliver to</p>
+            <p className="text-sm font-semibold text-stone-900">{initial.order?.customerName || initial.toLabel || 'Customer'}</p>
+            {initial.order?.address?.phone && (
+              <p className="text-xs text-stone-500 mt-0.5">{initial.order.address.phone}</p>
+            )}
+            {initial.order?.address && (
+              <p className="text-xs text-stone-500 mt-0.5">{addressText(initial.order.address)}</p>
+            )}
+          </div>
+
+          <div className="flex justify-end gap-2 mt-4">
+            <GhostBtn onClick={close}>Close</GhostBtn>
+            <PrimaryBtn disabled={busy || !products.length} onClick={dispatchDirect}>
+              <span className="material-symbols-outlined text-base">local_shipping</span>
+              {busy ? 'Dispatching…' : 'Dispatch'}
+            </PrimaryBtn>
+          </div>
+        </>
+      ) : (
+      <>
       {order && (
         <div className="rounded-xl border border-stone-200 bg-stone-50/60 px-3 py-2.5 mb-3">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -878,7 +1001,12 @@ const OrderProcessModal = ({ shipment: initial, onClose, onDone }) => {
           <tbody className="divide-y divide-stone-100">
             {products.map((p) => (
               <tr key={p.productId} className={p.complete ? 'bg-green-50/40' : undefined}>
-                <td className="px-3 py-1.5 text-xs font-semibold text-stone-800">{p.productName}</td>
+                <td className="px-3 py-1.5 text-xs font-semibold text-stone-800">
+                  {p.productName}
+                  {p.variantLabel && (
+                    <span className="block text-[10px] font-medium text-[#EA2831]">{p.variantLabel}</span>
+                  )}
+                </td>
                 <td className="px-3 py-1.5 text-center text-xs font-bold text-stone-700">{p.requestedQty}</td>
                 <td className="px-3 py-1.5 text-center text-xs font-bold text-stone-900">{p.scannedQty}</td>
                 <td className={`px-3 py-1.5 text-center text-xs font-bold ${p.remainingQty ? 'text-[#EA2831]' : 'text-green-600'}`}>{p.remainingQty}</td>
@@ -976,10 +1104,6 @@ const OrderProcessModal = ({ shipment: initial, onClose, onDone }) => {
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
-                  <GhostBtn onClick={() => openLabel(b)}>
-                    <span className="material-symbols-outlined text-sm">local_shipping</span>
-                    {b.labelPrinted ? 'Re-print' : 'Label'}
-                  </GhostBtn>
                   <button onClick={() => removeBox(b.id)}
                     className="text-[11px] font-bold text-stone-400 hover:text-[#EA2831] px-2">
                     Undo
@@ -1009,35 +1133,12 @@ const OrderProcessModal = ({ shipment: initial, onClose, onDone }) => {
         </div>
       )}
 
-      {/* DISPATCHED — the parcels exist, so their real labels can be printed. */}
-      {dispatchedAt && (
-        <div className="mt-3 rounded-xl border border-green-200 bg-green-50/60 px-3 py-2.5">
-          <p className="text-xs font-bold text-green-700 mb-1.5">
-            Dispatched · {finalLabels.length} label(s) ready to print
-          </p>
-          <div className="flex flex-wrap gap-1.5">
-            {finalLabels.map((l, i) => (
-              <GhostBtn key={l.packageId || i} onClick={() => { setLabel(l); setShowLabel(true); }}>
-                <span className="material-symbols-outlined text-sm">print</span>
-                Box {i + 1} · {l.packageNumber}
-              </GhostBtn>
-            ))}
-          </div>
-        </div>
-      )}
-
       <div className="flex justify-end gap-2 mt-4">
-        {dispatchedAt ? (
-          <PrimaryBtn onClick={onDone}>Done</PrimaryBtn>
-        ) : (
-          <>
-            <GhostBtn onClick={close}>Close</GhostBtn>
-            <PrimaryBtn disabled={!readyToDispatch || !allLabelled || busy} onClick={dispatchNow}>
-              <span className="material-symbols-outlined text-base">local_shipping</span>
-              {busy ? 'Dispatching…' : 'Dispatch'}
-            </PrimaryBtn>
-          </>
-        )}
+        <GhostBtn onClick={close}>Close</GhostBtn>
+        <PrimaryBtn disabled={!readyToDispatch || busy} onClick={dispatchNow}>
+          <span className="material-symbols-outlined text-base">local_shipping</span>
+          {busy ? 'Dispatching…' : 'Dispatch'}
+        </PrimaryBtn>
       </div>
       {!readyToDispatch && !dispatchedAt && (
         <p className="text-[11px] text-stone-400 text-right mt-1">
@@ -1046,10 +1147,7 @@ const OrderProcessModal = ({ shipment: initial, onClose, onDone }) => {
               : 'Create a box to dispatch.'}
         </p>
       )}
-      {readyToDispatch && !allLabelled && !dispatchedAt && (
-        <p className="text-[11px] text-stone-400 text-right mt-1">
-          Print the label for every box to enable dispatch.
-        </p>
+      </>
       )}
 
       {showLabel && label && <DeliveryLabelModal label={label} onClose={() => setShowLabel(false)} />}
@@ -1121,6 +1219,54 @@ const Pagination = ({ currentPage, totalPages, onPage, rangeStart, rangeEnd, tot
     </div>
   </div>
 );
+
+/**
+ * Shows all delivery labels for a multi-box customer order.
+ * Uses the same DeliveryLabelModal that dispatch generates — customer name,
+ * address, barcode and items are all there.
+ */
+const CustomerBoxLabelsModal = ({ labels, onClose }) => {
+  const [idx, setIdx] = useState(0);
+  const label = labels[idx];
+  return (
+    <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4 font-sora" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <style>{`
+@media print {
+  body * { visibility: hidden; }
+  #seller-delivery-label, #seller-delivery-label * { visibility: visible; }
+  #seller-delivery-label { position: absolute; left: 0; top: 0; width: 100%; }
+  .no-print { display: none !important; }
+  @page { margin: 10mm; }
+}`}</style>
+        <div className="no-print flex items-center justify-between px-5 py-3 border-b border-stone-200">
+          <h3 className="font-bold text-stone-900 text-sm">
+            Box Labels — {labels.length} box{labels.length > 1 ? 'es' : ''}
+          </h3>
+          <div className="flex items-center gap-2">
+            {labels.length > 1 && (
+              <div className="flex items-center gap-1">
+                <button disabled={idx === 0} onClick={() => setIdx(i => i - 1)}
+                  className="px-2 py-1 rounded text-sm disabled:opacity-30 hover:bg-stone-100">‹</button>
+                <span className="text-xs text-stone-500">{idx + 1} / {labels.length}</span>
+                <button disabled={idx === labels.length - 1} onClick={() => setIdx(i => i + 1)}
+                  className="px-2 py-1 rounded text-sm disabled:opacity-30 hover:bg-stone-100">›</button>
+              </div>
+            )}
+            <GhostBtn onClick={() => window.print()}>
+              <span className="material-symbols-outlined text-base">print</span> Print
+            </GhostBtn>
+            <button onClick={onClose} className="text-stone-400 hover:text-stone-600">
+              <span className="material-symbols-outlined">close</span>
+            </button>
+          </div>
+        </div>
+        {/* Reuse the same label content as DeliveryLabelModal */}
+        {label && <DeliveryLabelModal label={label} onClose={onClose} embedded />}
+      </div>
+    </div>
+  );
+};
 
 const ShipmentsTab = ({ shipments, requests, canWrite, canActOn, onLabel, onReceive, onAccept, onReject, onNewRequest, onNewTransfer, onBoxLabels }) => {
   const [sub, setSub] = useState('shipments');
@@ -1342,10 +1488,8 @@ const ShipmentsTab = ({ shipments, requests, canWrite, canActOn, onLabel, onRece
                             <span className="material-symbols-outlined text-sm">qr_code_2</span> Shipping Label
                           </GhostBtn>
                         )}
-                        {/* BOX LABELS — a SENDING-SIDE control for a dispatched
-                            warehouse transfer, so a torn or lost sticker can
-                            always be reprinted. Never shown for a customer
-                            order, which carries a delivery label instead. */}
+                        {/* BOX LABELS — warehouse transfers only.
+                            Customer orders don't get a box label. */}
                         {isWarehouseTransfer(s) && s.dispatchedAt && canActOn(s.fromWarehouseId) && (
                           <GhostBtn onClick={() => onBoxLabels(s)}>
                             <span className="material-symbols-outlined text-sm">inventory_2</span> Box Labels

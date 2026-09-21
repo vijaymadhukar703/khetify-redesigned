@@ -93,6 +93,7 @@ import SellerInventory from './pages/seller/SellerInventory';
 import SellerLotDetails from './pages/seller/SellerLotDetails';
 import SellerOperations from './pages/seller/SellerOperations';
 import SellerDashboard from './pages/seller/SellerDashboard';
+import SellerDemandMonitor from './pages/seller/SellerDemandMonitor';
 import SellerAnalytics from './pages/seller/SellerAnalytics';
 import SellerAnalyticsDetails from './pages/seller/SellerAnalyticsDetails';
 import SellerLabels from './pages/seller/SellerLabels';
@@ -338,6 +339,7 @@ function App() {
           <Route path="/seller/settings" element={<SellerWarehouseSettings />} />
           <Route path="/seller/admin" element={<SellerAdministration />} />
           <Route path="/seller/dashboard" element={<SellerDashboard />} />
+          <Route path="/seller/demand-monitor" element={<RequireSeller><SellerDemandMonitor /></RequireSeller>} />
           <Route path="/seller/analytics" element={<SellerAnalytics />} />
           {/* Seller AND Seller Warehouse — one page; the warehouse scope is
               applied server-side from the token. */}

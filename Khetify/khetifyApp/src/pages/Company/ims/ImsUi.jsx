@@ -34,7 +34,7 @@ export const Modal = ({ title, onClose, children, wide }) => {
       onMouseDown={handleBackdropMouseDown}
       onMouseUp={handleBackdropMouseUp}
     >
-      <div className={`bg-white rounded-2xl shadow-xl w-full ${wide ? 'max-w-2xl' : 'max-w-lg'} max-h-[88vh] overflow-y-auto p-6`}>
+      <div className={`bg-white rounded-2xl shadow-xl w-full ${wide ? 'max-w-4xl' : 'max-w-lg'} max-h-[88vh] overflow-y-auto p-6`}>
         <div className="flex items-start justify-between mb-5">
           <h3 className="text-lg font-bold text-stone-900">{title}</h3>
           <button onClick={onClose} className="text-stone-400 hover:text-stone-600 p-1">

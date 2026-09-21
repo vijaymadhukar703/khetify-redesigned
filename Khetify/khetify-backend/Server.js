@@ -61,8 +61,10 @@ const ownerRoutes = require("./routes/Analytics/ownerRoutes");
 const auditRoutes = require("./routes/Audit/auditRoutes");
 const shopRoutes = require("./routes/Shop/shopRoutes"); // Public customer storefront (/customer-shop) — browse + consumer auth + checkout
 const shopNotificationRoutes = require("./routes/Shop/shopNotificationRoutes"); // Customer stock notifications
+const quantityRequestRoutes = require("./routes/Shop/quantityRequestRoutes"); // Customer quantity requests
 const sellerRoutes = require("./routes/Seller/sellerRoutes"); // Seller-side IMS (Phase 1: auth + portal)
 const sellerStockRequestRoutes = require("./routes/Seller/sellerStockRequestRoutes"); // Seller demand monitoring
+const sellerQuantityRequestRoutes = require("./routes/Seller/sellerDemandMonitorRoutes"); // Seller quantity request responses
 const sellerWarehouseRoutes = require("./routes/Seller/sellerWarehouseRoutes"); // Seller warehouses (Phase 2b)
 const sellerCatalogRoutes = require("./routes/Seller/sellerCatalogRoutes"); // Seller read-only catalog (Phase 2c)
 const sellerMyProductRoutes = require("./routes/Seller/sellerMyProductRoutes"); // Seller's OWN products + own stock ("My Products")
@@ -75,7 +77,6 @@ const sellerReportRoutes = require("./routes/Seller/sellerReportRoutes"); // Sel
 const { units: sellerUnitRoutes, scan: sellerScanRoutes } = require("./routes/Seller/sellerBarcodeRoutes"); // Seller labels/scan (Phase 4b)
 const sellerCustomerRoutes = require("./routes/Seller/sellerCustomerRoutes"); // Seller customers & dealers (Phase 5a)
 const sellerOrderRoutes = require("./routes/Seller/sellerOrderRoutes"); // Seller outbound sales (Phase 5b)
-const sellerPosRoutes = require("./routes/Seller/sellerPosRoutes"); // seller POS counter sale
 const sellerSubscriptionRoutes = require("./routes/Seller/sellerSubscriptionRoutes"); // Seller subscription/billing
 const sellerTeamRoutes = require("./routes/Seller/sellerTeamRoutes"); // Seller team / roles (RBAC)
 const { documents: sellerDocumentsRoutes, applications: sellerPcAppRoutes, certificates: sellerCertRoutes, listings: sellerListingRoutes } = require("./routes/Seller/sellerPcRoutes"); // Principal Certificate (seller side)
@@ -239,6 +240,8 @@ app.use("/api/users", userRoutes);
 app.use("/api/purchasing", purchasingRoutes);
 app.use("/api/shop", shopRoutes); // public customer storefront (browse + consumer auth + checkout)
 app.use("/api/shop/notifications", shopNotificationRoutes); // customer stock notifications & inbox
+app.use("/api/shop/quantity-requests", quantityRequestRoutes); // customer quantity requests
+app.use("/api/seller/quantity-requests", sellerQuantityRequestRoutes); // seller quantity request responses
 app.use("/api/seller/warehouses", sellerWarehouseRoutes); // before /api/seller so the specific path wins
 // GST RATE MASTER, REACHABLE BY A SELLER TOKEN.
 //
@@ -270,7 +273,6 @@ app.use("/api/seller/units", sellerUnitRoutes); // seller unit labels (view/prin
 app.use("/api/seller/scan", sellerScanRoutes); // seller unit scan
 app.use("/api/seller/customers", sellerCustomerRoutes); // seller customers & dealers
 app.use("/api/seller/orders", sellerOrderRoutes); // seller outbound sales
-app.use("/api/seller/pos", sellerPosRoutes); // seller POS counter sale
 app.use("/api/seller/subscription", sellerSubscriptionRoutes); // seller subscription/billing
 app.use("/api/seller/team", sellerTeamRoutes); // seller team / roles (RBAC)
 app.use("/api/seller/documents", sellerDocumentsRoutes); // PC: KYC/business documents
@@ -292,6 +294,15 @@ initSocket(server); // attaches Socket.IO to the same HTTP server
 
 server.listen(PORT, () => {
   logger.info(`🔥 Server running on port ${PORT}`);
+  
+  // Start automatic product cleanup job
+  // Deletes soft-deleted products when all warehouses have 0 stock
+  try {
+    const { startAutoCleanupJob } = require("./controller/Company/productController");
+    startAutoCleanupJob();
+  } catch (error) {
+    logger.warn("Auto-cleanup job failed to start:", error.message);
+  }
 });
 
 /* ----- Graceful shutdown ----- */

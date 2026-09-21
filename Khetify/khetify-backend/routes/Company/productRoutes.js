@@ -10,6 +10,7 @@ const {
   getAllProducts,
   updateProduct,
   deleteProduct,
+  cleanupFinishedDeletedProducts,
 } = require("../../controller/Company/productController");
 
 // Products are company master data: WRITES are company_admin-only.
@@ -26,5 +27,13 @@ router.get("/:productId", getSingleProduct);
 router.put("/:productId", auth, authorize("product:manage"), upload.uploadProductFields, updateProduct);
 
 router.delete("/delete-product/:productId", auth, authorize("product:manage"), deleteProduct);
+
+// ⚠️ ADMIN ONLY — MAINTENANCE OPERATION
+// Permanently delete finished deleted products from database.
+// Run when:
+// - Stock for a deleted product reaches 0 (completely sold/consumed)
+// - Want to clean up old deleted products to maintain database hygiene
+// SAFE: Checks that product is deleted AND has no remaining stock
+router.post("/cleanup/finished-deleted", auth, authorize("product:manage"), cleanupFinishedDeletedProducts);
 
 module.exports = router;

@@ -25,7 +25,7 @@ import { STATUS_LABEL_KEY } from "../../lib/orderStatus";
  * external status-helper import, so it drops in without extra files.
  * ───────────────────────────────────────────────────────────────────────────── */
 
-const FLOW = ["pending", "confirmed", "packed", "shipped", "delivered"];
+const FLOW = ["pending", "confirmed", "packed", "shipped", "out_for_delivery", "delivered"];
 
 // The status vocabulary lives in lib/orderStatus.js and is SHARED with the
 // order detail page — this file used to keep its own duplicate copy, which is
@@ -36,6 +36,7 @@ const isDead = (s) => s === "cancelled" || s === "returned";
 function statusTone(s) {
   if (s === "cancelled" || s === "returned") return "bg-red-50 text-[#EA2831]";
   if (s === "delivered") return "bg-emerald-100 text-emerald-800";
+    if (s === "out_for_delivery") return "bg-indigo-50 text-indigo-700";
   if (s === "shipped") return "bg-blue-50 text-blue-700";
   return "bg-amber-50 text-amber-800";
 }
@@ -50,7 +51,7 @@ const TABS = [
   { key: "cancelled", labelKey: "orders.tabCancelled" },
 ];
 
-const ACTIVE = ["pending", "confirmed", "packed", "shipped"];
+const ACTIVE = ["pending", "confirmed", "packed", "shipped", "out_for_delivery"];
 
 const inTab = (o, tab) => {
   if (tab === "active") return ACTIVE.includes(o.status);
@@ -311,7 +312,7 @@ export default function ShopOrders() {
                     </div>
                     <div className="text-right">
                       <p className="font-heading text-base font-black text-stone-900 sm:text-lg">
-                        {rupee(o.totalAmount || 0)}
+                        {rupee(o.grandTotal ?? o.totalAmount ?? 0)}
                       </p>
                       <p className="text-[10px] font-bold uppercase tracking-wide text-stone-400">
                         {o.totalUnits || items.length} item{(o.totalUnits || items.length) === 1 ? "" : "s"} · {o.payment?.mode || "cod"}

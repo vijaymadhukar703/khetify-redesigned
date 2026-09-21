@@ -1,5 +1,7 @@
 const Product = require("../../model/Company/productModel");
 const Company = require("../../model/Company/Company");
+const Inventory = require("../../model/Inventory/Inventory");  // ✅ FIXED: Add missing import
+const LotNumber = require("../../model/Inventory/LotNumber");  // ✅ FIXED: Add missing import
 const mongoose = require("mongoose");
 const inventoryService = require("../../services/inventoryService"); // ← NEW
 const { generateUniqueProductCode } = require("../../services/productCodeService");
@@ -451,6 +453,8 @@ exports.getSingleProduct = async (req, res) => {
     if (!product) {
       return res.status(404).json({ success: false, message: "Product not found" });
     }
+    // Note: deleted products CAN be fetched (for reference in orders/stock),
+    // but cannot be edited (check in updateProduct)
     res.status(200).json({ success: true, data: product });
   } catch (error) {
     console.error("Get Single Product Error:", error);
@@ -464,7 +468,8 @@ exports.getAllProducts = async (req, res) => {
     const { search, category } = req.query;
     // Always scope to the authenticated company (server-derived) — never trust
     // a client-supplied companyId (multi-tenancy invariant #1).
-    const filter = { companyId: req.user.companyId };
+    // ALSO exclude soft-deleted products so they don't appear in catalog
+    const filter = { companyId: req.user.companyId, deletedAt: null };
     if (search && search.trim() !== "") {
       // Search matches the product NAME or the PRODUCT CODE (e.g. "PRE482").
       const rx = new RegExp(escapeRegex(search.trim()), "i");
@@ -507,6 +512,11 @@ exports.updateProduct = async (req, res) => {
     const existingProduct = await Product.findById(productId);
     if (!existingProduct) {
       return res.status(404).json({ success: false, message: "Product not found" });
+    }
+
+    // Cannot edit a deleted product
+    if (existingProduct.deletedAt) {
+      return res.status(400).json({ success: false, message: "Cannot edit a deleted product" });
     }
 
     // Multipart form-data sends every field as a string, including "" for blanks.
@@ -708,23 +718,293 @@ exports.updateProduct = async (req, res) => {
 };
 
 /* ================= DELETE PRODUCT ================= */
+/**
+ * CLEANUP FINISHED DELETED PRODUCTS
+ * 
+ * After a product is deleted AND its stock is completely sold/consumed (availableStock = 0),
+ * this function permanently removes the product and related records from the database.
+ * 
+ * This is OPTIONAL cleanup to maintain database hygiene. It should be run:
+ * - Nightly via cron job
+ * - Or manually when needed
+ * - Or triggered when stock reaches 0
+ * 
+ * WHAT GETS DELETED:
+ * - Product record (if deletedAt is set AND all stock is 0)
+ * - Inventory records (if all quantities are 0 and product is deleted)
+ * - LotNumber records (if related to deleted products with no stock)
+ * 
+ * WHAT IS PRESERVED:
+ * - Order records (reference deleted products but order is complete)
+ * - Shipment records (already delivered, part of history)
+ * - Stock movement ledger (audit trail)
+ */
+exports.cleanupFinishedDeletedProducts = async (req, res) => {
+  try {
+    // Find all soft-deleted products
+    const deletedProducts = await Product.find({ deletedAt: { $ne: null } }).select("_id");
+    
+    if (deletedProducts.length === 0) {
+      return res.status(200).json({ 
+        success: true, 
+        message: "No deleted products to clean up",
+        cleaned: 0 
+      });
+    }
+
+    const productIds = deletedProducts.map(p => p._id);
+    
+    // Check which deleted products have ANY stock remaining
+    // Check across ALL stock types: available + reserved + in transit + damaged + offline
+    const stockedProducts = await Inventory.find({
+      productId: { $in: productIds },
+      $expr: {
+        $gt: [
+          {
+            $add: [
+              { $ifNull: ["$availableStock", 0] },
+              { $ifNull: ["$reservedStock", 0] },
+              { $ifNull: ["$inTransitStock", 0] },
+              { $ifNull: ["$damagedStock", 0] },
+              { $ifNull: ["$offlineStock", 0] }
+            ]
+          },
+          0
+        ]
+      }
+    }).select("productId").distinct("productId");
+    
+    // Products with NO remaining stock (all types combined)
+    const finishedProductIds = productIds.filter(
+      id => !stockedProducts.includes(id)
+    );
+
+    if (finishedProductIds.length === 0) {
+      return res.status(200).json({ 
+        success: true, 
+        message: "All deleted products still have stock",
+        cleaned: 0 
+      });
+    }
+
+    // CLEANUP: Permanently delete finished products and related records
+    const results = {
+      productsDeleted: 0,
+      inventoryRecordsDeleted: 0,
+      lotNumbersDeleted: 0,
+    };
+
+    // Delete Inventory records for finished deleted products
+    const invResult = await Inventory.deleteMany({
+      productId: { $in: finishedProductIds }
+    });
+    results.inventoryRecordsDeleted = invResult.deletedCount;
+
+    // Delete LotNumber records for finished deleted products
+    const lotResult = await LotNumber.deleteMany({
+      productId: { $in: finishedProductIds }
+    });
+    results.lotNumbersDeleted = lotResult.deletedCount;
+
+    // FINALLY: Delete the Product records themselves
+    const prodResult = await Product.deleteMany({
+      _id: { $in: finishedProductIds }
+    });
+    results.productsDeleted = prodResult.deletedCount;
+
+    res.status(200).json({
+      success: true,
+      message: `Cleaned up ${results.productsDeleted} finished deleted products`,
+      data: results,
+    });
+  } catch (error) {
+    console.error("Cleanup finished deleted products error:", error);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+};
+
+/**
+ * AUTO-DELETE FINISHED DELETED PRODUCTS
+ * 
+ * Triggered automatically when:
+ * 1. Product is deleted (soft delete)
+ * 2. Stock reaches 0 everywhere (all warehouses)
+ * 
+ * No manual intervention needed - happens silently in background
+ * Super admin doesn't need to do anything
+ */
+async function autoDeleteFinishedProduct(productId) {
+  try {
+    // Check if product is soft-deleted
+    const product = await Product.findById(productId).select("deletedAt");
+    if (!product || !product.deletedAt) {
+      return null; // Not deleted, skip
+    }
+
+    // Check if ANY warehouse still has stock
+    const hasStock = await Inventory.findOne({
+      productId,
+      $expr: {
+        $gt: [
+          {
+            $add: [
+              { $ifNull: ["$availableStock", 0] },
+              { $ifNull: ["$reservedStock", 0] },
+              { $ifNull: ["$inTransitStock", 0] },
+              { $ifNull: ["$damagedStock", 0] },
+              { $ifNull: ["$offlineStock", 0] }
+            ]
+          },
+          0
+        ]
+      }
+    });
+
+    if (hasStock) {
+      return null; // Stock still exists, don't delete
+    }
+
+    // ✅ SAFE TO DELETE: Product is deleted AND no stock anywhere
+    // Permanently remove it
+    await Inventory.deleteMany({ productId });
+    await LotNumber.deleteMany({ productId });
+    await Product.deleteOne({ _id: productId });
+
+    return {
+      productId,
+      productName: product.productName || "Unknown",
+      autoDeletedAt: new Date(),
+      reason: "Auto-deleted: soft-deleted product with 0 stock everywhere"
+    };
+  } catch (error) {
+    console.error("Auto-delete finished product error:", error);
+    return null;
+  }
+}
+
+/**
+ * SCHEDULED AUTO-CLEANUP
+ * 
+ * Runs every hour to find and delete finished deleted products
+ * No user interaction needed
+ * 
+ * Safe checks:
+ * - Only deletes if product.deletedAt is set
+ * - Only deletes if ALL warehouses have 0 stock
+ * - Logs each deletion
+ */
+async function scheduleAutoCleanup() {
+  try {
+    // Find all soft-deleted products
+    const deletedProducts = await Product.find({ 
+      deletedAt: { $ne: null } 
+    }).select("_id productName");
+
+    let cleanedCount = 0;
+    const cleanupLog = [];
+
+    // Check each one
+    for (const product of deletedProducts) {
+      const result = await autoDeleteFinishedProduct(product._id);
+      if (result) {
+        cleanedCount++;
+        cleanupLog.push(result);
+      }
+    }
+
+    if (cleanedCount > 0) {
+      console.log(`[AUTO-CLEANUP] Cleaned ${cleanedCount} finished deleted products`);
+      
+      // Optional: Save to cleanup log collection for audit
+      try {
+        const AutoCleanupLog = require("../model/System/AutoCleanupLog");
+        await AutoCleanupLog.create({
+          timestamp: new Date(),
+          productsDeleted: cleanedCount,
+          deletedProducts: cleanupLog
+        });
+      } catch (err) {
+        // AutoCleanupLog collection might not exist, that's ok
+        console.log("[AUTO-CLEANUP] Note: AutoCleanupLog collection not found");
+      }
+    }
+
+    return cleanedCount;
+  } catch (error) {
+    console.error("Schedule auto-cleanup error:", error);
+    return 0;
+  }
+}
+
+/**
+ * START AUTO-CLEANUP JOB
+ * Call this in Server.js to enable automatic deletion
+ */
+function startAutoCleanupJob() {
+  const cron = require("node-cron");
+  
+  // Run every hour automatically
+  cron.schedule("0 * * * *", async () => {
+    console.log("[AUTO-CLEANUP] Running scheduled auto-cleanup...");
+    const cleaned = await scheduleAutoCleanup();
+    if (cleaned > 0) {
+      console.log(`[AUTO-CLEANUP] ✅ Cleaned ${cleaned} products`);
+    } else {
+      console.log("[AUTO-CLEANUP] ℹ️ No products to clean");
+    }
+  });
+
+  console.log("[AUTO-CLEANUP] ✅ Auto-cleanup job started (runs every hour)");
+}
+
 exports.deleteProduct = async (req, res) => {
   try {
     const { productId } = req.params;
     if (!mongoose.Types.ObjectId.isValid(productId)) {
       return res.status(400).json({ success: false, message: "Invalid product ID" });
     }
-    const deletedProduct = await Product.findByIdAndDelete(productId);
-    if (!deletedProduct) {
+
+    // Fetch the product first
+    const product = await Product.findById(productId);
+    if (!product) {
       return res.status(404).json({ success: false, message: "Product not found" });
     }
+
+    // Check if product is already deleted
+    if (product.deletedAt) {
+      return res.status(400).json({ success: false, message: "Product is already deleted" });
+    }
+
+    // SOFT DELETE: Mark the product as deleted without removing the record.
+    // This preserves:
+    // - Inventory (warehouse stock) records that reference this product
+    // - LotNumber records
+    // - Historical orders, shipments, and other audit trails
+    // 
+    // The product will:
+    // - NO longer appear in product catalogs
+    // - NO accept new stock/lots
+    // - Existing stock remains visible and sellable (via productNameSnapshot)
+    
+    product.deletedAt = new Date();
+    const updatedProduct = await product.save();
+
     res.status(200).json({
       success: true,
-      message: "Product deleted successfully",
-      data: deletedProduct,
+      message: "Product deleted successfully. Existing stock remains available.",
+      data: {
+        productId: updatedProduct._id,
+        productName: updatedProduct.productName,
+        deletedAt: updatedProduct.deletedAt,
+      },
     });
   } catch (error) {
     console.error("Delete Product Error:", error);
     res.status(500).json({ success: false, message: "Server Error" });
   }
 };
+
+// Export auto-cleanup functions for use in Server.js
+module.exports.autoDeleteFinishedProduct = autoDeleteFinishedProduct;
+module.exports.scheduleAutoCleanup = scheduleAutoCleanup;
+module.exports.startAutoCleanupJob = startAutoCleanupJob;

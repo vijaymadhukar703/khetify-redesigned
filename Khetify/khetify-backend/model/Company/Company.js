@@ -18,6 +18,44 @@ const companySchema = new mongoose.Schema(
       required: true,
     },
 
+    // EMAIL VERIFIED. OTP-first registration से बना हर account यहाँ true लेकर
+    // आता है — यह अनुमान नहीं, registration के वक़्त साबित हुई बात है.
+    //
+    // पुराने accounts पर यह field है ही नहीं, जो false पढ़ा जाता है — और वो
+    // सही भी है: वे बिना OTP के बने थे.
+    emailVerified: {
+      type: Boolean,
+      default: false,
+    },
+
+    // PHONE VERIFIED. emailVerified का जुड़वाँ, पर अलग सफ़र: email registration
+    // के वक़्त सत्यापित होता है, phone बाद में profile से.
+    //
+    // हर मौजूदा account पर यह false है — और वो सही भी है, क्योंकि किसी ने
+    // अभी तक अपना number सत्यापित किया ही नहीं. Hub का banner इसी पर टिका है.
+    numberVerified: {
+      type: Boolean,
+      default: false,
+    },
+
+    // Short-lived OTP for verifying `number`. resetPasswordToken की तरह ही
+    // यहीं Company पर रहता है — इसके लिए अलग collection बनाना ज़रूरत से
+    // ज़्यादा होता, क्योंकि यह हमेशा एक मौजूदा account से ही जुड़ा होता है.
+    // Hash रखा जाता है, कभी raw code नहीं.
+    numberOtp: {
+      codeHash: { type: String, default: null },
+      expiresAt: { type: Date, default: null },
+      attempts: { type: Number, default: 0 },
+      lastSentAt: { type: Date, default: null },
+      resendCount: { type: Number, default: 0 },
+      // Jis number par code bheja gaya. Aksar `number` ke barabar hota hai,
+      // par jab koi apna number BADAL kar verify kar raha ho to yahan naya
+      // number rehta hai — aur verify hote hi wahi `number` ban jata hai.
+      // Yahi tarika sahi hai: naya number tabhi account par aaye jab uska
+      // maalik hona saabit ho jaye.
+      pendingNumber: { type: String, default: null },
+    },
+
     // STORED TOKEN
     token: {
       type: String,
@@ -115,7 +153,7 @@ const companySchema = new mongoose.Schema(
       ],
       websiteLink: {
         type: String,
-      }
+      },
     },
 
     // BUSINESS CONTACT
