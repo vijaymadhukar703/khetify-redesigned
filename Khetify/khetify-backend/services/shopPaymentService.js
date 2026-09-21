@@ -110,7 +110,10 @@ async function initiate(consumerId, body = {}) {
   // Throws exactly the same stock/address/availability errors COD would, so a
   // bad basket is rejected BEFORE the shopper reaches a payment screen.
   const quote = await orderService.quoteCheckout(consumerId, body);
-  if (!(quote.amount > 0)) throw httpErr("This basket has nothing to pay for", 400);
+  // Use grandTotal (subtotal + deliveryCharge) as the amount to charge.
+  // Falls back to amount for backward compat (no delivery charge = same value).
+  const chargeAmount = quote.grandTotal || quote.amount;
+  if (!(chargeAmount > 0)) throw httpErr("This basket has nothing to pay for", 400);
 
   // Freeze the request. Orders are built from this, never from a later POST.
   const checkoutSnapshot = {
@@ -127,7 +130,7 @@ async function initiate(consumerId, body = {}) {
     consumerId,
     method: "online",
     provider: gateway.PROVIDER,
-    amount: quote.amount,
+    amount: chargeAmount,
     currency: quote.currency,
     status: "created",
     checkoutSnapshot,
@@ -138,7 +141,7 @@ async function initiate(consumerId, body = {}) {
      If it throws, the ShopPayment row above is already written — deliberately.
      It records the attempt that never got a session, rather than vanishing. */
   const session = await gateway.createSession({
-    amount: quote.amount,
+    amount: chargeAmount,
     currency: quote.currency,
     receipt: String(payment._id),
     customer: { name: consumer.name, email: consumer.email, phone: consumer.phone },

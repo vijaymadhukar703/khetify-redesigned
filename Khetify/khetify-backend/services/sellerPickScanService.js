@@ -139,7 +139,9 @@ async function loadContext(sellerId, shipmentId) {
   const nameById = new Map(products.map((p) => [String(p._id), p.productName]));
 
   // Prefer the order's own snapshot name when there is one.
+  // Also capture variantLabel so the Send Stock UI can show which variant.
   let orderNames = new Map();
+  let orderVariants = new Map(); // productId → variantLabel
   if (shipment.refType === "Order" && shipment.refId) {
     const order = await Order.findOne({
       _id: shipment.refId, ownerType: "seller", ownerId: sellerId,
@@ -147,6 +149,9 @@ async function loadContext(sellerId, shipmentId) {
     orderNames = new Map((order?.items || [])
       .filter((it) => it.productId)
       .map((it) => [String(it.productId), it.name]));
+    orderVariants = new Map((order?.items || [])
+      .filter((it) => it.productId && it.variantLabel)
+      .map((it) => [String(it.productId), it.variantLabel]));
   }
 
   return {
@@ -156,6 +161,7 @@ async function loadContext(sellerId, shipmentId) {
     required,
     alreadyPicked,
     productName: (pid) => orderNames.get(String(pid)) || nameById.get(String(pid)) || "this product",
+    variantLabel: (pid) => orderVariants.get(String(pid)) || null,
   };
 }
 
@@ -213,6 +219,7 @@ function progress(ctx, selected) {
     return {
       productId: pid,
       productName: ctx.productName(pid),
+      variantLabel: ctx.variantLabel ? ctx.variantLabel(pid) : null,
       requestedQty: req,
       scannedQty: scanned,
       remainingQty: Math.max(0, req - scanned),
@@ -608,6 +615,7 @@ async function buildSellerPickPayload({ sellerId, shipmentId, tokens = [], requi
     const scanned = (ctx.alreadyPicked.get(pid) || 0) + (byProduct.get(pid) || 0);
     return {
       productId: pid, productName: ctx.productName(pid),
+      variantLabel: ctx.variantLabel ? ctx.variantLabel(pid) : null,
       requestedQty: req, scannedQty: scanned,
       remainingQty: Math.max(0, req - scanned), complete: scanned >= req,
     };

@@ -13,6 +13,8 @@ const {
   updateImsSettings,
   getCompanyProfile,
   updateCompanyProfile,
+  sendCompanyPhoneOtp,
+  verifyCompanyPhoneOtp,
 } = require("../../controller/Company/companyController");
 const {
   listSellers,
@@ -37,13 +39,23 @@ router.post("/reset-password", resetPassword);
 // changing settings is owner-only (company:settings resolves only via the
 // company_admin/super_admin "*" wildcard).
 router.get("/settings/ims", authMiddleware, getImsSettings);
-router.put("/settings/ims", authMiddleware, authorize("company:settings"), updateImsSettings);
+router.put(
+  "/settings/ims",
+  authMiddleware,
+  authorize("company:settings"),
+  updateImsSettings,
+);
 
 // Own registration profile (identity + GSTIN/PAN + KYC docs as signed URLs).
 // Declared BEFORE "/:id" so "profile" isn't captured as an id. Resolved from
 // the token — any authenticated company member can view its own company; PATCH
 // edits identity/compliance + replaces docs (multipart → S3, stored as keys).
 router.get("/profile", authMiddleware, getCompanyProfile);
+
+// 📱 PHONE VERIFICATION. authMiddleware के पीछे — number token वाले account
+// का अपना है, body से नहीं आता. "/:id" से ऊपर, ताकि "profile" को id न समझा जाए.
+router.post("/profile/phone/send-otp", authMiddleware, sendCompanyPhoneOtp);
+router.post("/profile/phone/verify", authMiddleware, verifyCompanyPhoneOtp);
 router.patch(
   "/profile",
   authMiddleware,
@@ -64,7 +76,14 @@ router.patch(
 const loadSubscriptionMw = require("../../middlewares/loadSubscription");
 const requireFeatureMw = require("../../middlewares/requireFeature");
 const { FEATURES: PLAN_FEATURES } = require("../../config/plans");
-router.get("/sellers", authMiddleware, authorize("inventory:read"), loadSubscriptionMw, requireFeatureMw(PLAN_FEATURES.ADMINISTRATION), listSellers);
+router.get(
+  "/sellers",
+  authMiddleware,
+  authorize("inventory:read"),
+  loadSubscriptionMw,
+  requireFeatureMw(PLAN_FEATURES.ADMINISTRATION),
+  listSellers,
+);
 
 // Protected
 router.get("/", authMiddleware, getAllCompanies);

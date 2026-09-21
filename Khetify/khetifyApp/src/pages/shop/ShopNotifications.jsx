@@ -8,18 +8,22 @@ import {
   markShopNotificationRead,
   deleteShopNotification,
   cancelStockNotification,
+  getCustomerQuantityRequests,
+  deleteQuantityRequest,
 } from "../../lib/shopApi";
 
 /**
  * Customer Notifications Inbox
  * Displays in-app notifications about out-of-stock products becoming available
+ * and quantity requests submitted by the customer
  */
 export default function ShopNotifications() {
   const navigate = useNavigate();
   const [notifications, setNotifications] = useState([]);
   const [subscriptions, setSubscriptions] = useState([]);
+  const [quantityRequests, setQuantityRequests] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState("inbox"); // inbox | subscriptions
+  const [activeTab, setActiveTab] = useState("inbox"); // inbox | subscriptions | requests
   const [page, setPage] = useState(1);
   const limit = 20;
 
@@ -57,12 +61,26 @@ export default function ShopNotifications() {
     }
   };
 
+  // Fetch quantity requests
+  const fetchQuantityRequests = async (pageNum = 1) => {
+    try {
+      if (!getShopToken()) return;
+
+      const data = await getCustomerQuantityRequests({ page: pageNum, limit });
+      setQuantityRequests(data.data || []);
+    } catch (error) {
+      console.error("Fetch error:", error);
+    }
+  };
+
   useEffect(() => {
     setLoading(true);
     if (activeTab === "inbox") {
       fetchNotifications(page).finally(() => setLoading(false));
-    } else {
+    } else if (activeTab === "subscriptions") {
       fetchSubscriptions(page).finally(() => setLoading(false));
+    } else if (activeTab === "requests") {
+      fetchQuantityRequests(page).finally(() => setLoading(false));
     }
   }, [activeTab, page]);
 
@@ -113,6 +131,33 @@ export default function ShopNotifications() {
     });
   };
 
+  // Delete quantity request
+  const handleDeleteRequest = async (requestId) => {
+    Swal.fire({
+      icon: "question",
+      title: "Delete Request?",
+      text: "This action cannot be undone.",
+      showCancelButton: true,
+      confirmButtonText: "Delete",
+      confirmButtonColor: "#EA2831",
+    }).then(async (result) => {
+      if (result.isConfirmed) {
+        try {
+          await deleteQuantityRequest(requestId);
+          await Swal.fire({
+            icon: "success",
+            title: "Deleted",
+            text: "Request removed.",
+            confirmButtonColor: "#EA2831",
+          });
+          fetchQuantityRequests(page);
+        } catch (error) {
+          Swal.fire({ icon: "error", title: "Error", text: error.response?.data?.message || error.message });
+        }
+      }
+    });
+  };
+
   // Navigate to product. The storefront route is /customer-shop/product/
   // :listingId (a SellerListing id), NOT the raw Product id — passing
   // payload.productId here was sending shoppers to a URL that could never
@@ -121,23 +166,38 @@ export default function ShopNotifications() {
     navigate(`/customer-shop/product/${listingId}`);
   };
 
+  const getStatusBadge = (status) => {
+    switch (status) {
+      case "pending":
+        return "bg-yellow-100 text-yellow-800";
+      case "fulfilled":
+        return "bg-green-100 text-green-800";
+      case "rejected":
+        return "bg-red-100 text-red-800";
+      case "partially_fulfilled":
+        return "bg-blue-100 text-blue-800";
+      default:
+        return "bg-stone-100 text-stone-800";
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#FAFAF8]">
       {/* Header */}
       <div className="bg-white border-b border-stone-200">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6">
           <h1 className="text-3xl font-bold text-stone-900">Notifications</h1>
-          <p className="text-stone-600 mt-1">Stay updated on your favorite products</p>
+          <p className="text-stone-600 mt-1">Stay updated on your favorite products and requests</p>
         </div>
       </div>
 
       {/* Tabs */}
       <div className="bg-white border-b border-stone-200">
         <div className="max-w-4xl mx-auto px-4 sm:px-6">
-          <div className="flex gap-6">
+          <div className="flex gap-6 overflow-x-auto">
             <button
               onClick={() => { setActiveTab("inbox"); setPage(1); }}
-              className={`py-4 px-1 border-b-2 font-semibold text-sm transition-colors ${
+              className={`py-4 px-1 border-b-2 font-semibold text-sm transition-colors whitespace-nowrap ${
                 activeTab === "inbox"
                   ? "border-[#EA2831] text-[#EA2831]"
                   : "border-transparent text-stone-600 hover:text-stone-900"
@@ -150,7 +210,7 @@ export default function ShopNotifications() {
             </button>
             <button
               onClick={() => { setActiveTab("subscriptions"); setPage(1); }}
-              className={`py-4 px-1 border-b-2 font-semibold text-sm transition-colors ${
+              className={`py-4 px-1 border-b-2 font-semibold text-sm transition-colors whitespace-nowrap ${
                 activeTab === "subscriptions"
                   ? "border-[#EA2831] text-[#EA2831]"
                   : "border-transparent text-stone-600 hover:text-stone-900"
@@ -161,6 +221,19 @@ export default function ShopNotifications() {
                 My Subscriptions
               </span>
             </button>
+            <button
+              onClick={() => { setActiveTab("requests"); setPage(1); }}
+              className={`py-4 px-1 border-b-2 font-semibold text-sm transition-colors whitespace-nowrap ${
+                activeTab === "requests"
+                  ? "border-[#EA2831] text-[#EA2831]"
+                  : "border-transparent text-stone-600 hover:text-stone-900"
+              }`}
+            >
+              <span className="flex items-center gap-2">
+                <span className="material-symbols-outlined">mail</span>
+                Requests
+              </span>
+            </button>
           </div>
         </div>
       </div>
@@ -169,7 +242,10 @@ export default function ShopNotifications() {
       <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8">
         {loading ? (
           <div className="flex justify-center py-12">
-            <div className="text-stone-500">Loading...</div>
+            <div className="text-stone-500 flex items-center gap-2">
+              <span className="material-symbols-outlined animate-spin">refresh</span>
+              Loading...
+            </div>
           </div>
         ) : activeTab === "inbox" ? (
           <div className="space-y-3">
@@ -227,7 +303,7 @@ export default function ShopNotifications() {
               ))
             )}
           </div>
-        ) : (
+        ) : activeTab === "subscriptions" ? (
           <div className="space-y-3">
             {subscriptions.length === 0 ? (
               <div className="bg-white rounded-xl border border-stone-200 p-8 text-center">
@@ -268,6 +344,76 @@ export default function ShopNotifications() {
                   </div>
                 </div>
               ))
+            )}
+          </div>
+        ) : (
+          // Requests tab
+          <div className="space-y-3">
+            {quantityRequests.length === 0 ? (
+              <div className="bg-white rounded-xl border border-stone-200 p-8 text-center">
+                <div className="flex justify-center mb-3">
+                  <span className="material-symbols-outlined text-4xl text-stone-300">mail</span>
+                </div>
+                <p className="text-stone-600">No quantity requests yet</p>
+                <p className="text-sm text-stone-500 mt-2">When product stock runs out, request more quantity</p>
+              </div>
+            ) : (
+              <div className="bg-white rounded-xl border border-stone-200 overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="border-b border-stone-200 bg-stone-50">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-sm font-bold text-stone-900">Product</th>
+                        <th className="px-4 py-3 text-center text-sm font-bold text-stone-900">Qty</th>
+                        <th className="px-4 py-3 text-center text-sm font-bold text-stone-900">Status</th>
+                        <th className="px-4 py-3 text-left text-sm font-bold text-stone-900">Date</th>
+                        <th className="px-4 py-3 text-center text-sm font-bold text-stone-900">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {quantityRequests.map((request) => (
+                        <tr key={request._id} className="border-b border-stone-200 hover:bg-stone-50">
+                          <td className="px-4 py-3">
+                            <div>
+                              <p className="font-semibold text-stone-900">{request.productName}</p>
+                              {request.variantDetails?.label && (
+                                <p className="text-xs text-stone-500">{request.variantDetails.label}</p>
+                              )}
+                              {request.isUrgent && (
+                                <span className="inline-block mt-1 text-xs font-bold text-red-600">
+                                  🚨 Urgent
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-center text-stone-900 font-semibold">
+                            {request.requestedQuantity}
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <span className={`px-3 py-1 rounded-full text-xs font-bold whitespace-nowrap ${getStatusBadge(request.status)}`}>
+                              {request.status.replace('_', ' ')}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-sm text-stone-600 whitespace-nowrap">
+                            {new Date(request.createdAt).toLocaleDateString()}
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            {request.status === "pending" && (
+                              <button
+                                onClick={() => handleDeleteRequest(request._id)}
+                                className="px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded transition-colors"
+                                title="Delete request"
+                              >
+                                Delete
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             )}
           </div>
         )}

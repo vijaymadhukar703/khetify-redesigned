@@ -643,9 +643,21 @@ const ImsSellerTransfer = () => {
       if (!r.cartonUnits) return false;                        // size unknown → treat as loose
       return (perCarton.get(r.bulkPackagingId) || 0) >= r.cartonUnits;
     };
-    return rows.filter((r) => r.boxable && !wholeCarton(r)).flatMap((r) => r.unitCodes);
+    // A "lot" scan (no bulk packaging) never needs a Shipment Box either — it
+    // always picks up every unit still eligible on that lot in one go, so it is
+    // the WHOLE lot leaving as one unbroken unit, exactly like a whole carton.
+    // Only units taken out individually (scanType "unit") ever count as loose.
+    return rows.filter((r) => r.boxable && r.scanType !== 'lot' && !wholeCarton(r)).flatMap((r) => r.unitCodes);
   }, [rows]);
-  const bulkPackagedCount = scannedCount - looseCodes.length;
+  // Units that travelled without needing a box for EITHER reason — a whole
+  // Bulk Package, or a whole unboxed lot — kept apart so the note below can
+  // say which one actually applies instead of calling every such unit
+  // "packaged".
+  const lotScannedCount = useMemo(
+    () => rows.filter((r) => r.scanType === 'lot').reduce((n, r) => n + r.unitCodes.length, 0),
+    [rows]
+  );
+  const bulkPackagedCount = scannedCount - looseCodes.length - lotScannedCount;
   const assignedCodes = useMemo(() => new Set(boxes.flatMap((b) => b.units)), [boxes]);
   const unassignedCodes = useMemo(
     () => looseCodes.filter((c) => !assignedCodes.has(c)),
@@ -843,6 +855,18 @@ const ImsSellerTransfer = () => {
           unitCodes: item.addedUnitCodes,
         },
       ]);
+
+      // NOT auto-boxed. A "lot" scan (no bulk packaging) always picks up every
+      // unit still eligible on that lot in one go — in the ordinary case (a
+      // single carton the company shipped as one unboxed lot, received here
+      // under its one lot-number barcode) that means the ENTIRE physical
+      // carton, untouched. Auto-assigning it to a new Shipment Box used to mint
+      // a brand-new box label for something that never left its original box —
+      // the destination should simply scan the SAME lot-number label to
+      // receive it, exactly as this warehouse did. So a lot scan stays
+      // unboxed by default (ships via the plain shipment manifest, no new
+      // label) unless the operator deliberately ticks its units and presses
+      // "Add to Box" themselves — same as any other boxable row.
       const left = item.remainingRequired;
       const notice =
         `${SCAN_LABEL[item.scanType] || 'Item'} ${item.bulkPackagingId || item.lotNumber} — ${item.addedQuantity} × ${item.productName || 'unit(s)'}`
@@ -1549,6 +1573,14 @@ const ImsSellerTransfer = () => {
               <span className="material-symbols-outlined text-[14px] align-middle mr-1">inventory_2</span>
               {bulkPackagedCount} unit(s) travel inside their existing Bulk Package — the seller scans that label,
               nothing to do here. Units taken OUT of a carton are listed below and do need a box.
+            </p>
+          )}
+
+          {lotScannedCount > 0 && (
+            <p className="text-xs text-stone-600 bg-stone-50 border border-stone-200 rounded-lg px-3 py-2 mb-4">
+              <span className="material-symbols-outlined text-[14px] align-middle mr-1">inventory_2</span>
+              {lotScannedCount} unit(s) travel as the whole lot under its existing lot-number label — the seller
+              scans that same label to receive them, nothing to do here.
             </p>
           )}
 

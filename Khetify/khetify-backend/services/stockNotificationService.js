@@ -290,27 +290,28 @@ class StockNotificationService {
         return { notified: 0, error: null };
       }
 
-      // Find all active subscription requests for this product
-      const subscriptions = await StockNotification.find({
-        productId,
-        status: "active",
-      }).populate("customerId");
-
-      if (subscriptions.length === 0) {
-        return { notified: 0, error: null };
-      }
-
-      // Get product details
+      // Get product details (needed by both notification paths)
       const product = await Product.findById(productId).lean();
       if (!product) {
         return { notified: 0, error: "Product not found" };
       }
 
-      // Create and send notifications to all subscribers
-      const notifiedCount = await this._notifySubscribers(
-        subscriptions,
-        product
-      );
+      // ── Path 1: NotifyMe subscribers ────────────────────────────────────────
+      const subscriptions = await StockNotification.find({
+        productId,
+        status: "active",
+      }).populate("customerId");
+
+      let notifiedCount = 0;
+      if (subscriptions.length > 0) {
+        notifiedCount = await this._notifySubscribers(subscriptions, product);
+      }
+
+      // ── Path 2: Quantity Request customers ──────────────────────────────────
+      // Notify customers who submitted a quantity request for this product
+      // and are still waiting (status: pending). This runs independently of
+      // Path 1 so customers are notified even when there are no NotifyMe subs.
+      await this._notifyQuantityRequestCustomers(productId, product);
 
       return { notified: notifiedCount, error: null };
     } catch (error) {
@@ -431,6 +432,91 @@ class StockNotificationService {
       return result;
     } catch (error) {
       throw error;
+    }
+  }
+
+  /**
+   * Auto-fulfill pending quantity requests when stock comes back.
+   *
+   * Logic:
+   *  - Find all pending QuantityRequests for this product
+   *  - For each request: check if current availableStock >= requestedQuantity
+   *  - If yes  → mark request "fulfilled", send "fulfilled" notification to customer
+   *  - If no   → send "stock available but partial" notification (don't fulfill yet)
+   *
+   * Called from checkAndNotifyStockAvailability so it runs on every restock
+   * (GRN, lot receive, manual adjustment, etc.) automatically.
+   * @private
+   */
+  async _notifyQuantityRequestCustomers(productId, product) {
+    try {
+      const QuantityRequest = require("../model/Shop/QuantityRequest");
+      const Inventory = require("../model/Inventory/Inventory");
+
+      const pendingRequests = await QuantityRequest.find({
+        productId,
+        status: "pending",
+      }).lean();
+
+      if (pendingRequests.length === 0) return;
+
+      // Get total available stock across all inventory records for this product
+      const inventoryAgg = await Inventory.aggregate([
+        { $match: { productId: new mongoose.Types.ObjectId(productId) } },
+        { $group: { _id: null, totalAvailable: { $sum: "$availableStock" } } },
+      ]);
+      const totalAvailable = inventoryAgg[0]?.totalAvailable ?? 0;
+
+      for (const req of pendingRequests) {
+        try {
+          if (totalAvailable >= req.requestedQuantity) {
+            // ── Auto-fulfill ───────────────────────────────────────────────
+            await QuantityRequest.findByIdAndUpdate(req._id, {
+              status: "fulfilled",
+              viewedBySeller: true,
+              sellerMessage: "Stock is now available for your requested quantity.",
+            });
+
+            await Notification.create({
+              recipientType: "customer",
+              recipientId: req.customerId,
+              type: "quantity_request",
+              title: `✅ Request Fulfilled — ${product.productName}`,
+              body: `Great news! ${product.productName} now has enough stock for your request of ${req.requestedQuantity} units. Visit the product to place your order.`,
+              payload: {
+                quantityRequestId: req._id,
+                listingId: req.listingId,
+                productId: req.productId,
+                status: "fulfilled",
+              },
+              read: false,
+            });
+          } else if (totalAvailable > 0) {
+            // ── Partial stock — notify but don't fulfill yet ────────────────
+            await Notification.create({
+              recipientType: "customer",
+              recipientId: req.customerId,
+              type: "quantity_request",
+              title: `📦 Partial Stock Available — ${product.productName}`,
+              body: `${product.productName} now has ${totalAvailable} units in stock. You requested ${req.requestedQuantity} units — we'll notify you again when full stock is available.`,
+              payload: {
+                quantityRequestId: req._id,
+                listingId: req.listingId,
+                productId: req.productId,
+                status: "stock_available",
+              },
+              read: false,
+            });
+          }
+        } catch (err) {
+          console.error(
+            `Failed to process qty-request ${req._id} for customer ${req.customerId}:`,
+            err
+          );
+        }
+      }
+    } catch (err) {
+      console.error("_notifyQuantityRequestCustomers error:", err);
     }
   }
 }

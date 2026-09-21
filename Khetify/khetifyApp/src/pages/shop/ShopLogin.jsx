@@ -2,7 +2,14 @@ import React, { useState, useEffect } from "react";
 import { useSearchParams, useNavigate, Link } from "react-router-dom";
 import { useShopAuth } from "../../context/ShopAuthContext";
 import { useT } from "../../context/ShopLanguageContext";
-import { Icon, TextField, PasswordField, PrimaryButton, ErrorNote, AuthShell } from "../../Components/shop/authUi";
+import {
+  Icon,
+  TextField,
+  PasswordField,
+  PrimaryButton,
+  ErrorNote,
+  AuthShell,
+} from "../../Components/shop/authUi";
 
 /* Customer LOGIN page (separate from Register). UI recreated in the reference
    style with a full-height split shell; auth logic UNCHANGED:
@@ -19,6 +26,7 @@ export default function ShopLogin() {
   // the destination doesn't depend on where the user opened login from.
   const HOME = "/customer-shop/home";
   const registerHref = "/customer-shop/register";
+  const forgotHref = "/customer-shop/forgot-password";
 
   const [form, setForm] = useState({ identifier: "", password: "" });
   const [busy, setBusy] = useState(false);
@@ -26,14 +34,16 @@ export default function ShopLogin() {
 
   // Legacy header link support: /customer-shop/login?mode=register → register page.
   useEffect(() => {
-    if (params.get("mode") === "register") navigate(registerHref, { replace: true });
+    if (params.get("mode") === "register")
+      navigate(registerHref, { replace: true });
   }, [params, navigate, registerHref]);
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
   const submit = async (e) => {
     e.preventDefault();
-    setError(""); setBusy(true);
+    setError("");
+    setBusy(true);
     try {
       await login(form.identifier, form.password);
       navigate(HOME, { replace: true });
@@ -75,6 +85,17 @@ export default function ShopLogin() {
 
         <PasswordField
           required
+          labelRight={
+            <Link
+              to={forgotHref}
+              className="text-sm font-semibold text-[#EA2831] hover:text-[#c91e26]"
+            >
+              {/* सीधा text, t() नहीं — यह key अभी ShopLanguageContext में नहीं
+                  है और गायब key screen पर अपना ही नाम छाप देती है. Key जोड़ते
+                  ही इसे t("login.forgotPassword") कर देना. */}
+              Forgot password?
+            </Link>
+          }
           value={form.password}
           onChange={set("password")}
           placeholder={t("login.passwordPlaceholder")}
@@ -88,7 +109,12 @@ export default function ShopLogin() {
 
       <p className="mt-6 text-center text-[15px] text-[#6B6A62]">
         {t("login.noAccount")}{" "}
-        <Link to={registerHref} className="font-bold text-[#EA2831] hover:text-[#c91e26]">{t("login.register")}</Link>
+        <Link
+          to={registerHref}
+          className="font-bold text-[#EA2831] hover:text-[#c91e26]"
+        >
+          {t("login.register")}
+        </Link>
       </p>
     </AuthShell>
   );

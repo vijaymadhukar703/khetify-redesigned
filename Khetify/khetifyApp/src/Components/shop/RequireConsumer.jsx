@@ -3,7 +3,7 @@ import { Navigate, useLocation } from "react-router-dom";
 import { useShopAuth } from "../../context/ShopAuthContext";
 import { useT } from "../../context/ShopLanguageContext";
 import LocationPermissionGate from "../common/LocationPermissionGate";
-import { saveShopLocation, previewShopLocation, SHOP_LOCATION_PROMPT_KEY } from "../../lib/shopApi";
+import { saveShopLocation, SHOP_LOCATION_PROMPT_KEY } from "../../lib/shopApi";
 import { locDebug } from "../../lib/geolocation";
 
 /* WHERE THE SHOPPER IS ASKED.
@@ -55,7 +55,6 @@ export default function RequireConsumer({ children }) {
       alreadyGranted={["granted", "revoked"].includes(consumer?.locationAccess?.status)}
       sessionKey={SHOP_LOCATION_PROMPT_KEY}
       onDecision={onDecision}
-      onPreview={previewShopLocation}
       text={{
         title: t("location.title"),
         body: t("location.body"),
@@ -65,22 +64,6 @@ export default function RequireConsumer({ children }) {
         blocked: t("location.blocked"),
         retry: t("location.retry"),
         locating: t("location.locating"),
-        confirmTitle: t("location.confirmTitle"),
-        confirmBody: t("location.confirmBody"),
-        confirm: t("location.confirm"),
-        cancel: t("location.cancel"),
-        panel: {
-          state: t("loc.state"),
-          district: t("loc.district"),
-          city: t("loc.city"),
-          pincode: t("loc.pincode"),
-          country: t("loc.country"),
-          coordinates: t("loc.coordinates"),
-          accuracy: t("loc.accuracy"),
-          capturedAt: t("loc.capturedAt"),
-          viewOnMap: t("loc.viewOnMap"),
-          unresolved: t("loc.unresolved"),
-        },
       }}
     >
       {children}

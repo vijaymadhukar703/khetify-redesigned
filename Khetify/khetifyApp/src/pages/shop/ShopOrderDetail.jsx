@@ -373,6 +373,11 @@ export default function ShopOrderDetail() {
 
   const ship = order.shippingAddress || {};
   const subtotal = items.reduce((s, i) => s + (i.price || 0) * (i.qty || 0), 0);
+  // The server saves the delivery-inclusive figure as grandTotal, separate
+  // from totalAmount (which is items-only). Every amount shown on this page
+  // reads grandTotal now — totalAmount stays as the fallback for any older
+  // order saved before grandTotal existed.
+  const finalAmount = order.grandTotal ?? order.totalAmount ?? 0;
   const cancellable = canCancel(order.status);
 
   return (
@@ -433,7 +438,7 @@ export default function ShopOrderDetail() {
                 {STATUS_LABEL_KEY[order.status] ? t(STATUS_LABEL_KEY[order.status]) : order.status}
               </span>
               <p className="mt-2 font-heading text-2xl font-black text-stone-900">
-                {rupee(order.totalAmount || 0)}
+                {rupee(finalAmount)}
               </p>
               {/* <p className="text-[10px] font-bold uppercase tracking-wide text-stone-400">
                 {order.payment?.mode || "cod"} · {order.payment?.status || "pending"}
@@ -498,11 +503,21 @@ export default function ShopOrderDetail() {
 
           <div className="mt-3 border-t border-stone-100 pt-3">
             <Row label={t("od.subtotal")} value={rupee(subtotal)} />
-            <Row label={t("od.delivery")} value={<span className="text-emerald-700">{t("od.free")}</span>} />
+            {/* This used to hardcode "Free" regardless of what was actually
+                charged. The server saves the real figure as deliveryCharge —
+                read straight off it now, rather than guessing at a difference. */}
+            <Row
+              label={t("od.delivery")}
+              value={
+                order.deliveryCharge > 0
+                  ? rupee(order.deliveryCharge)
+                  : <span className="text-emerald-700">{t("od.free")}</span>
+              }
+            />
             <div className="mt-1.5 flex items-baseline justify-between border-t border-stone-100 pt-3">
               <span className="font-heading text-base font-bold text-stone-900">{t("od.total")}</span>
               <span className="font-heading text-xl font-black text-stone-900">
-                {rupee(order.totalAmount || 0)}
+                {rupee(finalAmount)}
               </span>
             </div>
             <p className="mt-1 text-[11px] text-stone-400">
@@ -549,12 +564,12 @@ export default function ShopOrderDetail() {
             </p>
             <p className="mt-1 text-[13px] leading-relaxed text-stone-600">
               {order.payment?.status === "paid"
-                ? t("od.paid", { amount: rupee(order.totalAmount || 0) })
+                ? t("od.paid", { amount: rupee(finalAmount) })
                 : order.status === "delivered"
-                  ? t("od.collectedOnDelivery", { amount: rupee(order.totalAmount || 0) })
+                  ? t("od.collectedOnDelivery", { amount: rupee(finalAmount) })
                   : isDead(order.status)
                     ? t("od.nothingCharged")
-                    : t("od.keepReady", { amount: rupee(order.totalAmount || 0) })}
+                    : t("od.keepReady", { amount: rupee(finalAmount) })}
             </p>
           </div>
         </section>

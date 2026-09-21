@@ -91,6 +91,8 @@ async function withOrderContext(owner, shipments) {
         return {
           productId: pid,
           productName: it.name || nameById.get(pid) || "Item",
+          variantLabel: it.variantLabel || null,
+          variantId: it.variantId || null,
           requestedQty: it.qty,
           plannedQty: forProduct.reduce((n, l) => n + (l.qty || 0), 0),
           pickedQty: forProduct.reduce((n, l) => n + (l.pickedQty || 0), 0),
@@ -427,12 +429,250 @@ exports.dispatchOrder = async (req, res) => {
 };
 
 /**
- * GET /api/seller/shipments/:id/delivery-label — the CUSTOMER PARCEL label.
+ * POST /api/seller/shipments/:id/dispatch-direct
  *
- * Read-only. `?packageId=` selects one box; without it the most recent box is
- * used. Separate from the lot / bulk / main box / inner box / unit inventory
- * labels, which are untouched.
+ * Dispatch a customer-order shipment WITHOUT barcode scanning.
+ *
+ * For My Products and unserialized Company stock, the seller can dispatch
+ * directly using the shipment's planned lines. Stock is reduced by the
+ * requested quantity using the existing FEFO lot allocation already on the
+ * shipment lines (set when the order was confirmed and warehouse assigned).
+ *
+ * Body: { weightKg?, dims? }  — optional parcel weight/dimensions
+ *
+ * For serialized Company stock the seller may have scanned SOME units already
+ * (passed as body.tokens). Any remaining unscanned units are deducted by
+ * quantity from the lot's availableStock. This keeps the total correct:
+ *   scanned tokens = specific serials marked shipped
+ *   remaining qty  = deducted from availableStock without specific serials
+ *
+ * Body: { tokens?: [...], weightKg?, dims? }
  */
+exports.dispatchDirect = async (req, res) => {
+  try {
+    const sellerId  = req.user.sellerId;
+    const shipmentId = req.params.id;
+    const { tokens = [], weightKg, dims } = req.body || {};
+
+    const current = await shipmentService.getShipment(sellerOwner(req), shipmentId);
+    const scope = await warehouseScope(req.user);
+    if (scope && !inScope(scope, current.fromWarehouseId)) {
+      return res.status(403).json({ success: false, message: "Access denied — not your source warehouse" });
+    }
+    if (["dispatched", "in_transit", "arrived", "delivered"].includes(current.status)) {
+      return res.status(409).json({ success: false, message: "Already dispatched.", code: "ALREADY_DISPATCHED" });
+    }
+
+    // Build a qty-based pick from the shipment's own planned lines.
+    // For any tokens the seller did scan, use those serials; for the rest, use qty.
+    let picks;
+    if (tokens.length) {
+      // Partial scan path: validate scanned tokens and fill remaining by qty
+      const { picks: scannedPicks, products: scannedProducts } =
+        await sellerScan.buildSellerPickPayload({
+          sellerId, shipmentId, tokens, requireComplete: false,
+        });
+
+      // For each line, check if scan already covered it; if not, add qty pick for remainder
+      const lines = current.lines || [];
+      const qtyByLine = new Map();
+      for (const p of scannedPicks) {
+        const lineIdx = p.lineIndex;
+        const line = lines[lineIdx];
+        if (!line) continue;
+        const scannedForLine = (p.serials || []).length || (p.qty || 0);
+        const remaining = (line.qty || 0) - scannedForLine;
+        if (remaining > 0) qtyByLine.set(lineIdx, remaining);
+      }
+      // Lines not touched by scan at all
+      for (let i = 0; i < lines.length; i++) {
+        if (!scannedPicks.find((p) => p.lineIndex === i)) {
+          const line = lines[i];
+          if ((line.qty || 0) > 0) qtyByLine.set(i, line.qty);
+        }
+      }
+
+      picks = [...scannedPicks];
+      for (const [idx, qty] of qtyByLine.entries()) {
+        if (qty > 0) picks.push({ lineIndex: idx, qty });
+      }
+    } else {
+      // No scanning at all — pick every line by quantity from planned allocation
+      const lines = current.lines || [];
+      picks = lines
+        .map((line, idx) => ({ lineIndex: idx, qty: line.qty || 0 }))
+        .filter((p) => p.qty > 0);
+    }
+
+    if (!picks.length) {
+      return res.status(400).json({ success: false, message: "No lines to dispatch.", code: "NO_LINES" });
+    }
+
+    // Pick → Pack → Create one box → Dispatch
+    const picked = await shipmentService.pickShipment(sellerOwner(req), shipmentId, {
+      picks, performedBy: req.user.id,
+    });
+    await shipmentService.packShipment(sellerOwner(req), shipmentId, { performedBy: req.user.id });
+
+    // Create one parcel for the whole order (direct dispatch = single box)
+    const created = [];
+    try {
+      created.push(await sellerPack.createSellerBox({
+        sellerId,
+        shipment: picked,
+        resolved: { units: [], lots: (current.lines || []).map((l) => ({
+          inventoryId: String(l.inventoryId),
+          productId: String(l.productId),
+          qty: l.qty || 0,
+          lotNumber: l.lotNumber || l.batchNumber || null,
+        }))},
+        performedBy: req.user.id,
+        weightKg: weightKg || null,
+        dims: dims || null,
+      }));
+
+      // Dispatch — single point at which stock moves
+      const { shipment, qrPayload } = await shipmentService.dispatchShipment(
+        sellerOwner(req), shipmentId, { performedBy: req.user.id }
+      );
+      if (shipment.refType === "Order" && shipment.refId) {
+        try { await orderCtrl.shipOrder(shipment.refId, sellerId, shipment); }
+        catch (e) { console.error("order ship sync:", e.message); }
+      }
+      try { await sellerPack.markSellerPackageShipped({ sellerId, shipmentId }); }
+      catch (e) { console.error("seller package status sync:", e.message); }
+
+      // Build delivery label for the box
+      const labels = [];
+      for (const pkg of created) {
+        try {
+          labels.push(await sellerPack.sellerDeliveryLabel({ sellerId, shipmentId, packageId: pkg._id }));
+        } catch (e) { console.error("label build:", e.message); }
+      }
+
+      res.json({
+        success: true,
+        message: "Dispatched directly — stock deducted from inventory",
+        data: { _id: shipment._id, status: shipment.status, qrPayload },
+        boxes: created,
+        labels,
+      });
+    } catch (err) {
+      for (const pkg of created) {
+        await sellerPack.deleteSellerBox({ sellerId, packageId: pkg._id }).catch(() => {});
+      }
+      throw err;
+    }
+  } catch (err) {
+    res.status(err.status || 500).json({
+      success: false, message: err.message || "Server error", code: err.code || null,
+    });
+  }
+};
+
+exports.deliveryLabel = async (req, res) => {
+  try {
+    const data = await sellerPack.sellerDeliveryLabel({
+      sellerId: req.user.sellerId,
+      shipmentId: req.params.id,
+      packageId: req.query.packageId || null,
+    });
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(err.status || 500).json({
+      success: false, message: err.message || "Server error", code: err.code || null,
+    });
+  }
+};
+
+/** GET /api/seller/shipments/:id/box — every box raised for this shipment,
+ *  oldest first (Box 1, Box 2, …). Read-only. */
+exports.getBox = async (req, res) => {
+  try {
+    const boxes = await sellerPack.listSellerBoxes({
+      sellerId: req.user.sellerId, shipmentId: req.params.id,
+    });
+    res.json({ success: true, data: boxes, count: boxes.length });
+  } catch (err) { fail(res, err); }
+};
+
+/** POST /api/seller/shipments/:id/pack — pack a fully-picked shipment (then it
+ * moves to Dispatch). Only the source warehouse's manager (or seller_admin). */
+exports.pack = async (req, res) => {
+  try {
+    const s = await shipmentService.getShipment(sellerOwner(req), req.params.id);
+    const scope = await warehouseScope(req.user);
+    if (scope && !inScope(scope, s.fromWarehouseId)) {
+      return res.status(403).json({ success: false, message: "Access denied — not your source warehouse" });
+    }
+    const shipment = await shipmentService.packShipment(sellerOwner(req), req.params.id, { performedBy: req.user.id });
+    // Customer-order shipment: keep the order tracker in step (→ packed).
+    if (shipment.refType === "Order" && shipment.refId) {
+      try { await orderCtrl.markOrderPacked(shipment.refId, req.user.sellerId); } catch (e) { console.error("order pack sync:", e.message); }
+    }
+    res.json({ success: true, message: "Packed — print the label to dispatch", data: shipment });
+  } catch (err) { fail(res, err); }
+};
+
+/** POST /api/seller/shipments/:id/dispatch { labelPrinted, ...transport } —
+ * stock leaves the source (in_transit). Dispatch is BLOCKED until the shipping
+ * label has been printed (labelPrinted:true), mirroring the company. Only the
+ * source warehouse's manager (or seller_admin) may dispatch. */
+exports.dispatch = async (req, res) => {
+  try {
+    const s = await shipmentService.getShipment(sellerOwner(req), req.params.id);
+    const scope = await warehouseScope(req.user);
+    if (scope && !inScope(scope, s.fromWarehouseId)) {
+      return res.status(403).json({ success: false, message: "Access denied — not your source warehouse" });
+    }
+    if (req.body.labelPrinted !== true) {
+      return res.status(409).json({ success: false, message: "Print the shipping label before dispatch" });
+    }
+    const { shipment, qrPayload } = await shipmentService.dispatchShipment(sellerOwner(req), req.params.id, { performedBy: req.user.id });
+    // Customer-order shipment moved NO stock (toType "customer"); ship the order
+    // now — the single sale-deduction (commit reservation or FEFO) + mark shipped.
+    if (shipment.refType === "Order" && shipment.refId) {
+      // Pass the SHIPMENT so a split order deducts only this parcel's products
+      // from this warehouse, and only flips to "shipped" on the last parcel.
+      try { await orderCtrl.shipOrder(shipment.refId, req.user.sellerId, shipment); } catch (e) { console.error("order ship sync:", e.message); }
+    }
+    // The parcel follows its shipment. Status only — deducts nothing, moves no
+    // stock; the existing dispatch path above remains the only thing that does.
+    try { await sellerPack.markSellerPackageShipped({ sellerId: req.user.sellerId, shipmentId: req.params.id }); }
+    catch (e) { console.error("seller package status sync:", e.message); }
+    res.json({ success: true, message: "Dispatched — stock is in transit", data: { _id: shipment._id, status: shipment.status, qrPayload } });
+  } catch (err) { fail(res, err); }
+};
+
+/** POST /api/seller/shipments/:id/receive { qr, warehouseId?, lines? } —
+ * scan-to-receive at the destination warehouse. Lands stock into B, marks the
+ * linked transfer request fulfilled. */
+exports.receive = async (req, res) => {
+  try {
+    if (!req.body.qr) return res.status(400).json({ success: false, message: "Scan the manifest QR to receive this shipment" });
+    const sellerWarehouseIds = (await Warehouse.find({ sellerId: req.user.sellerId }).select("_id")).map((w) => String(w._id));
+    const scope = await warehouseScope(req.user); // a manager can only receive into their own warehouse(s)
+    const allowed = scope ? sellerWarehouseIds.filter((id) => scope.map(String).includes(id)) : sellerWarehouseIds;
+
+    const { shipment, shortages } = await shipmentService.verifyReceipt(sellerOwner(req), req.params.id, {
+      verifierId: req.user.id,
+      qr: req.body.qr,
+      warehouseId: req.body.warehouseId,
+      allowedWarehouseIds: allowed,
+      lines: req.body.lines || [],
+      performedBy: req.user.id,
+    });
+
+    // Mark the linked transfer request fulfilled on a full receipt.
+    if (shipment.refType === "TransferRequest" && shipment.refId && !shortages) {
+      await TransferRequest.updateOne(
+        { _id: shipment.refId, ownerType: "seller", ownerId: req.user.sellerId },
+        { $set: { status: "fulfilled" } }
+      );
+    }
+    res.json({ success: true, message: shortages ? `Received with ${shortages} discrepancy(ies)` : "Received in full — stock updated", data: { status: shipment.status, shortages } });
+  } catch (err) { fail(res, err); }
+};
 exports.deliveryLabel = async (req, res) => {
   try {
     const data = await sellerPack.sellerDeliveryLabel({

@@ -7,6 +7,7 @@ import {
   getSellerCustomers, getSellerProducts, getSellerOrderSourceOptions,
   getSellerPosInvoicePdf,
 } from '../../lib/sellerApi';
+import { useSellerPermission } from '../../context/SellerPermissionContext';
 
 const toast = (icon, title) => Swal.fire({ icon, title, toast: true, position: 'top-end', timer: 2200, showConfirmButton: false });
 const apiError = (err) => toast('error', err?.response?.data?.message || err.message || 'Something went wrong');
@@ -22,14 +23,12 @@ const STATUS_STYLE = {
   pending: 'bg-stone-100 text-stone-600', confirmed: 'bg-blue-50 text-blue-700', packed: 'bg-amber-50 text-amber-700',
   shipped: 'bg-violet-50 text-violet-700', delivered: 'bg-green-50 text-green-700', returned: 'bg-orange-50 text-orange-700', cancelled: 'bg-red-50 text-red-700',
 };
-// The seller's ONLY action is to confirm (or cancel) a PENDING order. After
-// confirmation the order belongs to the warehouse that holds the stock — it
-// picks, packs, dispatches and delivers. The seller just watches the status
-// progress (confirmed → packed → shipped → delivered), read-only, like the
-// customer's order tracker. So no post-confirm actions are offered here.
-const NEXT_ACTIONS = {
+
+// Sales page — Approve shown to warehouse manager only; admin sees read-only status
+const MANAGER_NEXT_ACTIONS = {
   pending: [['Approve', 'confirmed'], ['Cancel', 'cancelled']],
 };
+const ADMIN_NEXT_ACTIONS = {};  // seller_admin sees no action buttons — read-only
 
 /** The ordered products, as a primary line plus an overflow count. Orders are
  *  usually one line; multi-line ones stay readable instead of wrapping. */
@@ -106,10 +105,12 @@ const addressLines = (o) => {
 };
 
 const SellerOutbound = () => {
+  const { role } = useSellerPermission();
+  const isWarehouseManager = role === 'seller_manager';
+  const NEXT_ACTIONS = isWarehouseManager ? MANAGER_NEXT_ACTIONS : ADMIN_NEXT_ACTIONS;
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
-  // The order awaiting a warehouse choice before it can be approved.
   const [assigning, setAssigning] = useState(null);
   const [billing, setBilling] = useState(null);
 
@@ -117,16 +118,24 @@ const SellerOutbound = () => {
     getSellerOrders().then((r) => setOrders(listOf(r))).catch(apiError).finally(() => setLoading(false));
   }, []);
 
-  // NOT gated by approval: this is how a seller sells their OWN stock, which
-  // belongs to no supplying company. routes/Seller/sellerOrderRoutes.js dropped
-  // requireApprovedSeller for the same reason; the order:create / order:update
-  // capabilities are unchanged.
   useEffect(() => { refresh(); }, [refresh]);
 
   const advance = async (o, status) => {
-    // Approving now goes through warehouse assignment — the seller picks WHICH
-    // of their warehouses fulfils this order before it is confirmed.
-    if (status === 'confirmed') { setAssigning(o); return; }
+    if (status === 'confirmed') {
+      // Warehouse already assigned at checkout — confirm directly
+      const { isConfirmed } = await Swal.fire({
+        title: 'Approve this order?',
+        text: 'Stock will be reserved and the order will move to Send Stock for processing.',
+        icon: 'question',
+        showCancelButton: true,
+        confirmButtonColor: '#EA2831',
+        confirmButtonText: 'Approve',
+      });
+      if (!isConfirmed) return;
+      try { await updateSellerOrderStatus(o._id, 'confirmed'); toast('success', 'Order approved — now in Send Stock'); refresh(); }
+      catch (err) { apiError(err); }
+      return;
+    }
     if (status === 'cancelled') {
       const { isConfirmed } = await Swal.fire({ title: 'Cancel this order?', icon: 'warning', showCancelButton: true, confirmButtonColor: '#EA2831', confirmButtonText: 'Cancel order' });
       if (!isConfirmed) return;
@@ -211,15 +220,26 @@ const SellerOutbound = () => {
                       <td data-label="Placed" className="px-4 py-4 text-sm text-stone-500 whitespace-nowrap">{fmtDate(o.placedAt)}</td>
                       <td className="px-4 py-4 cell-actions whitespace-nowrap">
                         <div className="flex items-center justify-end gap-2 whitespace-nowrap shrink-0">
-                          {(NEXT_ACTIONS[o.status] || []).map(([label, status]) => (
-                            <GhostBtn key={status} onClick={() => advance(o, status)}>{label}</GhostBtn>
-                          ))}
-                          {/* A POS bill was previously visible only once, right
-                              after saving. This is the way back to it. POS sales
-                              carry no Approve/Cancel, so it stands alone — and a
-                              non-POS row is left exactly as it was. */}
-                          {isPosSale(o) && <GhostBtn onClick={() => setBilling(o)}>Bill</GhostBtn>}
-                          {!NEXT_ACTIONS[o.status] && !isPosSale(o) && <span className="text-xs text-stone-300">—</span>}
+                          {isWarehouseManager ? (
+                            <>
+                              {(NEXT_ACTIONS[o.status] || []).map(([label, status]) => (
+                                <GhostBtn key={status} onClick={() => advance(o, status)}>{label}</GhostBtn>
+                              ))}
+                              {isPosSale(o) && <GhostBtn onClick={() => setBilling(o)}>Bill</GhostBtn>}
+                              {!NEXT_ACTIONS[o.status] && !isPosSale(o) && <span className="text-xs text-stone-300">—</span>}
+                            </>
+                          ) : (
+                            /* Seller Admin — read-only, shows warehouse action status */
+                            <span className="text-xs text-stone-400 italic">
+                              {o.status === 'pending' ? 'Awaiting warehouse approval' :
+                               o.status === 'confirmed' ? 'Warehouse approved' :
+                               o.status === 'packed' ? 'Packed by warehouse' :
+                               o.status === 'shipped' || o.status === 'in_transit' ? 'Dispatched by warehouse' :
+                               o.status === 'delivered' ? 'Delivered' :
+                               o.status === 'cancelled' ? 'Cancelled' :
+                               isPosSale(o) ? <GhostBtn onClick={() => setBilling(o)}>Bill</GhostBtn> : '—'}
+                            </span>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -235,13 +255,6 @@ const SellerOutbound = () => {
 
       {creating && <NewOrderModal onClose={() => setCreating(false)} onDone={() => { setCreating(false); refresh(); }} />}
       {billing && <PosBillModal order={billing} onClose={() => setBilling(null)} />}
-      {assigning && (
-        <AssignWarehouseModal
-          order={assigning}
-          onClose={() => setAssigning(null)}
-          onDone={() => { setAssigning(null); refresh(); }}
-        />
-      )}
     </div>
   );
 };

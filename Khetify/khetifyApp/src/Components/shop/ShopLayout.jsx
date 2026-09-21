@@ -11,7 +11,7 @@ import { useShopLanguage, useT } from "../../context/ShopLanguageContext";
 // Shared chrome for the customer storefront. HEADER + mobile bottom-nav only —
 // footer, layout wrapper, contexts, auth state, cart state, search handler, and
 // every route/link are unchanged. Design: solid white surfaces, stone palette,
-// field-green ink (#14201A) + Khetify red (#EA2831) accents, Sora headings /
+// field-green ink (#14201A) + Khettify red (#EA2831) accents, Sora headings /
 // Manrope body, Material Symbols icons.
 
 // Login and Register are SEPARATE pages with their own routes, so these links
@@ -616,7 +616,7 @@ export default function ShopLayout() {
                 {t("footer.business")}
               </h4>
               <ul className="mt-4 space-y-2.5 text-[13px] text-stone-400">
-                <li><Link to="/seller/register" className="transition-colors hover:text-white">{t("footer.sellOnKhetify")}</Link></li>
+                <li><Link to="/seller/register" className="transition-colors hover:text-white">{t("footer.sellOnKhettify")}</Link></li>
                 <li><Link to="/seller/login" className="transition-colors hover:text-white">{t("footer.sellerLogin")}</Link></li>
                 <li><Link to="/register" className="transition-colors hover:text-white">{t("footer.forCompanies")}</Link></li>
               </ul>

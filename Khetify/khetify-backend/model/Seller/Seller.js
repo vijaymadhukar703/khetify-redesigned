@@ -31,6 +31,32 @@ const sellerSchema = new mongoose.Schema(
       required: true,
     },
 
+    // PHONE VERIFIED. Registration email OTP se hoti hai; phone baad me profile
+    // se verify hota hai — thik waise hi jaise company side par.
+    //
+    // Har maujooda seller par yeh false hai, aur wahi sach bhi hai: kisi ne
+    // abhi tak apna number saabit kiya hi nahi.
+    phoneVerified: {
+      type: Boolean,
+      default: false,
+    },
+
+    // Short-lived OTP for verifying `phone`. Alag collection banane ke bajaye
+    // yahin rehta hai, kyunki yeh hamesha ek maujooda account se hi juda hota
+    // hai. Hash rakha jata hai, kabhi raw code nahi.
+    phoneOtp: {
+      codeHash: { type: String, default: null },
+      expiresAt: { type: Date, default: null },
+      attempts: { type: Number, default: 0 },
+      lastSentAt: { type: Date, default: null },
+      resendCount: { type: Number, default: 0 },
+      // Jis number par code bheja gaya. Number BADAL kar verify karne par
+      // yahan naya number rehta hai — aur verify hote hi wahi `phone` ban
+      // jata hai. Naya number tabhi account par aaye jab uska maalik hona
+      // saabit ho jaye.
+      pendingNumber: { type: String, default: null },
+    },
+
     // STATUS ENUM (sellers start pending until the supplying company / admin
     // approves them — mirrors the company approval gate).
     status: {
@@ -124,7 +150,11 @@ const sellerSchema = new mongoose.Schema(
     locationAccess: {
       // "revoked" = switched off from the settings page; unlike "denied" it is a
       // standing decision, so the login prompt does not reopen for it.
-      status: { type: String, enum: ["granted", "denied", "revoked"], default: null },
+      status: {
+        type: String,
+        enum: ["granted", "denied", "revoked"],
+        default: null,
+      },
       // GeoJSON Point, [longitude, latitude] — the SAME shape and field order
       // as Warehouse.location, so one $geoNear works against either collection
       // and the nearest-warehouse lookup needs no translation layer.
@@ -149,15 +179,15 @@ const sellerSchema = new mongoose.Schema(
       address: {
         state: { type: String },
         district: { type: String },
-        city: { type: String },       // city / town / village
+        city: { type: String }, // city / town / village
         pincode: { type: String },
         country: { type: String },
-        formatted: { type: String },  // full one-line address from the provider
-        provider: { type: String },   // "google" | "nominatim" — which one answered
+        formatted: { type: String }, // full one-line address from the provider
+        provider: { type: String }, // "google" | "nominatim" — which one answered
         resolvedAt: { type: Date },
       },
       capturedAt: { type: Date }, // when the coordinates were taken
-      decidedAt: { type: Date },  // when allow/deny was last answered
+      decidedAt: { type: Date }, // when allow/deny was last answered
     },
 
     // Placeholder for seller IMS settings — populated in later phases.
