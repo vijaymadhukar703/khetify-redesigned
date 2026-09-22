@@ -42,8 +42,9 @@ const en = {
   "nav.home": "Home",
   "nav.language": "Language",
   "footer.tagline": "A farming marketplace connecting Indian growers and buyers with verified sellers of seeds, fertilisers, tools and more. Browse freely — sign in only when you check out.",
-  "footer.copyright": "© {year} Khettify — agri-products marketplace.",
-
+  // "footer.copyright": "© {year} Khettify — agri-products marketplace.",
+  "footer.copyright": "© 2026 Jain Beej Bhandar Agro Pvt Ltd. All rights reserved.",
+  
   /* ── Account menu ──────────────────────────────────────────────────────── */
   "account.greeting": "Hello, {name}",
   "account.fallbackName": "Farmer",
@@ -966,7 +967,8 @@ const hi = {
   "nav.home": "होम",
   "nav.language": "भाषा",
   "footer.tagline": "एक कृषि बाज़ार जो भारतीय किसानों और खरीदारों को बीज, खाद, औज़ार और बहुत कुछ के सत्यापित विक्रेताओं से जोड़ता है। आराम से देखें — साइन इन सिर्फ़ चेकआउट पर।",
-  "footer.copyright": "© {year} Khettify — कृषि उत्पाद बाज़ार।",
+  // "footer.copyright": "© {year} Khettify — कृषि उत्पाद बाज़ार।",
+  "footer.copyright": "© 2026 Jain Beej Bhandar Agro Pvt Ltd. All rights reserved.",
 
   "account.greeting": "नमस्ते, {name}",
   "account.fallbackName": "किसान",

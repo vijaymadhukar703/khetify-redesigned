@@ -619,6 +619,8 @@ export default function ShopLayout() {
                 <li><Link to="/seller/register" className="transition-colors hover:text-white">{t("footer.sellOnKhettify")}</Link></li>
                 <li><Link to="/seller/login" className="transition-colors hover:text-white">{t("footer.sellerLogin")}</Link></li>
                 <li><Link to="/register" className="transition-colors hover:text-white">{t("footer.forCompanies")}</Link></li>
+                <li><Link to="/about" className="transition-colors hover:text-white">{t("about")}</Link></li>
+                <li><Link to="#" className="transition-colors hover:text-white">{t("contact")}</Link></li>
               </ul>
             </div>
 
