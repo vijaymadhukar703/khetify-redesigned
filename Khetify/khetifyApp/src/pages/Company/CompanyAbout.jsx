@@ -84,7 +84,7 @@ const CompanyAbout = () => {
   <div className="mx-auto max-w-7xl">
     {/* Heading with correct Red color and spacing */}
     <p className="text-center text-sm font-bold uppercase tracking-wider text-[#ea2a33] mb-6">
-      Rooted in Experience — Jain Beej Bhandar Agro Private
+      Rooted in Experience — Jain Beej Bhandar Agro Private Limited
     </p>
 
     {/* Different Icons for each brand */}
