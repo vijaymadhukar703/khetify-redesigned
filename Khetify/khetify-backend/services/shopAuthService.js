@@ -389,6 +389,33 @@ async function resendRegistrationOtp({ phone }) {
   return { otpSent: delivered, sms: smsConfigured() };
 }
 
+/**
+ * Register screen का पहला कदम — number / email पहले से registered है या नहीं.
+ *
+ * sendRegistrationOtp() भी यही check करता है, पर उससे पहले name और phone
+ * माँगता है — इसलिए phone/email वाली पहली screen उसे call नहीं कर सकती.
+ * यह सिर्फ़ पढ़ता है: न OTP जाता है, न कोई row बनती है. जो field भेजा ही
+ * नहीं गया उसके लिए false लौटता है.
+ *
+ * @returns { phoneTaken, emailTaken }
+ */
+async function checkRegistrationAvailability({ phone, email } = {}) {
+  email = (email || "").trim().toLowerCase() || undefined;
+  phone = (phone || "").trim().replace(/[\s-]/g, "") || undefined;
+
+  if (!phone && !email) throw httpErr("Phone number or email is required");
+  if (phone && !PHONE_RE.test(phone))
+    throw httpErr("Enter a valid 10-digit phone number");
+  if (email && !EMAIL_RE.test(email))
+    throw httpErr("Enter a valid email address");
+
+  const [phoneTaken, emailTaken] = await Promise.all([
+    phone ? Consumer.exists({ phone }) : null,
+    email ? Consumer.exists({ email }) : null,
+  ]);
+  return { phoneTaken: !!phoneTaken, emailTaken: !!emailTaken };
+}
+
 /* ═══════════════ 🔑 FORGOT PASSWORD ═══════════════
  * changePassword() ऊपर वैसा ही है — वो logged-in shopper के लिए है और पुराना
  * password माँगता है. यह नीचे वाला रास्ता उनके लिए है जो password भूल चुके हैं
@@ -782,6 +809,7 @@ module.exports = {
   sendRegistrationOtp,
   verifyRegistrationOtp,
   resendRegistrationOtp,
+  checkRegistrationAvailability,
   // 🔑 Forgot password (logged-out reset)
   sendPasswordResetOtp,
   resetPasswordWithOtp,

@@ -117,6 +117,10 @@ export const shopVerifyRegisterOtp = (body) =>
   data(api.post("auth/register/verify-otp", body));
 export const shopResendRegisterOtp = (phone) =>
   data(api.post("auth/register/resend-otp", { phone }));
+// Register की पहली screen: { phone?, email? } → { phoneTaken, emailTaken }.
+// कोई OTP नहीं जाता.
+export const shopCheckRegister = (body) =>
+  data(api.post("auth/register/check", body));
 /* ---- 🔑 FORGOT PASSWORD (logged-out reset) ----
    changeShopPassword() नीचे इससे अलग है — वो logged-in shopper के लिए है और
    पुराना password माँगता है. ये तीनों बिना token के चलते हैं, क्योंकि shopper
