@@ -96,10 +96,10 @@ export const Icon = {
 export function KhetifyLogo({ light = false, to = "/customer-shop" }) {
   return (
     <Link to={to} className={`flex items-center gap-2.5 ${light ? "text-[#F5F4EF]" : "text-[#14201A]"}`}>
-      <span className="inline-flex h-[34px] w-[34px] items-center justify-center rounded-[10px] bg-[#EA2831]">
+      {/* <span className="inline-flex h-[34px] w-[34px] items-center justify-center rounded-[10px] bg-[#EA2831]">
         <Icon.Store className="h-[18px] w-[18px] text-white" />
-      </span>
-      <span className="font-heading text-2xl font-extrabold tracking-tight">Khettify</span>
+      </span> */}
+      <span className="font-heading text-2xl font-extrabold tracking-tight text-primary">Khettify</span>
     </Link>
   );
 }
