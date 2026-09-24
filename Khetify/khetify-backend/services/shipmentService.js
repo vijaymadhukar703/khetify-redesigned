@@ -629,9 +629,25 @@ async function markArrived(ownerArg, shipmentId, { driverId, lat, lng } = {}) {
  * lot with no bulk packaging is a no-op.
  */
 async function moveBoxesWithUnits({ companyId, units, toLotId, toWarehouseId, session }) {
-  const movedIds = [...new Set(
+  const candidateIds = [...new Set(
     units.map((u) => u.bulk_packaging_record_id).filter(Boolean).map(String)
   )];
+  if (!candidateIds.length) return;
+
+  // A CARTON TRAVELS ONLY WHEN ALL OF IT HAS ARRIVED. A unit can be sent on its
+  // own, so a box whose units are still partly at the source stays put and the
+  // arrived units live at the destination without it. Asked of where the box's
+  // units ARE (the caller has already repointed the landed ones to toLotId), not
+  // of this delivery, so the box still follows once a later transfer brings
+  // the rest.
+  const movedIds = [];
+  for (const boxId of candidateIds) {
+    const elsewhere = await UnitSerial.countDocuments({
+      bulk_packaging_record_id: boxId,
+      inventoryId: { $ne: toLotId },
+    }).session(session);
+    if (!elsewhere) movedIds.push(boxId);
+  }
   if (!movedIds.length) return;
 
   // The main boxes above the inner boxes that moved, and how many inner boxes
