@@ -99,24 +99,24 @@ export default function ShopLogin() {
           autoComplete="username"
         />
 
-        <PasswordField
-          required
-          labelRight={
+               {/* Password + "Forgot password?" link just below the field (right side) */}
+        <div className="flex flex-col gap-2">
+          <PasswordField
+            required
+            value={form.password}
+            onChange={set("password")}
+            placeholder={t("login.passwordPlaceholder")}
+            autoComplete="current-password"
+          />
+          <div className="flex justify-end">
             <Link
               to={forgotHref}
               className="text-sm font-semibold text-[#EA2831] hover:text-[#c91e26]"
             >
-              {/* सीधा text, t() नहीं — यह key अभी ShopLanguageContext में नहीं
-                  है और गायब key screen पर अपना ही नाम छाप देती है. Key जोड़ते
-                  ही इसे t("login.forgotPassword") कर देना. */}
               Forgot password?
             </Link>
-          }
-          value={form.password}
-          onChange={set("password")}
-          placeholder={t("login.passwordPlaceholder")}
-          autoComplete="current-password"
-        />
+          </div>
+        </div>
 
         <PrimaryButton type="submit" disabled={busy}>
           {busy ? t("login.pleaseWait") : t("login.submit")}
