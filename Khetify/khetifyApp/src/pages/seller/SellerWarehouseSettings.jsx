@@ -513,7 +513,7 @@ const SellerWarehouseSettings = () => {
                     setResetErr("");
                     setResetNote("");
                   }}
-                  placeholder="you@example.com"
+                  placeholder="Enter email"
                   autoComplete="email"
                 />
               </div>

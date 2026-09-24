@@ -87,10 +87,6 @@ const principalRouteGuard = require("./middlewares/principalRouteGuard"); // sel
 /* ----- NEW: realtime ----- */
 const { initSocket } = require("./sockets");
 
-/* ----- NEW: Passport for Google OAuth ----- */
-const session = require('express-session');
-const passport = require('./config/googleAuth');
-
 // Absolute path so local-served file URLs (/uploads/<key>) resolve regardless
 // of the process working directory — matches where services/storage.js writes.
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
@@ -130,23 +126,6 @@ const globalLimiter = rateLimit({ windowMs: 60 * 1000, max: 300, standardHeaders
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 30, standardHeaders: true, legacyHeaders: false, message: { success: false, message: "Too many attempts, try again later" } });
 app.use("/api", globalLimiter);
 app.use(["/api/company/login", "/api/company/register", "/api/company/forgot-password", "/api/company/reset-password", "/api/driver/login", "/api/seller/login", "/api/seller/register", "/api/admin/login", "/api/shop/auth/login", "/api/shop/auth/register"], authLimiter);
-
-/* ===== NEW: Session + Passport middleware (MUST be before routes) ===== */
-app.use(session({
-  secret: env.jwtSecret || 'your-secret-key',
-  resave: false,
-  saveUninitialized: false,
-  cookie: { 
-    secure: env.nodeEnv === 'production', // HTTPS only in production
-    httpOnly: true,
-    maxAge: 24 * 60 * 60 * 1000 // 24 hours
-  }
-}));
-
-// Passport middleware
-app.use(passport.initialize());
-app.use(passport.session());
-/* ===== END: Session + Passport middleware ===== */
 
 // Defence in depth: a seller token may only reach /api/seller/*, and no other
 // principal may. Runs before every route mount; no-ops for tokenless/public

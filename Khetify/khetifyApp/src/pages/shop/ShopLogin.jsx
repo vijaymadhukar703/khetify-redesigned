@@ -9,6 +9,7 @@ import {
   PrimaryButton,
   ErrorNote,
   AuthShell,
+  AuthDivider,
 } from "../../Components/shop/authUi";
 
 /* Customer LOGIN page (separate from Register). UI recreated in the reference
@@ -37,6 +38,21 @@ export default function ShopLogin() {
     if (params.get("mode") === "register")
       navigate(registerHref, { replace: true });
   }, [params, navigate, registerHref]);
+
+    /* ===== Google login (signup page jaisa hi, same backend route) ===== */
+  const API_URL = import.meta.env.VITE_API_URL;
+  const googleLogin = () => {
+    window.location.href = `${API_URL}/api/auth/google`;
+  };
+
+  // Google fail hone par backend ?error=google_failed ke saath yahin bhejta hai
+  useEffect(() => {
+    const e = params.get("error");
+    if (e === "google_failed" || e === "auth_failed") {
+      setError("Google sign-in failed. Please try again.");
+    }
+  }, [params]);
+  /* ===== END: Google login ===== */
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
@@ -106,6 +122,19 @@ export default function ShopLogin() {
           {busy ? t("login.pleaseWait") : t("login.submit")}
         </PrimaryButton>
       </form>
+      
+      {/* ===== Google login button ===== */}
+      <AuthDivider className="my-5" />
+      <button
+        type="button"
+        onClick={googleLogin}
+        disabled={busy}
+        className="flex h-[54px] w-full items-center justify-center gap-3 rounded-full border-[1.5px] border-[#E2E0D6] bg-white text-[15px] font-semibold text-[#14201A] transition-colors hover:border-[#c9c7bb] hover:bg-[#FAFAF7] disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        <Icon.Google className="h-5 w-5" />
+        Continue With Google
+      </button>
+
 
       <p className="mt-6 text-center text-[15px] text-[#6B6A62]">
         {t("login.noAccount")}{" "}
