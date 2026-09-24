@@ -1,8 +1,189 @@
-import React, { useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useEffect, useRef } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
+
+/*
+ * Smooth guide accordion — only one guide open at a time.
+ *  - Opens / closes with a soft height + fade animation.
+ *  - The guide you click stays exactly where it is on screen: when a guide
+ *    above it closes, the page scroll is corrected every frame, so nothing
+ *    jumps.
+ *  - Works on the plain <details>/<summary> markup, so the blog content does
+ *    not need any change. Respects "reduce motion" in the OS settings.
+ */
+function useSmoothAccordion(rootRef, deps) {
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return undefined;
+
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const DURATION = reduceMotion ? 0 : 320;
+    const EASING = 'cubic-bezier(0.4, 0, 0.2, 1)';
+    const running = new WeakMap(); // details -> current height animation
+    const wantOpen = new WeakMap(); // details -> open state it is moving to
+
+    const isOpen = (d) => (wantOpen.has(d) ? wantOpen.get(d) : d.open);
+
+    // Height of a <details> showing only its summary (padding + border included).
+    const closedHeight = (d) => {
+      const cs = getComputedStyle(d);
+      const summary = d.querySelector(':scope > summary');
+      return (
+        summary.offsetHeight +
+        parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom) +
+        parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth)
+      );
+    };
+
+    const animate = (d, open) => {
+      const start = d.getBoundingClientRect().height;
+      running.get(d)?.cancel();
+      wantOpen.set(d, open);
+
+      const content = d.querySelector(':scope > :not(summary)');
+      const icon = d.querySelector(':scope > summary > span:last-child');
+
+      d.style.overflow = 'hidden';
+      if (open) d.open = true;
+      let end;
+      if (open) {
+        d.style.height = 'auto';
+        end = d.getBoundingClientRect().height;
+      } else {
+        end = closedHeight(d);
+      }
+      d.style.height = '';
+
+      // "+" icon: turn back at the START of closing (not after it).
+      if (icon) icon.style.transform = open ? '' : 'rotate(0deg)';
+
+      const anim = d.animate(
+        [{ height: `${start}px` }, { height: `${end}px` }],
+        { duration: DURATION, easing: EASING },
+      );
+      if (content) {
+        content.animate(
+          open
+            ? [{ opacity: 0, transform: 'translateY(-6px)' }, { opacity: 1, transform: 'none' }]
+            : [{ opacity: 1 }, { opacity: 0 }],
+          { duration: DURATION, easing: EASING },
+        );
+      }
+      running.set(d, anim);
+      anim.onfinish = () => {
+        if (!open) d.open = false;
+        d.style.overflow = '';
+        if (icon) icon.style.transform = '';
+        running.delete(d);
+        wantOpen.delete(d);
+      };
+    };
+
+    // Keep the clicked summary at the same place on screen while things move.
+    // behavior 'instant' overrides the site-wide `scroll-behavior: smooth`, and
+    // the browser's own scroll anchoring is paused so it doesn't fight us.
+    let anchorTimer;
+    const keepInPlace = (el) => {
+      const html = document.documentElement;
+      html.style.overflowAnchor = 'none';
+      clearTimeout(anchorTimer);
+      const top0 = el.getBoundingClientRect().top;
+      const stopAt = performance.now() + DURATION + 80;
+      const fix = () => {
+        const diff = el.getBoundingClientRect().top - top0;
+        if (Math.abs(diff) > 0.5) window.scrollTo({ top: window.scrollY + diff, behavior: 'instant' });
+      };
+      const tick = () => {
+        fix();
+        if (performance.now() < stopAt) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+      anchorTimer = setTimeout(() => { fix(); html.style.overflowAnchor = ''; }, DURATION + 120);
+      return fix;
+    };
+
+    const onClick = (e) => {
+      const summary = e.target.closest('summary');
+      if (!summary || !root.contains(summary)) return;
+      const d = summary.parentElement;
+      if (!d || d.tagName !== 'DETAILS') return;
+      e.preventDefault();
+
+      const open = !isOpen(d);
+      const fix = keepInPlace(summary);
+      if (open) {
+        root.querySelectorAll('details').forEach((other) => {
+          if (other !== d && isOpen(other)) animate(other, false);
+        });
+      }
+      animate(d, open);
+      fix();
+    };
+
+    root.addEventListener('click', onClick);
+    return () => {
+      root.removeEventListener('click', onClick);
+      clearTimeout(anchorTimer);
+      document.documentElement.style.overflowAnchor = '';
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+}
+
+const FAQ_ITEMS = [
+    { q: "What documents are mandatory?", a: "GSTIN with certificate, Udyam or CIN with certificate, and PAN card with copy are all required for verification. All files must be in PNG or PDF format and clearly legible." },
+    { q: "How long does approval take?", a: "Typically 24 to 48 hours after submission, depending on document verification by the Khetify team. You will receive an email notification once the process is complete." },
+    { q: "Can I edit my details after submission?", a: "Minor corrections may be possible by contacting Khetify support. For major changes, you may need to resubmit your application." },
+    { q: "What happens if my application is rejected?", a: "You will receive an email clearly explaining the reason for rejection. You can correct the issue and resubmit with updated documents at any time." },
+    { q: "Is registration free?", a: "Yes, creating a company account on Khetify is completely free. There are no setup fees or registration charges." },
+    { q: "What can I do after my company is approved?", a: "Once approved, you can upload your product catalogue, add warehouses, manage inventory with lot-level traceability, issue Principal Certificates to sellers, process supply requests, manage your team, and view sales reports." },
+];
+
+function FaqAccordion() {
+    const [open, setOpen] = React.useState(0);
+    return (
+        <div className="flex flex-col lg:flex-row gap-12 lg:gap-20">
+            {/* Left — heading */}
+            <div className="lg:w-72 shrink-0">
+                <p className="text-xs font-bold uppercase tracking-widest text-[#ea2a33] mb-4">Questions</p>
+                <h3 className="text-4xl font-black text-[#1b0e0e] leading-tight mb-4">
+                    Before you<br />commit.
+                </h3>
+                <p className="text-[#6b7280] text-sm leading-relaxed">
+                    Still deciding? Here's what companies usually ask before registering on Khetify.
+                </p>
+            </div>
+            {/* Right — accordion */}
+            <div className="flex-1 divide-y divide-gray-200">
+                {FAQ_ITEMS.map((item, i) => (
+                    <div key={i} className="py-5">
+                        <button
+                            className="flex w-full items-start justify-between gap-4 text-left"
+                            onClick={() => setOpen(open === i ? -1 : i)}
+                        >
+                            <span className={`text-base font-medium leading-snug transition-colors ${open === i ? 'text-[#1b0e0e]' : 'text-[#374151]'}`}>
+                                {item.q}
+                            </span>
+                            <span className={`shrink-0 mt-0.5 text-xl font-light transition-colors ${open === i ? 'text-[#ea2a33]' : 'text-[#ea2a33]'}`}>
+                                {open === i ? '−' : '+'}
+                            </span>
+                        </button>
+                        {open === i && (
+                            <p className="mt-4 text-sm text-[#6b7280] leading-relaxed pr-8">
+                                {item.a}
+                            </p>
+                        )}
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
 
 const CompanyAbout = () => {
     const navigate = useNavigate();
+    // Smooth, one-at-a-time guides (see useSmoothAccordion above).
+    const guidesRef = useRef(null);
+    useSmoothAccordion(guidesRef, []);
 
     useEffect(() => {
         // Page load hote hi scroll top par bhej deta hai
@@ -84,7 +265,7 @@ const CompanyAbout = () => {
   <div className="mx-auto max-w-7xl">
     {/* Heading with correct Red color and spacing */}
     <p className="text-center text-sm font-bold uppercase tracking-wider text-[#ea2a33] mb-6">
-      Rooted in Experience — Jain Beej Bhandar Agro Private Limited
+      Rooted in Experience — Jain Beej Bhandar Agro Private
     </p>
 
     {/* Different Icons for each brand */}
@@ -305,6 +486,110 @@ const CompanyAbout = () => {
                                     ))}
                                 </tbody>
                             </table>
+                        </div>
+                    </div>
+                </section>
+
+                {/* Company Guides — first 7 + View all button */}
+                <section className="w-full px-4 py-20 sm:px-6 lg:px-8 bg-[#f8f9fa] border-t border-gray-100" id="guides">
+                    <div className="mx-auto max-w-6xl">
+                        <div className="flex flex-col lg:flex-row gap-12 lg:gap-20">
+
+                            {/* Left */}
+                            <div className="lg:w-72 shrink-0">
+                                <span className="text-xs font-bold uppercase tracking-widest text-[#ea2a33]">Guides</span>
+                                <h2 className="mt-3 text-4xl font-black tracking-tight text-[#1b0e0e] leading-tight">Get started with Khettify.</h2>
+                                <p className="mt-4 text-[#6b7280] text-sm leading-relaxed">From creating your account to understanding your dashboard — everything you need to hit the ground running.</p>
+                            </div>
+
+                            {/* Right — first 7 accordions */}
+                            <div ref={guidesRef} className="flex-1 divide-y divide-gray-200">
+                                {[
+                                    { id: "register", title: "Create your Khettify account", open: true, steps: [
+                                        { num: "01", title: "Create your account", body: "Visit khettify.com and click Register as Company. Fill in your Full Name, Email Address, Phone Number and Password. Tick the Terms & Privacy Policy checkbox and click Create Account. Khettify will send a 6-digit verification code to your email." },
+                                        { num: "02", title: "Verify your email", body: "Enter the 6-digit OTP sent to your email and click Verify & continue. If you didn't receive the code, wait for the timer and click Resend code. Once verified, your account is created and you are logged in automatically." },
+                                        { num: "03", title: "Start company setup", body: "You will land on the Company Setup page. Click Start setup to begin the 5-step onboarding that verifies your organisation and activates full platform access." },
+                                        { num: "04", title: "Fill in company information", body: "Enter your Company Legal Name, select your Business Type (Private Limited, Partnership, LLP etc.), choose your Primary Product Categories, and enter your Year of Establishment." },
+                                        { num: "05", title: "Add business and contact details", body: "Enter your Registered Business Address, Operating Regions, Authorized Person Name, Official Business Email, and Official Business Phone Number." },
+                                        { num: "06", title: "Upload verification documents", body: "Upload your GSTIN with GST Certificate, Udyam or CIN number with certificate, and PAN Card with copy. All documents must be PNG or PDF and clearly legible." },
+                                        { num: "07", title: "Review and submit", body: "Khettify shows a complete summary of all your details. Review carefully and click Submit for review. You can edit before submission." },
+                                        { num: "08", title: "Admin approval — then go live", body: "After submission your status shows Under Review. The Khettify team approves your account within 24 to 48 hours. After approval your full dashboard unlocks." },
+                                    ]},
+                                    { id: "login", title: "How to login", open: false, steps: [
+                                        { num: "01", title: "Go to the login page", body: "Visit khettify.com and click Login. You will see the Login to your account screen with Email or Phone and Password fields." },
+                                        { num: "02", title: "Enter your email or phone number", body: "Enter the email address you used when registering, or your 10-digit phone number. Both work for login." },
+                                        { num: "03", title: "Enter your password and login", body: "Enter your password in the Password field. Click the eye icon to show or hide it. Once both fields are filled, click the Login button to access your dashboard." },
+                                    ]},
+                                    { id: "forgot", title: "Forgot your password?", open: false, steps: [
+                                        { num: "01", title: "Click Forgot password?", body: "On the login page, click the Forgot password? link below the password field." },
+                                        { num: "02", title: "Enter your registered email", body: "Enter the email address you used when creating your Khettify account. Khettify will send a password reset link to that email." },
+                                        { num: "03", title: "Click the reset link in your email", body: "Open the email from Khettify and click the reset link. Check your spam folder if you don't see it within a few minutes." },
+                                        { num: "04", title: "Set your new password", body: "Enter and confirm your new password. Make sure it is at least 6 characters. Click Save to update." },
+                                        { num: "05", title: "Login with your new password", body: "Go back to the login page, enter your email or phone and your new password, then click Login to access your dashboard." },
+                                    ]},
+                                    { id: "home", title: "Your Home page", open: false, steps: [
+                                        { num: "01", title: "Revenue, Orders, Inventory & Alerts", body: "As soon as you log in, you will see four numbers at the top — your revenue this week, total orders, current inventory value, and alerts. Alerts are shown in red. Do not ignore them — they point to things that need your action right away." },
+                                        { num: "02", title: "Updates — see what is happening on your platform", body: "Below the numbers is a live feed of recent activity. When a seller confirms a supply receipt, when a new supply request comes in, when a warehouse transfer is done — everything shows here with a timestamp. Click Show All to see the full history." },
+                                        { num: "03", title: "Module cards — jump to any section quickly", body: "At the bottom of the Home page you will find cards for every module — Inventory, Product Catalog, Warehouses, Stock Transfers, Barcodes & Labels, Transfer History, Stock Valuation, PC Applications, Administration and more. Each card shows a quick number so you already know the current status before you click in." },
+                                    ]},
+                                    { id: "dashboard", title: "The Dashboard — detailed analytics", open: false, steps: [
+                                        { num: "01", title: "Period filter — choose your time range", body: "At the top of the Dashboard you can choose Daily, Weekly, Monthly, Quarterly, Yearly or a Custom date range. All numbers on the page update based on what you select. Weekly is the default." },
+                                        { num: "02", title: "Stock Value, Expiring, Shipments and Sales", body: "You will see four key numbers — your total inventory value, the value of stock expiring within 90 days (take this seriously to avoid wastage), how many shipments are currently in transit, and your sales for the selected period." },
+                                        { num: "03", title: "Products, Warehouses and Orders", body: "Below the metric cards you can see your total products, how many are active and visible to sellers, how many warehouses you operate, and your order count for the selected period — all in one place." },
+                                        { num: "04", title: "Sales Overview — Revenue, Units Sold and Returns", body: "At the bottom, the Sales Overview shows your revenue, how many units were sold, and how many returns came in. If you see no data, switch to a wider period like Monthly or Yearly to get the full picture." },
+                                    ]},
+                                    { id: "inventory", title: "Inventory — your stock lots", open: false, steps: [
+                                        { num: "01", title: "Lots — the building block of your inventory", body: "On Khettify, your stock is organised into lots. Each lot represents a specific batch of a product with its own lot number, manufacturing date, expiry date, quantity, and warehouse." },
+                                        { num: "02", title: "The four summary numbers", body: "At the top you will see Total Lots Created, Fully Moved Out, Units Created, and Created Value — giving you an instant picture of your overall inventory." },
+                                        { num: "03", title: "Filters — find exactly what you need", body: "Filter by All Lots, Expiring ≤90d (stock expiring within 90 days), or Expired. Use the All Stock Status dropdown to filter by specific conditions." },
+                                        { num: "04", title: "What each lot row tells you", body: "Every lot shows its Lot Number, Product, Category, Warehouse, Manufacturing date, Expiry date, Quantity, and Expiry Status. Good is shown in green and changes colour as it nears expiry." },
+                                        { num: "05", title: "View and Label buttons", body: "View opens the full details of that lot. Label lets you print or download barcode labels for that lot, used for scanning during dispatch and warehouse operations." },
+                                    ]},
+                                    { id: "create-lot", title: "Create Lot — add new stock to your inventory", open: false, steps: [
+                                        { num: "01", title: "How to open Create Lot", body: "On the Inventory page, click the Create Lot button on the top right. A form will open where you can fill in all the details for your new lot." },
+                                        { num: "02", title: "Option 1 — Khettify-generated lot number", body: "Select this option and Khettify will automatically assign a unique lot number when you save — built from your company code, product code, dates and SKU range." },
+                                        { num: "03", title: "Without bulk packaging", body: "Select your Product. Leave Do You Need Bulk Packaging Ids unchecked. Fill in Manufacturing Date, Expiry Date, Quantity and Warehouse. Click Create Lot." },
+                                        { num: "04", title: "With bulk packaging", body: "Tick Do You Need Bulk Packaging Ids — two extra fields appear: Number of Boxes and Units Per Box. Fill these along with the other fields. Tick Inside Bulk Packaging to switch to three fields: Main Boxes, Boxes Per Main Boxes, and Units Per Box." },
+                                        { num: "05", title: "Option 2 — Enter lot number manually", body: "Select Enter Manually and tick which parts to include in the lot number — Company Code, Product Code, Year, Month, Date, Batch Number, Bulk Packaging, Inner Box, SKU. The lot number preview builds at the bottom as you go. You can reorder parts using the left and right controls." },
+                                    ]},
+                                ].map((accordion) => (
+                                    <details key={accordion.id} open={accordion.open} className="group py-6 list-none [&::-webkit-details-marker]:hidden">
+                                        <summary className="flex items-center justify-between gap-4 cursor-pointer select-none list-none">
+                                            <span className={`text-base font-semibold transition-colors text-[#1b0e0e] group-open:text-[#ea2a33]`}>{accordion.title}</span>
+                                            <span className="shrink-0 text-[#ea2a33] text-2xl font-light leading-none group-open:rotate-45 transition-transform duration-200">+</span>
+                                        </summary>
+                                        <div className="mt-6 space-y-6">
+                                            {accordion.steps.map((s) => (
+                                                <div key={s.num} className="flex gap-4">
+                                                    <span className="shrink-0 flex items-center justify-center w-8 h-8 rounded-full bg-[#ea2a33]/10 text-[#ea2a33] font-black text-xs mt-0.5">{s.num}</span>
+                                                    <div>
+                                                        <p className="text-sm font-bold text-[#1b0e0e]">{s.title}</p>
+                                                        <p className="mt-1 text-sm text-[#6b7280] leading-relaxed">{s.body}</p>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                            {accordion.id === 'register' && (
+                                                <Link to="/register" className="inline-flex items-center gap-2 rounded-full bg-[#ea2a33] text-white font-bold px-6 py-2.5 text-sm hover:bg-[#d11f28] transition-colors mt-2">
+                                                    Register as a Company
+                                                    <span className="material-symbols-outlined text-base">arrow_forward</span>
+                                                </Link>
+                                            )}
+                                        </div>
+                                    </details>
+                                ))}
+
+                                {/* View all button */}
+                                <div className="py-6 text-center">
+                                    <Link
+                                        to="/guides/company"
+                                        className="inline-flex items-center gap-2 rounded-full border-2 border-[#ea2a33] text-[#ea2a33] font-bold px-8 py-3 text-sm hover:bg-[#ea2a33] hover:text-white transition-colors"
+                                    >
+                                        View all Company Guides
+                                        <span className="material-symbols-outlined text-base">arrow_forward</span>
+                                    </Link>
+                                    <p className="mt-3 text-xs text-[#6b7280]">Upload Product, Warehouses, Stock Transfers, Barcodes & Labels and more →</p>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </section>

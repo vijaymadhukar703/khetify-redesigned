@@ -11,6 +11,7 @@ import { disconnectAdminSocket } from '../../lib/socket';
 const ADMIN_ENTRIES = [
   { to: '/admin/dashboard', icon: 'grid_view', title: 'Dashboard' },
   { to: '/admin/companies', icon: 'apartment', title: 'Companies' },
+  { to: '/admin/my-products', icon: 'inventory_2', title: 'Product Library' },
   { to: '/admin/support', icon: 'chat', title: 'Support Chats' },
   // { to: '/admin/sellers', icon: 'storefront', title: 'Sellers' },
   // { to: '/admin/pending', icon: 'hourglass_empty', title: 'Pending Requests' },

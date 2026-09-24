@@ -12,6 +12,7 @@ import ErrorBoundary from './Components/ErrorBoundary';
 // 1. Basic & Marketing Pages
 import About from './pages/About';
 import CompanyAbout from './pages/Company/CompanyAbout';
+import GuidesPage from './pages/guides/GuidesPage';
 import CompanyRegister from './pages/Company/CompanyRegister';
 // CompanyLogin hataya gaya
 import CompanyRegisterSuccess from './pages/Company/CompanyRegisterSuccess';
@@ -119,6 +120,7 @@ import AdminDashboard from './pages/admin/AdminDashboard';
 import AdminCompanies from './pages/admin/AdminCompanies';
 import AdminCompanyDetail from './pages/admin/AdminCompanyDetail';
 import AdminSupportChats from './pages/admin/AdminSupportChats';
+import AdminProducts from './pages/admin/AdminProducts';
 import AdminPlaceholder from './pages/admin/AdminPlaceholder';
 
 // 🛒 Customer storefront (/customer-shop/*): public browse + guest cart +
@@ -153,6 +155,7 @@ import ShopOrders from './pages/shop/ShopOrders';
 import ShopOrderDetail from './pages/shop/ShopOrderDetail';
 import ShopProfile from './pages/shop/ShopProfile';
 import ShopCategories from './pages/shop/ShopCategories';
+import ShopForgotPassword from './pages/shop/Shopforgotpassword';
 
 
 import { useShopAuth } from "./context/ShopAuthContext"; // Aapke auth context ka sahi path
@@ -208,7 +211,8 @@ function App() {
       <ErrorBoundary>
       <Routes>
         {/* Default Path Redirect -> About Page */}
-        <Route path="/" element={<Navigate to="/about" replace />} />
+        {/* <Route path="/" element={<Navigate to="/about" replace />} /> */}
+        <Route path="/" element={<Navigate to="/customer-shop" replace />} />
 
         {/* Driver mobile app (standalone, phone + PIN login) */}
         <Route path="/driver" element={<DriverApp />} />
@@ -216,6 +220,7 @@ function App() {
         {/* Auth & Marketing Routes */}
         <Route path="/about" element={<About />} />
         <Route path="/company-about" element={<CompanyAbout />} />
+        <Route path="/guides/:type" element={<GuidesPage />} />
         <Route path="/seller-about" element={<SellerAbout />} />
         <Route path="/register" element={<CompanyRegister />} />
         <Route path="/login" element={<CompanyLogin />} />
@@ -382,6 +387,7 @@ function App() {
           <Route path="/admin/companies" element={<AdminCompanies />} />
           <Route path="/admin/companies/:id" element={<AdminCompanyDetail />} />
           <Route path="/admin/support" element={<AdminSupportChats />} />
+          <Route path="/admin/my-products" element={<AdminProducts />} />
           {/* UI-only sections + quick filters — present so navigation never breaks */}
           <Route path="/admin/sellers" element={<AdminPlaceholder title="Sellers" subtitle="Review and approve registered sellers." icon="storefront" />} />
           <Route path="/admin/pending" element={<Navigate to="/admin/companies?status=pending" replace />} />
