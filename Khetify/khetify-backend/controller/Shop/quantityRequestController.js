@@ -74,25 +74,32 @@ const createQuantityRequest = async (req, res) => {
 
     await quantityRequest.save();
 
-    // Create notification for seller
-    await Notification.create({
-      recipientType: "seller",
-      recipientId: sellerId,
-      type: "quantity_request",
-      title: `New Quantity Request - ${productName}`,
-      body: `${customerName} requested ${requestedQuantity} units${
-        isUrgent ? " (Urgent)" : ""
-      }`,
-      payload: {
-        quantityRequestId: quantityRequest._id,
-        productId,
-        listingId,
-        customerId,
-        requestedQuantity,
-        isUrgent,
-      },
-      read: false,
-    });
+    // Create notification for seller.
+    // The request is already saved above — if the notification fails for any
+    // reason, log it but still return success, so the customer does not see an
+    // error and submit the same request again (duplicate requests).
+    try {
+      await Notification.create({
+        recipientType: "seller",
+        recipientId: sellerId,
+        type: "quantity_request",
+        title: `New Quantity Request - ${productName}`,
+        body: `${customerName} requested ${requestedQuantity} units${
+          isUrgent ? " (Urgent)" : ""
+        }`,
+        payload: {
+          quantityRequestId: quantityRequest._id,
+          productId,
+          listingId,
+          customerId,
+          requestedQuantity,
+          isUrgent,
+        },
+        read: false,
+      });
+    } catch (notifyErr) {
+      console.error("Quantity request saved, but seller notification failed:", notifyErr.message);
+    }
 
     res.status(201).json({
       success: true,

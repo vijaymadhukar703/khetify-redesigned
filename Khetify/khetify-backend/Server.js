@@ -41,6 +41,7 @@ const userRoutes = require("./routes/User/userRoutes");
 const purchasingRoutes = require("./routes/Purchase/purchasingRoutes");
 const authRoutes = require("./routes/Auth/authRoutes");
 const adminRoutes = require("./routes/Admin/adminRoutes"); // Platform admin (company review/approval)
+const adminProductRoutes = require("./routes/Admin/adminProductRoutes"); // admin product library
 const locationRoutes = require("./routes/Warehouse/locationRoutes"); // data API retained: Operations (Receive Stock) uses storage bins
 const grnRoutes = require("./routes/Inventory/grnRoutes");
 const putawayRoutes = require("./routes/Inventory/putawayRoutes");
@@ -68,6 +69,7 @@ const sellerQuantityRequestRoutes = require("./routes/Seller/sellerDemandMonitor
 const sellerWarehouseRoutes = require("./routes/Seller/sellerWarehouseRoutes"); // Seller warehouses (Phase 2b)
 const sellerCatalogRoutes = require("./routes/Seller/sellerCatalogRoutes"); // Seller read-only catalog (Phase 2c)
 const sellerMyProductRoutes = require("./routes/Seller/sellerMyProductRoutes"); // Seller's OWN products + own stock ("My Products")
+const sellerLibraryRoutes = require("./routes/Seller/sellerLibraryRoutes"); // seller: read admin product library names
 const sellerSupplyRoutes = require("./routes/Seller/sellerSupplyRoutes"); // Seller-initiated supply requests (Phase 3)
 const sellerInventoryRoutes = require("./routes/Seller/sellerInventoryRoutes"); // Seller read-only inventory/lots (Phase 4a)
 const sellerTransferRoutes = require("./routes/Seller/sellerTransferRoutes"); // Seller inter-warehouse transfers
@@ -239,6 +241,7 @@ app.use("/api/hsn", hsnRoutes); // GST rate master lookup (read-only)
 // Auth (identity + capabilities for the frontend)
 app.use("/api/auth", authRoutes);
 app.use("/api/admin/chats", adminChatRoutes); // live support chat (admin) — before /api/admin so the specific path wins
+app.use("/api/admin/products", adminProductRoutes); // admin product library
 app.use("/api/admin", adminRoutes); // platform admin: company review/approval + dashboard
 
 // IMS
@@ -303,6 +306,7 @@ app.use("/api/seller/hsn", hsnRoutes); // GST master for the seller portal (same
 // it must stay ABOVE /api/seller, which would otherwise swallow the path.
 app.use("/api/seller/categories", sellerCategoryRoutes);
 app.use("/api/seller/my-products", sellerMyProductRoutes); // seller's own products + own stock (ungated, free)
+app.use("/api/seller/library", sellerLibraryRoutes);
 app.use("/api/seller/products", sellerCatalogRoutes); // read-only catalog of the linked company
 app.use("/api/seller/supply-orders", sellerSupplyRoutes); // seller-initiated supply requests
 app.use("/api/seller/lots", sellerInventoryRoutes); // read-only seller inventory/lots

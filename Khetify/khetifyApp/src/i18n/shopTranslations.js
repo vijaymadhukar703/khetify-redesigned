@@ -41,6 +41,7 @@ const en = {
   "nav.shop": "Shop",
   "nav.home": "Home",
   "nav.language": "Language",
+  "nav.notifications": "Notifications",
   "footer.tagline": "A farming marketplace connecting Indian growers and buyers with verified sellers of seeds, fertilisers, tools and more. Browse freely — sign in only when you check out.",
   // "footer.copyright": "© {year} Khettify — agri-products marketplace.",
   "footer.copyright": "© 2026 Jain Beej Bhandar Agro Pvt Ltd. All rights reserved.",
@@ -964,6 +965,17 @@ const en = {
   "pf.showPassword": "Show password",
 
 
+
+  /* ── Request Quantity (product detail) ─────────────────────────────────── */
+  "shop.stockLimitReached": "Stock Limit Reached",
+  "shop.stockLimitMessage": "You've reached the available stock limit. Request more quantity from the seller.",
+  "shop.requestMoreQuantity": "Request More Quantity",
+  "shop.loginRequired": "Please Login",
+  "shop.loginToRequest": "You need to be logged in to request quantity",
+  "shop.requestSubmitted": "Request Submitted!",
+  "shop.requestNotification": "The seller will review your request and notify you soon.",
+  "shop.error": "Error",
+  "shop.requestFailed": "Failed to submit request",
 };
 
 /**
@@ -983,6 +995,7 @@ const hi = {
   "nav.shop": "दुकान",
   "nav.home": "होम",
   "nav.language": "भाषा",
+  "nav.notifications": "सूचनाएं",
   "footer.tagline": "एक कृषि बाज़ार जो भारतीय किसानों और खरीदारों को बीज, खाद, औज़ार और बहुत कुछ के सत्यापित विक्रेताओं से जोड़ता है। आराम से देखें — साइन इन सिर्फ़ चेकआउट पर।",
   // "footer.copyright": "© {year} Khettify — कृषि उत्पाद बाज़ार।",
   "footer.copyright": "© 2026 Jain Beej Bhandar Agro Pvt Ltd. All rights reserved.",
@@ -1870,6 +1883,17 @@ const hi = {
 
 
 
+
+  /* ── Request Quantity (product detail) ─────────────────────────────────── */
+  "shop.stockLimitReached": "स्टॉक सीमा पूरी हो गई",
+  "shop.stockLimitMessage": "आप उपलब्ध स्टॉक की सीमा तक पहुँच गए हैं। विक्रेता से और मात्रा का अनुरोध करें।",
+  "shop.requestMoreQuantity": "और मात्रा का अनुरोध करें",
+  "shop.loginRequired": "कृपया लॉग इन करें",
+  "shop.loginToRequest": "मात्रा का अनुरोध करने के लिए आपको लॉग इन करना होगा",
+  "shop.requestSubmitted": "अनुरोध भेज दिया गया!",
+  "shop.requestNotification": "विक्रेता आपके अनुरोध की समीक्षा करेगा और जल्द ही आपको सूचित करेगा।",
+  "shop.error": "त्रुटि",
+  "shop.requestFailed": "अनुरोध भेजने में विफल",
 };
 
 export const dictionaries = { en, hi };

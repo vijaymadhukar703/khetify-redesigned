@@ -8,7 +8,7 @@ import { getMyProducts, getMyStock } from '../../lib/sellerMyProductApi';
 // company — which is exactly what tells the API this is a My Products listing.
 import { getMyListings, publishListing, unpublishListing, getSellerWarehouses } from '../../lib/sellerApi';
 import { getProductImage } from '../../lib/productImage';
-import SellerMyProductForm from './SellerMyProductForm';
+import SellerUploadProductTabs from './SellerUploadProductTabs';
 import SellerAddStockModal from './SellerAddStockModal';
 
 // MY PRODUCTS — the seller's OWN products and their own (existing) stock.
@@ -901,7 +901,7 @@ const SellerMyProducts = () => {
             would otherwise sit above a long form and invite a half-filled
             product to be abandoned by a stray tab click. */}
         {editing && (
-          <SellerMyProductForm
+          <SellerUploadProductTabs
             productId={editing.productId}
             onCancel={() => setEditing(null)}
             onSaved={() => { setEditing(null); fetchProducts(); }}
