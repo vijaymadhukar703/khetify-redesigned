@@ -5,3 +5,6 @@ dist/
 build/
 
 uploads/
+
+# Logistics integration credentials (loaded by services/logisticsService.js) — never commit
+.env.logistics

@@ -62,6 +62,49 @@ Legend: **Req** = required · **Opt** = optional · **Dev** = development-only �
 | `MAIL_FROM` | Opt · Public | `Khetify <no-reply@khetify.local>` | Set a real, domain-verified sender in production |
 | `MAIL_TEST_MODE` | Opt · **Dev** | unset | `ethereal` sends to a throwaway test inbox |
 
+### SMS / OTP (SMS Gateway Hub)
+
+Read by `services/smsService.js` (and `config/smsConfig.js`). Used to send phone
+OTPs for shop, seller and company registration, login and password reset.
+
+| Variable | Class | Default | Notes |
+|---|---|---|---|
+| `SMS_GATEWAY_HUB_API_KEY` | **Req (prod) · Secret** | unset → SMS logged, **not sent** | Without it, phone OTPs are never delivered, so phone-based sign-up and password reset can't be completed in production |
+| `SMS_SENDER_ID` | Opt · Public | `JBAGRO` in `smsService.js` (`KHETFY` in `config/smsConfig.js`) | DLT-approved sender ID. **Set it explicitly**: the two files have different defaults. Switch to `KHETFY` once it's DLT-approved |
+| `SMS_ROUTE` | Opt · Public | `1` | Route ID for the SMS Gateway Hub account |
+| `SMS_DLT_ENTITY_ID` | Opt · Public | hardcoded registered entity ID | TRAI DLT principal entity ID. A registry ID, not a credential |
+| `SMS_DLT_TEMPLATE_ID` | Opt · Public | hardcoded approved template ID | Must match the DLT-approved OTP template, or the gateway rejects the send |
+
+In non-production (`NODE_ENV` ≠ `production`), the full SMS text, including the OTP, is printed to the console. In production it is not.
+
+### Logistics integration
+
+Two parts, configured separately:
+
+1. **Delivery serviceability** (inside the API server, `services/deliveryService.js`) opens a
+   **second MongoDB connection** to the logistics database to read service-area pincodes. Storefront
+   listings and checkout depend on it.
+2. **Logistics sync worker** (`scripts/logisticsSync.js`) is a **separate long-running process**, not
+   started by `Server.js`. It pushes approved orders to the Khetify Logistics API.
+   Run it as its own container or service (`node scripts/logisticsSync.js`), with **one instance only**.
+
+Locally, `services/logisticsService.js` also loads `khetify-backend/.env.logistics` (gitignored, and
+excluded from the Docker image by `.dockerignore`). dotenv never overrides variables that are already
+set, so on AWS supply these as normal environment variables from SSM.
+
+| Variable | Class | Default | Notes |
+|---|---|---|---|
+| `LOGISTICS_MONGO_URI` | **Req (prod) · Secret** | `mongodb://localhost…` (dev) | Logistics DB connection string (`mongodb+srv://<user>:<password>@<cluster>/<db>`). The localhost default doesn't exist on AWS: serviceability checks fail, listings fail open, and checkout reports `service_unavailable` |
+| `LOGISTICS_URL` | Req for sync worker · Public | unset → logistics calls throw "not configured" | Base URL of the Khetify Logistics API |
+| `LOGISTICS_API_KEY` | Req for sync worker · **Secret** | unset | Logistics API key. **The value committed in `.env.logistics` (on `main`, 2026-09-21) is compromised: rotate it and store only the new key in SSM** |
+| `LOGISTICS_TIMEOUT_MS` | Opt · Public | `10000` | HTTP timeout for logistics API calls |
+| `LOGISTICS_SYNC_INTERVAL_MS` | Opt · Public (worker) | `20000` | Poll interval of the sync worker |
+| `LOGISTICS_SYNC_BATCH` | Opt · Public (worker) | `50` | Orders per sync batch |
+| `LOGISTICS_SYNC_LOOKBACK_DAYS` | Opt · Public (worker) | `7` | How far back the worker looks for unsynced orders |
+| `LOGISTICS_SYNC_MAX_ATTEMPTS` | Opt · Public (worker) | `6` | Retries before a sync row is marked failed |
+| `LOGISTICS_SYNC_STATUSES` | Opt · Public (worker) | `confirmed,packed,shipped` | Order statuses that get pushed |
+| `LOGISTICS_READY_STATUSES` | Opt · Public (worker) | `packed,shipped` | Order statuses that mark a shipment ready |
+
 ### Payments (Razorpay)
 
 | Variable | Class | Default | Notes |
