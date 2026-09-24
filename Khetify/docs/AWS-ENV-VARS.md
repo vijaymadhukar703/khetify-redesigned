@@ -19,7 +19,7 @@ Legend: **Req** = required · **Opt** = optional · **Dev** = development-only �
 | `LOG_LEVEL` | Opt · Public | `info` | `info` |
 | `CORS_ORIGINS` | Req (prod) · Public | `*` | Comma-separated exact frontend origins, e.g. `https://<primary-domain>,https://www.<primary-domain>`. Trailing slashes are trimmed. `*` logs a warning in production. Auth is a bearer header (no cookies), so `credentials` is not enabled |
 | `FRONTEND_URL` | Req (prod) · Public | `http://localhost:5173` | `https://<primary-domain>`, used in password-reset and invite links |
-| `JOBS_ENABLED` | Opt · Prod · Public | `true` | `true` on the ONE process that runs node-cron jobs; `false` on any other backend sharing the DB (e.g. Render during coexistence) |
+| `JOBS_ENABLED` | Opt · Prod · Public | `true` | `true` on the ONE process that runs node-cron jobs (`jobs/index.js` plus the hourly product auto-cleanup); `false` on any other backend sharing the DB (e.g. Render during coexistence) |
 | `TZ` | Opt · Public | container default (UTC) | Leave unset: cron schedules assume UTC, matching Render |
 
 ### Database

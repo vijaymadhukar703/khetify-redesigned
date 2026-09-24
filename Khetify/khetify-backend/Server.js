@@ -176,7 +176,17 @@ mongoose
     logger.info('✅ MongoDB Connected');
     await dropLegacyIndexes(); // self-heal stale unique indexes before serving
     // Schedule background jobs (ABC classification, outbox, ...) after DB is up.
-    if (env.jobsEnabled) startJobs();
+    if (env.jobsEnabled) {
+      startJobs();
+      // Hourly product auto-cleanup: deletes soft-deleted products once every
+      // warehouse holds 0 stock. Gated like the other jobs so it runs in ONE process.
+      try {
+        const { startAutoCleanupJob } = require("./controller/Company/productController");
+        startAutoCleanupJob();
+      } catch (err) {
+        logger.warn({ err }, 'Auto-cleanup job failed to start');
+      }
+    }
     else logger.warn('⏸️  JOBS_ENABLED=false — background jobs NOT scheduled in this process');
   })
   .catch(err => {
@@ -304,15 +314,6 @@ initSocket(server); // attaches Socket.IO to the same HTTP server
 
 server.listen(PORT, () => {
   logger.info(`🔥 Server running on port ${PORT}`);
-  
-  // Start automatic product cleanup job
-  // Deletes soft-deleted products when all warehouses have 0 stock
-  try {
-    const { startAutoCleanupJob } = require("./controller/Company/productController");
-    startAutoCleanupJob();
-  } catch (error) {
-    logger.warn("Auto-cleanup job failed to start:", error.message);
-  }
 });
 
 /* ----- Graceful shutdown ----- */
