@@ -51,6 +51,9 @@ const consumerSchema = new mongoose.Schema(
     phoneVerified: { type: Boolean, default: false },
     addresses: { type: [shopAddressSchema], default: [] },
     status: { type: String, enum: ["active", "disabled"], default: "active" },
+        // ── GOOGLE LOGIN (ADDITIVE) ──
+    googleId: { type: String },
+    authMethod: { type: String, enum: ["password", "google"], default: "password" },
     // ── LIVE LOCATION (browser geolocation consent) ──────────────────────
     // ADDITIVE. Recorded when the portal asks for live location right after
     // registration / login. `status` is the ACCOUNT-level answer, which is what
@@ -112,6 +115,8 @@ const consumerSchema = new mongoose.Schema(
 // an account may carry only one of them).
 consumerSchema.index({ email: 1 }, { unique: true, sparse: true });
 consumerSchema.index({ phone: 1 }, { unique: true, sparse: true });
+// Google login: one Google account ↔ one consumer.
+consumerSchema.index({ googleId: 1 }, { unique: true, sparse: true });
 
 // Nearest-warehouse / proximity lookups against the stored consent point.
 // 2dsphere skips documents with no point, so accounts that never answered

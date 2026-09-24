@@ -3,6 +3,7 @@ import { useNavigate, Link } from "react-router-dom";
 import { useShopAuth } from "../../context/ShopAuthContext";
 import { shopCheckRegister } from "../../lib/shopApi";
 import { AuthShell, TextField, PrimaryButton, ErrorNote, Icon } from "./authUi";
+import { useGoogleLogin } from '@react-oauth/google';
 
 /* Customer REGISTER — Nykaa-style, OTP-first, NO PASSWORD, 5 screens:
  *   phone | email  →  name + mobile  →  otp  →  success
@@ -103,7 +104,7 @@ function LinkButton({ children, ...props }) {
 // has no bare /dashboard route, so sending shoppers there would 404.
 export default function ShopRegister({ redirectTo = "/customer-shop/home" }) {
   const navigate = useNavigate();
-  const { sendRegisterOtp, verifyRegisterOtp, resendRegisterOtp, isAuthed } = useShopAuth();
+  const { sendRegisterOtp, verifyRegisterOtp, resendRegisterOtp } = useShopAuth();
 
   const [step, setStep] = useState("phone"); // 'phone' | 'email' | 'name' | 'otp' | 'success'
   const [method, setMethod] = useState("phone"); // 'phone' | 'email'
@@ -123,12 +124,24 @@ export default function ShopRegister({ redirectTo = "/customer-shop/home" }) {
   // What Screen 1 held when the shopper left it — Screen 3 pre-fills from this.
   const screen1Phone = useRef("");
 
-  // Google OAuth: seedha backend par full-page redirect (no popup).
-  // Backend Google se login karwa kar ?token=...&success=true ke saath yahin wapas bhejta hai.
+  // Google OAuth Setup
   const API_URL = import.meta.env.VITE_API_URL;
-  const googleLogin = () => {
-    window.location.href = `${API_URL}/api/auth/google`;
-  };
+
+  const googleLogin = useGoogleLogin({
+    onSuccess: async (codeResponse) => {
+      try {
+        // Redirect to backend OAuth endpoint
+        window.location.href = `${API_URL}/api/auth/google`;
+      } catch (error) {
+        console.error('Google login error:', error);
+        alert('Google login failed. Please try again.');
+      }
+    },
+    onError: () => {
+      alert('Google login failed. Please try again.');
+    },
+    flow: 'implicit',
+  });
 
   const go = (next) => {
     setError("");
@@ -136,17 +149,24 @@ export default function ShopRegister({ redirectTo = "/customer-shop/home" }) {
     setStep(next);
   };
 
-  /* ===== Google se wapas aaye? =====
-     Token ShopAuthContext save karta hai aur /auth/me se verify karta hai.
-     Consumer confirm hote hi (isAuthed) home par bhejo. URL ko pehle render par
-     hi padh lete hain, kyunki context use turant saaf kar deta hai. */
-  const cameFromGoogle = useRef(
-    new URLSearchParams(window.location.search).get("success") === "true"
-  );
+  /* ===== NEW: Handle Google OAuth token from URL ===== */
   useEffect(() => {
-    if (cameFromGoogle.current && isAuthed) navigate(redirectTo, { replace: true });
-  }, [isAuthed, navigate, redirectTo]);
-  /* ===== END: Google OAuth ===== */
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token');
+    const success = params.get('success');
+
+    if (token && success === 'true') {
+      // Store token in localStorage
+      localStorage.setItem('shopAuthToken', token);
+      // Clean up URL
+      window.history.replaceState({}, document.title, '/customer-shop/register');
+      // Redirect to home
+      setTimeout(() => {
+        navigate(redirectTo, { replace: true });
+      }, 500);
+    }
+  }, [navigate, redirectTo]);
+  /* ===== END: Google OAuth token handling ===== */
 
   /* Resend countdown — ticks only while the OTP screen is up. */
   useEffect(() => {

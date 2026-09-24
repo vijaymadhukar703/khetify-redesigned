@@ -34,6 +34,18 @@ export function ShopAuthProvider({ children }) {
   useEffect(() => {
     let alive = true;
     (async () => {
+      // ✅ CHECK FOR GOOGLE OAUTH TOKEN IN URL
+      const params = new URLSearchParams(window.location.search);
+      const urlToken = params.get('token');
+      const success = params.get('success');
+
+      if (urlToken && success === 'true') {
+        console.log('✅ Google OAuth token found in URL, setting up...');
+        setShopToken(urlToken); // Token को localStorage में set करो
+        // Clean up URL
+        window.history.replaceState({}, document.title, '/customer-shop/register');
+      }
+
       if (!getShopToken()) {
         setLoading(false);
         return;
