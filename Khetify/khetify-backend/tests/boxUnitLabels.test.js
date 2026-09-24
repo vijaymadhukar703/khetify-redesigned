@@ -30,7 +30,11 @@ beforeEach(async () => {
   productId = (await Product.create({ companyId, productName: "Urea", skuNumber: "URE494" }))._id;
 });
 
-/** The reported lot: 4 boxes × 250, its number declaring SKU0001~SKU1000. */
+/**
+ * The reported lot: 4 boxes × 250, its number declaring GP001~GP004 and
+ * SKU0001~SKU1000. The Bulk Packaging range is what gives each box its own ID —
+ * without it all four would share one, which Create Lot refuses.
+ */
 async function reportedLot() {
   return lotService.receiveLot({
     ownerId: companyId, productId, warehouseId: bhopal._id, qty: 1000,
@@ -38,6 +42,7 @@ async function reportedLot() {
     hasBulkPackaging: true, numberOfBoxes: 4, unitsPerBox: 250,
     lotSegments: [
       { key: "company", type: "value", value: "BHO" },
+      { key: "bulk", type: "range", mode: "variable", prefix: "GP", digits: 3 },
       { key: "sku", type: "range", mode: "variable", prefix: "SKU", digits: 4 },
     ],
   });

@@ -5,6 +5,7 @@ const Product = require("../model/Company/productModel");
 const Warehouse = require("../model/Warehouse/Warehouse");
 const Inventory = require("../model/Inventory/Inventory");
 const Seller = require("../model/Seller/Seller");
+const User = require("../model/User/User");
 const UnitSerial = require("../model/Barcode/UnitSerial");
 const StockMovement = require("../model/Inventory/StockMovement");
 const Discrepancy = require("../model/Transport/Discrepancy");
@@ -28,7 +29,13 @@ function mockRes() {
 }
 const invSum = (r) => (r.onlineStock || 0) + (r.offlineStock || 0) - (r.reservedStock || 0);
 
-let companyId, productId, companyWh, sellerId, sellerWh, lot, serials;
+let companyId, productId, companyWh, sellerId, sellerWh, lot, serials, receiver;
+
+// RECEIVING IS WAREHOUSE WORK: the seller account itself may track an inbound
+// supply but never receive it. Receipts are made as a seller_manager assigned
+// to the destination warehouse — a real User row, which is where the warehouse
+// scope is read from.
+const receivingUser = () => ({ id: receiver._id, sellerId, principalType: "seller", role: "seller_manager" });
 
 beforeEach(async () => {
   const c = await Company.create({ fullName: "Supplier", email: `s-${new mongoose.Types.ObjectId()}@x.com`, password: "x", status: "approved", companyInfo: { companyName: "Supplier Co" } });
@@ -39,6 +46,10 @@ beforeEach(async () => {
   const seller = await Seller.create({ passwordHash: "x", sellerInfo: { businessName: "Krishna" }, supplyingCompanyId: companyId, linkStatus: "approved", status: "active" });
   sellerId = seller._id;
   sellerWh = await Warehouse.create({ sellerId, name: "Seller WH" });
+  receiver = await User.create({
+    ownerType: "seller", ownerId: sellerId, name: "Seller WH manager",
+    role: "seller_manager", status: "active", warehouseIds: [sellerWh._id],
+  });
   lot = await Inventory.create({ productId, ownerType: "company", ownerId: companyId, warehouseId: companyWh._id, batchNumber: "L1", lotNumber: "L1", expiryDate: new Date("2027-01-01"), mfgDate: new Date("2026-01-01"), offlineStock: 10, availableStock: 10 });
   await barcodeService.generateUnits(companyId, lot._id, 5);
   // The labeled units are received into stock (as a GRN would leave them).
@@ -84,14 +95,19 @@ async function dispatched(qty = 3) {
 }
 
 describe("approved supply is pickable directly (stage=pick), NO wave", () => {
-  test("approve reserves FEFO and the order appears under stage=pick", async () => {
+  test("approve plans FEFO WITHOUT reserving, and the order appears under stage=pick", async () => {
     const order = await approvedOrder(3);
     expect(order.status).toBe("approved");
     expect(order.items[0].allocations.length).toBe(1);
+    // Approval is authorization only: it records the lot the warehouse will pick
+    // from, but reserves nothing — stock is reserved at pick (see "direct /pick").
+    expect(order.items[0].allocations[0].qty).toBe(3);
+    expect(order.items[0].allocations[0].reservedQty).toBe(0);
 
     const co = await Inventory.findById(lot._id);
-    expect(co.reservedStock).toBe(3);
-    expect(co.availableStock).toBe(7);
+    expect(co.reservedStock).toBe(0);
+    expect(co.offlineStock).toBe(10);
+    expect(co.availableStock).toBe(10);
     expect(invSum(co)).toBe(co.availableStock);
 
     const res = mockRes();
@@ -219,7 +235,7 @@ describe("/dispatch", () => {
 });
 
 describe("seller scan-verify receives into seller stock (unchanged)", () => {
-  const sellerReq = (orderId, body) => ({ user: { sellerId, principalType: "seller" }, params: { id: orderId }, body });
+  const sellerReq = (orderId, body) => ({ user: receivingUser(), params: { id: orderId }, body });
 
   test("full receipt lands seller stock with the original lot + seller-owned units", async () => {
     const { order, qrPayload } = await dispatched(3);
@@ -268,7 +284,7 @@ describe("seller scan-verify receives into seller stock (unchanged)", () => {
 });
 
 describe("seller warehouse stock summary (real, owner-scoped)", () => {
-  const sellerReq = (orderId, body) => ({ user: { sellerId, principalType: "seller" }, params: { id: orderId }, body });
+  const sellerReq = (orderId, body) => ({ user: receivingUser(), params: { id: orderId }, body });
 
   test("reflects landed stock and is scoped to the seller's own inventory", async () => {
     // before any receive: empty

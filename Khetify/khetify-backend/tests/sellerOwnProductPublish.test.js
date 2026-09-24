@@ -47,9 +47,15 @@ describe("SellerListing accepts a seller-own listing and still demands a company
     // The unique index is (sellerId, companyId, productId) and is NOT changed by
     // this work. This proves the claim that it keeps doing its job with
     // companyId null: Mongo indexes null as a real value, so two seller-own
-    // listings of the same product still collide. syncIndexes() is needed
-    // because mongoose builds indexes in the background and the in-memory
-    // server would otherwise race the assertion.
+    // listings of the same product still collide.
+    //
+    // init() waits for mongoose's own background index build, started when the
+    // connection opened, to finish; syncIndexes() then brings the declared
+    // indexes in line. The wait is what matters: MongoDB lists an index that is
+    // still being built, so syncIndexes() alone can return mid-build — and a
+    // duplicate inserted then is accepted and makes the build fail, leaving no
+    // unique index for the assertion to hit.
+    await SellerListing.init();
     await SellerListing.syncIndexes();
     const productId = new mongoose.Types.ObjectId();
     await SellerListing.create({ sellerId: sellerA, productId, ownerType: "seller" });

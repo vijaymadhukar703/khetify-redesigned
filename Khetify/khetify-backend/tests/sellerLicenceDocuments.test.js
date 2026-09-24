@@ -213,18 +213,30 @@ describe("6. licence number FORMAT — strict on TAN and Udyam only", () => {
 
   test("the state-issued three accept ANY shape — no national format exists", async () => {
     // Real examples differ wildly by state; a regex here would lock those
-    // sellers out of recording their licence at all.
+    // sellers out of recording their licence at all. Only the sanity check
+    // applies: 4-30 characters of letters, digits, hyphen and slash.
     const res = await patch({
       gumastaNumber: "mh/shop/2019/44821",
-      agricultureNumber: "AGRI licence 12-B",
+      agricultureNumber: "AGRI-licence-12-B",
       horticultureNumber: "hp-hort-7",
     }, {});
     expect(res.statusCode).toBe(200);
 
     const data = await get();
     expect(data.licences.gumasta.number).toBe("MH/SHOP/2019/44821");
-    expect(data.licences.agriculture.number).toBe("AGRI LICENCE 12-B");
+    expect(data.licences.agriculture.number).toBe("AGRI-LICENCE-12-B");
     expect(data.licences.horticulture.number).toBe("HP-HORT-7");
+  });
+
+  test("a free-form licence with characters outside the sanity set is refused", async () => {
+    // The only guard these three have: no national format to check them
+    // against, so the character set is what keeps a sentence or a pasted email
+    // out of the box.
+    for (const bad of ["AGRI licence 12-B", "agri@example.com"]) {
+      const res = await patch({ agricultureNumber: bad }, {});
+      expect(res.statusCode).toBe(400);
+      expect(res.body.message).toMatch(/Use only letters, digits, - and \//i);
+    }
   });
 
   test("surrounding whitespace is trimmed on the free-form three", async () => {

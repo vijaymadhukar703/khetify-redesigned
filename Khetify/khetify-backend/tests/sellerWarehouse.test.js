@@ -35,14 +35,24 @@ describe("Warehouse ownership is company XOR seller", () => {
 });
 
 describe("seller warehouse endpoints are seller-scoped", () => {
+  // A warehouse is created together with its Warehouse Manager (a new seller
+  // team member), so a create request always carries one. Email and phone are
+  // unique per manager.
+  const manager = (tag, phone) => ({ name: `Manager ${tag}`, email: `mgr-${tag}@x.com`, phone, password: "secret123" });
+
   test("create + list returns only the caller's warehouses", async () => {
     const cRes = mockRes();
-    await ctrl.createSellerWarehouse(asSeller(sellerA, { name: "A1", code: "A1", address: { city: "Indore", state: "MP" }, capacityUnits: 100 }), cRes);
+    await ctrl.createSellerWarehouse(asSeller(sellerA, { name: "A1", code: "A1", address: { city: "Indore", state: "MP" }, capacityUnits: 100, manager: manager("a1", "9000000001") }), cRes);
     expect(cRes.statusCode).toBe(201);
     expect(String(cRes.body.data.sellerId)).toBe(String(sellerA));
+    // …and its manager belongs to seller A and is scoped to that warehouse.
+    expect(String(cRes.body.manager.ownerId)).toBe(String(sellerA));
+    expect(cRes.body.manager.warehouseIds.map(String)).toEqual([String(cRes.body.data._id)]);
 
     // another seller's warehouse + a company warehouse must not leak in
-    await ctrl.createSellerWarehouse(asSeller(sellerB, { name: "B1" }), mockRes());
+    const bRes = mockRes();
+    await ctrl.createSellerWarehouse(asSeller(sellerB, { name: "B1", manager: manager("b1", "9000000002") }), bRes);
+    expect(bRes.statusCode).toBe(201);
     await Warehouse.create({ companyId, name: "Co WH" });
 
     const listRes = mockRes();

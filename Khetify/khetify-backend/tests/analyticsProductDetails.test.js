@@ -58,6 +58,18 @@ beforeEach(async () => {
   await UnitSerial.syncIndexes();
 });
 
+/**
+ * The ID contract of a Khetify-generated lot (lotNumberSegmentService): a box or
+ * unit ID is the lot number with its ranges collapsed to one member — the box's
+ * own Bulk Packaging number, and for a unit its running SKU number across the
+ * lot (two digits minimum). A box has no SKU part at all.
+ */
+const idFromLot = (lotNumber, { box = null, unit = null } = {}) => {
+  const two = (n) => String(n).padStart(2, "0");
+  const id = box === null ? lotNumber : lotNumber.replace(/BP\d+~BP\d+/, `BP${two(box)}`);
+  return unit === null ? id.replace(/-SKU\d+~SKU\d+/, "") : id.replace(/SKU\d+~SKU\d+/, `SKU${two(unit)}`);
+};
+
 /** A labelled, on-the-books lot, optionally packed into boxes. */
 async function makeLot({ qty, boxes, perBox } = {}) {
   const inv = await lotService.receiveLot({
@@ -197,10 +209,10 @@ describe("available Unit IDs", () => {
     expect(body.data.groups).toHaveLength(1);
     expect(body.data.groups[0].bulkPackagingId).toBeNull();
     expect(listed(body)).toEqual(await trueIds(lot._id));
-    // Full stored codes, never bare numbers. A single-package lot's code is
-    // built from the lot key (separators stripped) plus the padded sequence.
-    expect(listed(body)[0]).toMatch(/^[A-Z0-9]+-001$/);
-    expect(listed(body)[99]).toMatch(/-100$/);
+    // Full stored codes, never bare numbers: each unit's ID is the lot number
+    // with the SKU range collapsed to that unit's own number.
+    expect(listed(body)[0]).toBe(idFromLot(lot.lotNumber, { unit: 1 }));
+    expect(listed(body)[99]).toBe(idFromLot(lot.lotNumber, { unit: 100 }));
   });
 
   test("sold and shipped units are absent — only the survivors are listed", async () => {
@@ -264,14 +276,16 @@ describe("available Unit IDs", () => {
     expect(body.data.groups.map((g) => g.bulkPackagingId))
       .toEqual([box1.bulk_packaging_id, box2.bulk_packaging_id]);
 
-    // Each ID carries its own box prefix — the codes are unambiguous even though
-    // the numbers inside them restart at 1 per box.
-    for (const g of body.data.groups) {
+    // Each ID names its own box AND its own unit number, which runs on across
+    // the lot — box 1 holds units 1-10, box 2 units 11-20.
+    body.data.groups.forEach((g, i) => {
       expect(g.unitIds).toHaveLength(10);
       expect(g.count).toBe(10);
-      expect(g.unitIds.every((c) => c.startsWith(g.bulkPackagingId))).toBe(true);
-    }
-    expect(body.data.groups[0].unitIds[0]).toBe(`${box1.bulk_packaging_id}-001`);
+      expect(g.unitIds).toEqual(
+        Array.from({ length: 10 }, (_, k) => idFromLot(lot.lotNumber, { box: i + 1, unit: i * 10 + k + 1 }))
+      );
+    });
+    expect(body.data.groups[0].unitIds[0]).toBe(idFromLot(lot.lotNumber, { box: 1, unit: 1 }));
   });
 
   test("a partly-picked box lists only what is left in it", async () => {
@@ -284,7 +298,7 @@ describe("available Unit IDs", () => {
 
     const { body } = await availableUnits(lot._id);
     const g = body.data.groups.find((x) => x.bulkPackagingId === box1.bulk_packaging_id);
-    expect(g.unitIds).toEqual([1, 2, 5, 6, 7, 9, 10].map((n) => `${box1.bulk_packaging_id}-${String(n).padStart(3, "0")}`));
+    expect(g.unitIds).toEqual([1, 2, 5, 6, 7, 9, 10].map((n) => idFromLot(lot.lotNumber, { box: 1, unit: n })));
     expect(g.count).toBe(7);
   });
 

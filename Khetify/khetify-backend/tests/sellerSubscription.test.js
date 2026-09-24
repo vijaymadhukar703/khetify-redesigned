@@ -42,7 +42,7 @@ describe("seller subscription defaults + plan resolution", () => {
     expect(sub.limits.warehouses).toBe(1);
     expect(sub.limits.customers).toBe(50);
     const feats = featuresForSub(sub);
-    expect(feats).toContain(FEATURES.SUPPLY_WORKFLOW);
+    expect(feats).not.toContain(FEATURES.SUPPLY_WORKFLOW); // paid — requesting supply
     expect(feats).not.toContain(FEATURES.INVENTORY_VIEW); // paid
     expect(feats).not.toContain(FEATURES.UNIT_LABELS);     // paid
   });
@@ -74,6 +74,23 @@ describe("free seller is gated; pro seller is not", () => {
     expect(invPro.passed).toBe(true);
     const lblPro = await runChain(sellerUser(), requireFeature(FEATURES.UNIT_LABELS));
     expect(lblPro.passed).toBe(true);
+  });
+
+  test("SUPPLY_WORKFLOW (requesting supply) is locked on free, unlocked on pro, locked again when pro lapses", async () => {
+    const free = await runChain(sellerUser(), requireFeature(FEATURES.SUPPLY_WORKFLOW));
+    expect(free.passed).toBe(false);
+    expect(free.res.statusCode).toBe(403);
+    expect(free.res.body.code).toBe("UPGRADE_REQUIRED");
+
+    await changePlan({ ownerType: "seller", ownerId: sellerId }, "pro");
+    const pro = await runChain(sellerUser(), requireFeature(FEATURES.SUPPLY_WORKFLOW));
+    expect(pro.passed).toBe(true);
+
+    // A pro subscription whose period has ended is treated as free again.
+    await Subscription.updateOne({ ownerType: "seller", ownerId: sellerId }, { $set: { currentPeriodEnd: new Date(Date.now() - 86400000) } });
+    const lapsed = await runChain(sellerUser(), requireFeature(FEATURES.SUPPLY_WORKFLOW));
+    expect(lapsed.passed).toBe(false);
+    expect(lapsed.res.statusCode).toBe(403);
   });
 
   test("warehouses limit: free allows 1, blocks the 2nd; pro is unlimited", async () => {

@@ -13,6 +13,18 @@ const { resolvePickScan, validateConfirmPick, MSG } = require("../services/pickS
 let companyId, warehouseId, otherWarehouseId, productId, sellerId;
 
 /**
+ * The ID contract of a Khetify-generated lot (lotNumberSegmentService): a box or
+ * unit ID is the lot number with its ranges collapsed to one member — the box's
+ * own Bulk Packaging number, and for a unit its running SKU number across the
+ * lot (two digits minimum). A box has no SKU part at all.
+ */
+const idFromLot = (lotNumber, { box = null, unit = null } = {}) => {
+  const two = (n) => String(n).padStart(2, "0");
+  const id = box === null ? lotNumber : lotNumber.replace(/BP\d+~BP\d+/, `BP${two(box)}`);
+  return unit === null ? id.replace(/-SKU\d+~SKU\d+/, "") : id.replace(/SKU\d+~SKU\d+/, `SKU${two(unit)}`);
+};
+
+/**
  * A lot booked to the warehouse and labelled. `received: false` leaves it
  * awaiting the warehouse's Receive confirmation (qty still in transit).
  */
@@ -381,7 +393,7 @@ describe("CASE 2 — unit code inside a box", () => {
     expect(r1.scanType).toBe("unit");
     expect(r1.addedQuantity).toBe(1);
     expect(r1.currentPickedQuantity).toBe(1);
-    expect(r1.bulkPackagingId).toBe(`${lot.lotNumber}-BP-001`);
+    expect(r1.bulkPackagingId).toBe(idFromLot(lot.lotNumber, { box: 1 }));
 
     const r2 = await scan(order, codes[1], r1.addedUnitCodes);
     expect(r2.currentPickedQuantity).toBe(2);

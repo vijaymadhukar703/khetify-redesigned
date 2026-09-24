@@ -31,10 +31,18 @@ async function makeProduct(extra = {}) {
   return res.body.data;
 }
 
+const DAY = 86400000;
+const daysFromNow = (n) => new Date(Date.now() + n * DAY);
+// Add Stock REQUIRES the expiry read off the pack — it is no longer derived from
+// shelf life. Nothing here is about expiry, so every lot gets the same valid
+// date a year out (relative to today, so it can never lapse) unless a test
+// passes its own.
+const STOCK_EXPIRY = daysFromNow(365);
+
 /** Post to the real POST /stock handler. */
 async function addStock(body) {
   const res = mockRes();
-  await ctrl.addMyProductStock(asSeller(sellerId, addMyProductStockBody.parse(body)), res);
+  await ctrl.addMyProductStock(asSeller(sellerId, addMyProductStockBody.parse({ expiryDate: STOCK_EXPIRY, ...body })), res);
   return res;
 }
 

@@ -96,16 +96,16 @@ describe("validation: boxes × units per box must equal the quantity", () => {
 });
 
 describe("Bulk Packaging ID generation", () => {
-  test("one unique ID per box, formatted <LOT>-BP-<SERIAL>", async () => {
+  test("one unique ID per box, formatted <LOT>-BP<SERIAL>", async () => {
     const inv = await createLot({ hasBulkPackaging: true, numberOfBoxes: 4, unitsPerBox: 500 });
     const boxes = await boxesOf(inv._id);
 
     expect(boxes).toHaveLength(4);
     expect(boxes.map((b) => b.bulk_packaging_id)).toEqual([
-      `${inv.lotNumber}-BP-001`,
-      `${inv.lotNumber}-BP-002`,
-      `${inv.lotNumber}-BP-003`,
-      `${inv.lotNumber}-BP-004`,
+      `${inv.lotNumber}-BP001`,
+      `${inv.lotNumber}-BP002`,
+      `${inv.lotNumber}-BP003`,
+      `${inv.lotNumber}-BP004`,
     ]);
   });
 

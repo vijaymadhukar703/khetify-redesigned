@@ -15,6 +15,7 @@ const Product = require("../model/Company/productModel");
 const Warehouse = require("../model/Warehouse/Warehouse");
 const Inventory = require("../model/Inventory/Inventory");
 const Seller = require("../model/Seller/Seller");
+const User = require("../model/User/User");
 const BulkPackage = require("../model/Inventory/BulkPackage");
 const UnitSerial = require("../model/Barcode/UnitSerial");
 const SupplyOrder = require("../model/Supply/SupplyOrder");
@@ -33,10 +34,14 @@ function mockRes() {
   return res;
 }
 
-let companyId, productId, companyWh, sellerId, sellerWh, lot, box1, box2;
+let companyId, productId, companyWh, sellerId, sellerWh, lot, box1, box2, receiver;
 
 const companyReq = (body, id, query) => ({ user: { companyId, id: companyId }, params: { id }, body, query: query || {} });
-const sellerReq = (id, body) => ({ user: { sellerId, principalType: "seller" }, params: { id }, body });
+// RECEIVING IS WAREHOUSE WORK: the seller account itself may track an inbound
+// supply but never receive it. Receipts are made as a seller_manager assigned
+// to the destination warehouse — a real User row, which is where the warehouse
+// scope is read from.
+const sellerReq = (id, body) => ({ user: { id: receiver._id, sellerId, principalType: "seller", role: "seller_manager" }, params: { id }, body });
 
 /** Unit codes of one box, in print order. */
 const codesOf = (boxSerial) =>
@@ -57,6 +62,10 @@ beforeEach(async () => {
   });
   sellerId = seller._id;
   sellerWh = await Warehouse.create({ sellerId, name: "Seller WH" });
+  receiver = await User.create({
+    ownerType: "seller", ownerId: sellerId, name: "Seller WH manager",
+    role: "seller_manager", status: "active", warehouseIds: [sellerWh._id],
+  });
 
   // BP-001 and BP-002, 3 units each, on the books in the company warehouse.
   const inv = await lotService.receiveLot({
@@ -166,18 +175,28 @@ test("a whole accepted box transfers, and only that box", async () => {
 test("non-serialized supply still dispatches on quantity alone", async () => {
   // No serials on the allocation → the line carries none and dispatch keeps the
   // original quantity-only path. Guards the fallback for non-labelled stock.
+  //
+  // ITS OWN PRODUCT. The lot above is labelled, and generating unit labels marks
+  // that PRODUCT serial-tracked for good (barcodeService) — a quantity-only pick
+  // of it is refused by design. This scenario is the other case: a product that
+  // has never been labelled at all.
+  const plainProductId = (await Product.create({ companyId, productName: "Compost", skuNumber: "CMP", mrp: 100 }))._id;
   const plain = await lotService.receiveLot({
-    ownerId: companyId, productId, warehouseId: companyWh._id, qty: 5,
+    ownerId: companyId, productId: plainProductId, warehouseId: companyWh._id, qty: 5,
     lotOrigin: "company", batchNumber: "PLAIN-1",
   });
   await Inventory.updateOne({ _id: plain._id }, { $set: { inTransitStock: 0, offlineStock: 5, availableStock: 5 } });
+  // The premise: never labelled, so never serial-tracked.
+  expect((await Product.findById(plainProductId)).trackSerial).toBeFalsy();
+  expect(await UnitSerial.countDocuments({ productId: plainProductId })).toBe(0);
+  expect(await BulkPackage.countDocuments({ lot_id: plain._id })).toBe(0);
 
   const order = await SupplyOrder.create({
-    sellerId, companyId, items: [{ productId, quantity: 2 }],
+    sellerId, companyId, items: [{ productId: plainProductId, quantity: 2 }],
     warehouseId: sellerWh._id, status: "requested",
   });
   await supplyCtrl.updateSupplyStatus(companyReq({ status: "approved", sourceWarehouseId: companyWh._id }, order._id), mockRes());
-  await supplyCtrl.pickSupplyOrder(companyReq({ picks: [{ productId, qty: 2 }] }, order._id), mockRes());
+  await supplyCtrl.pickSupplyOrder(companyReq({ picks: [{ productId: plainProductId, qty: 2 }] }, order._id), mockRes());
   await supplyCtrl.packSupplyOrder(companyReq({}, order._id), mockRes());
 
   const manifest = mockRes();
@@ -186,4 +205,7 @@ test("non-serialized supply still dispatches on quantity alone", async () => {
   await supplyCtrl.dispatchSupplyOrder(companyReq({ labelPrinted: true }, order._id), dispatch);
   expect(dispatch.statusCode).toBe(200);
   expect((await SupplyOrder.findById(order._id)).status).toBe("dispatched");
+  // The 2 units left the plain lot; the labelled lot above is untouched.
+  expect((await Inventory.findById(plain._id)).availableStock).toBe(3);
+  expect((await Inventory.findById(lot._id)).availableStock).toBe(6);
 });

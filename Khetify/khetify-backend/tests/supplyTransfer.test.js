@@ -30,6 +30,16 @@ function mockRes() {
 
 const inv = (sum) => (sum.onlineStock || 0) + (sum.offlineStock || 0) - (sum.reservedStock || 0);
 
+// FEFO only draws on lots that have NOT expired, so every expiry here is
+// relative to today (fixed dates silently expire and change the scenario).
+// Order is the point: OTHER expires soonest, then EARLY, then LATE.
+const DAY = 86400000;
+const daysFromNow = (n) => new Date(Date.now() + n * DAY);
+const OTHER_EXPIRY = daysFromNow(30);
+const EARLY_EXPIRY = daysFromNow(60);
+const LATE_EXPIRY = daysFromNow(240);
+const EARLY_MFG = new Date("2026-01-01");
+
 let companyId, productId, companyWh, sellerId, sellerWh;
 const performedBy = new mongoose.Types.ObjectId();
 
@@ -47,8 +57,8 @@ beforeEach(async () => {
   sellerWh = await Warehouse.create({ sellerId, name: "Seller WH", code: "SWH" });
 
   // two company lots, FEFO order: EARLY (20, sooner) then LATE (40, later)
-  await Inventory.create({ productId, ownerType: "company", ownerId: companyId, warehouseId: companyWh._id, batchNumber: "EARLY", lotNumber: "EARLY", expiryDate: new Date("2026-08-01"), mfgDate: new Date("2026-01-01"), offlineStock: 20, availableStock: 20 });
-  await Inventory.create({ productId, ownerType: "company", ownerId: companyId, warehouseId: companyWh._id, batchNumber: "LATE", lotNumber: "LATE", expiryDate: new Date("2027-01-01"), mfgDate: new Date("2026-02-01"), offlineStock: 40, availableStock: 40 });
+  await Inventory.create({ productId, ownerType: "company", ownerId: companyId, warehouseId: companyWh._id, batchNumber: "EARLY", lotNumber: "EARLY", expiryDate: EARLY_EXPIRY, mfgDate: EARLY_MFG, offlineStock: 20, availableStock: 20 });
+  await Inventory.create({ productId, ownerType: "company", ownerId: companyId, warehouseId: companyWh._id, batchNumber: "LATE", lotNumber: "LATE", expiryDate: LATE_EXPIRY, mfgDate: new Date("2026-02-01"), offlineStock: 40, availableStock: 40 });
 });
 
 describe("lotService.supplyTransfer (company → seller)", () => {
@@ -72,8 +82,8 @@ describe("lotService.supplyTransfer (company → seller)", () => {
     expect(sLate.availableStock).toBe(10);
     expect(String(sEarly.warehouseId)).toBe(String(sellerWh._id));
     expect(sEarly.lotNumber).toBe("EARLY");
-    expect(new Date(sEarly.expiryDate).toISOString()).toBe(new Date("2026-08-01").toISOString());
-    expect(new Date(sEarly.mfgDate).toISOString()).toBe(new Date("2026-01-01").toISOString());
+    expect(new Date(sEarly.expiryDate).toISOString()).toBe(EARLY_EXPIRY.toISOString());
+    expect(new Date(sEarly.mfgDate).toISOString()).toBe(EARLY_MFG.toISOString());
 
     // ledger: supply_out on company, supply_in on seller, refType SupplyOrder, NO sale_*
     const outs = await StockMovement.find({ ownerType: "company", ownerId: companyId, type: "supply_out" });
@@ -110,7 +120,7 @@ describe("lotService.supplyTransfer (company → seller)", () => {
   test("FEFO is scoped to the ASSIGNED source warehouse only (other warehouses untouched)", async () => {
     // a SECOND company warehouse with stock for the same product
     const companyWh2 = await Warehouse.create({ companyId, name: "Co WH2", code: "CW2" });
-    await Inventory.create({ productId, ownerType: "company", ownerId: companyId, warehouseId: companyWh2._id, batchNumber: "OTHER", lotNumber: "OTHER", expiryDate: new Date("2026-07-01"), offlineStock: 100, availableStock: 100 });
+    await Inventory.create({ productId, ownerType: "company", ownerId: companyId, warehouseId: companyWh2._id, batchNumber: "OTHER", lotNumber: "OTHER", expiryDate: OTHER_EXPIRY, offlineStock: 100, availableStock: 100 });
 
     const summary = await lotService.supplyTransfer({
       companyId, sellerId, sourceWarehouseId: companyWh._id, destWarehouseId: sellerWh._id,

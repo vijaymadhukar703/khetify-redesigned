@@ -89,9 +89,23 @@ describe("warehouse transfer is denied to company_admin (view-only)", () => {
 
   test("admin retains all read access and non-transfer writes", () => {
     expect(hasCapability("company_admin", "shipment:read")).toBe(true);
-    expect(hasCapability("company_admin", "shipment:create")).toBe(true);
+    // Creating a shipment is NOT one of them — it is denied like inventory:transfer.
+    expect(hasCapability("company_admin", "shipment:create")).toBe(false);
     expect(hasCapability("company_admin", "inventory:read")).toBe(true);
     expect(hasCapability("company_admin", "grn:post")).toBe(true);
+  });
+
+  test("shipment:create is denied to company_admin, and kept by the roles that ship", () => {
+    // Goods are shipped by the warehouse side; the admin's Shipment Tracking view
+    // is oversight. The deny beats "*" at the route middleware too.
+    expect(deniedForRole("company_admin")).toContain("shipment:create");
+    expect(run("company_admin", "shipment:create").nextCalled).toBe(false);
+    expect(run("company_admin", "shipment:create").status).toBe(403);
+
+    expect(run("operations_manager", "shipment:create").nextCalled).toBe(true);
+    expect(run("transport_manager", "shipment:create").nextCalled).toBe(true);
+
+    expect(run("sales_manager", "shipment:create").status).toBe(403);
   });
 
   test("cost:read was removed only from operations_manager", () => {

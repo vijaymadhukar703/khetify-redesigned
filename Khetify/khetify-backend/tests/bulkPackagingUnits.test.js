@@ -61,16 +61,16 @@ describe("unit codes descend from the Bulk Packaging ID", () => {
 
     expect(units).toHaveLength(10);
     expect(units.map((u) => u.unit_code)).toEqual([
-      `${inv.lotNumber}-BP-001-001`,
-      `${inv.lotNumber}-BP-001-002`,
-      `${inv.lotNumber}-BP-001-003`,
-      `${inv.lotNumber}-BP-001-004`,
-      `${inv.lotNumber}-BP-001-005`,
-      `${inv.lotNumber}-BP-002-001`,
-      `${inv.lotNumber}-BP-002-002`,
-      `${inv.lotNumber}-BP-002-003`,
-      `${inv.lotNumber}-BP-002-004`,
-      `${inv.lotNumber}-BP-002-005`,
+      `${inv.lotNumber}-BP001-001`,
+      `${inv.lotNumber}-BP001-002`,
+      `${inv.lotNumber}-BP001-003`,
+      `${inv.lotNumber}-BP001-004`,
+      `${inv.lotNumber}-BP001-005`,
+      `${inv.lotNumber}-BP002-001`,
+      `${inv.lotNumber}-BP002-002`,
+      `${inv.lotNumber}-BP002-003`,
+      `${inv.lotNumber}-BP002-004`,
+      `${inv.lotNumber}-BP002-005`,
     ]);
   });
 
@@ -387,7 +387,7 @@ describe("non-bulk lots keep the existing behaviour", () => {
     const boxed = await boxedLot();
     await svc.generateUnits(companyId, boxed._id, 5, {});
     const [u] = await svc.listUnits(companyId, { inventoryId: boxed._id });
-    expect(u.bulk_packaging_id).toBe(`${boxed.lotNumber}-BP-001`);
+    expect(u.bulk_packaging_id).toBe(`${boxed.lotNumber}-BP001`);
     expect(u.box_serial).toBe(1);
   });
 });

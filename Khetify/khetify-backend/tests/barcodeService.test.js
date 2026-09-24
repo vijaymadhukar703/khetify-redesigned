@@ -102,11 +102,26 @@ describe("resolveScan() dispatch", () => {
   });
 
   test("next actions are role-aware (operator can putaway a generated unit; auditor cannot)", async () => {
+    // A lot ALREADY placed in a warehouse mints its units straight into stock,
+    // so there is nothing to put away — the next action there is picking.
     await svc.generateUnits(companyId, inv._id, 1);
-    const serial = (await UnitSerial.findOne({ companyId })).serial;
-    const op = await svc.resolveScan(companyId, serial, "warehouse_operator");
+    const stocked = await UnitSerial.findOne({ companyId, inventoryId: inv._id });
+    expect(stocked.status).toBe("in_stock");
+    expect((await svc.resolveScan(companyId, stocked.serial, "warehouse_operator")).nextActions).not.toContain("putaway");
+
+    // A lot that has NOT been placed in a warehouse yet mints "generated" units
+    // — those are the ones awaiting putaway.
+    const unplaced = await Inventory.create({
+      productId, ownerType: "company", ownerId: companyId,
+      batchNumber: "B2", lotNumber: "LOT2", offlineStock: 10, availableStock: 10,
+    });
+    await svc.generateUnits(companyId, unplaced._id, 1);
+    const awaiting = await UnitSerial.findOne({ companyId, inventoryId: unplaced._id });
+    expect(awaiting.status).toBe("generated");
+
+    const op = await svc.resolveScan(companyId, awaiting.serial, "warehouse_operator");
     expect(op.nextActions).toContain("putaway");
-    const aud = await svc.resolveScan(companyId, serial, "auditor");
+    const aud = await svc.resolveScan(companyId, awaiting.serial, "auditor");
     expect(aud.nextActions).not.toContain("putaway");
   });
 });

@@ -17,7 +17,7 @@ beforeEach(async () => {
   productId = p._id;
 });
 
-describe("weighted-average cost + stock-on-hand valuation", () => {
+describe("weighted-average cost + the stock-on-hand row's price columns", () => {
   test("receiving at different unit costs blends the weighted-average cost", async () => {
     await lotService.receiveLot({ ownerId: companyId, productId, warehouseId, batchNumber: "B1", qty: 10, unitCost: 100 });
     await lotService.receiveLot({ ownerId: companyId, productId, warehouseId, batchNumber: "B1", qty: 10, unitCost: 200 });
@@ -26,8 +26,13 @@ describe("weighted-average cost + stock-on-hand valuation", () => {
 
     const rows = await reportService.runReport("stock-on-hand", companyId, {});
     const row = rows.find((r) => r.lot === "B1");
+    // Each column of this report, spelled out — `value` is the product's MRP per
+    // unit (the UI labels the column "MRP"), NOT a stock valuation. The stock
+    // worth is `amount`, at selling price. Cost stays per unit in `costPrice`.
     expect(row.qty).toBe(20);
-    expect(row.value).toBe(3000); // 20 * 150
+    expect(row.costPrice).toBe(150); // weighted average, per unit
+    expect(row.value).toBe(100);     // product MRP, per unit
+    expect(row.amount).toBe(2000);   // 20 × 100, at selling price (MRP here)
   });
 });
 

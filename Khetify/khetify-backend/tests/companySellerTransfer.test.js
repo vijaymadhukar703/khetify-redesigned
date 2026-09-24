@@ -15,6 +15,7 @@ const SupplyOrder = require("../model/Supply/SupplyOrder");
 const Shipment = require("../model/Transport/Shipment");
 const StockMovement = require("../model/Inventory/StockMovement");
 const PrincipalCertificate = require("../model/PC/PrincipalCertificate");
+const User = require("../model/User/User");
 const lotService = require("../services/lotService");
 const barcodeService = require("../services/barcodeService");
 const svc = require("../services/companySellerTransferService");
@@ -28,7 +29,13 @@ function mockRes() {
   return res;
 }
 
-let companyId, productId, companyWh, otherWh, sellerId, sellerWh, lot, serials;
+let companyId, productId, companyWh, otherWh, sellerId, sellerWh, lot, serials, receiver;
+
+// RECEIVING IS WAREHOUSE WORK: the seller account itself may track an inbound
+// transfer but never receive it. Receipts are made as a seller_manager assigned
+// to the destination warehouse — a real User row, which is where the warehouse
+// scope is read from.
+const receivingUser = () => ({ id: receiver._id, sellerId, principalType: "seller", role: "seller_manager" });
 
 beforeEach(async () => {
   const c = await Company.create({
@@ -43,6 +50,10 @@ beforeEach(async () => {
   const seller = await Seller.create({ passwordHash: "x", sellerInfo: { businessName: "Krishna Agro" }, status: "active" });
   sellerId = seller._id;
   sellerWh = await Warehouse.create({ sellerId, name: "Krishna WH" });
+  receiver = await User.create({
+    ownerType: "seller", ownerId: sellerId, name: "Krishna WH manager",
+    role: "seller_manager", status: "active", warehouseIds: [sellerWh._id],
+  });
   await PrincipalCertificate.create({
     pcNumber: `PC-${new mongoose.Types.ObjectId()}`, sellerId, companyId, status: "active",
   });
@@ -339,7 +350,7 @@ describe("the seller receives it through the existing scan-to-receive flow", () 
 
     const recv = mockRes();
     await sellerSupply.receiveSupply({
-      user: { sellerId }, params: { id: supplyOrderId }, body: { qr: qrPayload },
+      user: receivingUser(), params: { id: supplyOrderId }, body: { qr: qrPayload },
     }, recv);
     expect(recv.statusCode).toBe(200);
     expect(recv.body.data.status).toBe("received");
@@ -692,7 +703,7 @@ describe("the seller receives by scanning box labels instead of units", () => {
     return res.body.data;
   };
 
-  const sellerReq = (id, body) => ({ user: { sellerId }, params: { id }, body });
+  const sellerReq = (id, body) => ({ user: receivingUser(), params: { id }, body });
 
   test("scanning ONE box label loads every unit inside it, with product and quantity", async () => {
     const out = await dispatchTwoBoxes();
@@ -1028,7 +1039,7 @@ describe("a mixed transfer: one existing Bulk Package plus individually scanned 
       ],
     }), res);
     const out = res.body.data;
-    const sellerReq = (body) => ({ user: { sellerId }, params: { id: out.supplyOrderId }, body });
+    const sellerReq = (body) => ({ user: receivingUser(), params: { id: out.supplyOrderId }, body });
 
     // 1. the existing Bulk Packaging label — 200 units at once
     const s1 = mockRes();
@@ -1098,7 +1109,8 @@ describe("challan / bill / bilty numbers", () => {
       challanNumber: "   ", billNumber: "",          // blank / whitespace only
     }), res);
     expect(res.statusCode).toBe(400);
-    expect(res.body.message).toBe("Enter the Challan, Bill number before transferring");
+    // Two are missing, so both are named and the noun is plural.
+    expect(res.body.message).toBe("Enter the Challan, Bill numbers before transferring");
     expect(await SupplyOrder.countDocuments({})).toBe(0);
     expect((await Inventory.findById(lot._id)).availableStock).toBe(10);
   });
@@ -1180,12 +1192,31 @@ describe("shipment box labels on the Shipment Tracking table", () => {
 
   test("a warehouse-scoped user cannot pull labels for a shipment that is not theirs", async () => {
     const out = await dispatchWithBoxes();
+    // A REAL warehouse user: the scope is read from the stored User row, never
+    // from what the request claims, so the fixture has to be one.
+    const elsewhere = await User.create({
+      companyId, name: "Indore manager", role: "warehouse_manager",
+      status: "active", warehouseIds: [otherWh._id],
+    });
     const res = mockRes();
     await tmsCtrl.shipmentBoxes({
-      user: { companyId, id: companyId, role: "warehouse_manager", warehouseIds: [String(otherWh._id)] },
+      user: { companyId, id: elsewhere._id, role: "warehouse_manager" },
       params: { id: out.shipmentId }, query: {},
     }, res);
     expect([403, 404]).toContain(res.statusCode);
+
+    // …while the manager of the warehouse the transfer left from still can.
+    const sender = await User.create({
+      companyId, name: "Bhopal manager", role: "warehouse_manager",
+      status: "active", warehouseIds: [companyWh._id],
+    });
+    const ok = mockRes();
+    await tmsCtrl.shipmentBoxes({
+      user: { companyId, id: sender._id, role: "warehouse_manager" },
+      params: { id: out.shipmentId }, query: {},
+    }, ok);
+    expect(ok.statusCode).toBe(200);
+    expect(ok.body.count).toBe(2);
   });
 
   test("a failing box-count lookup can never break the shipments table", async () => {
@@ -1319,12 +1350,27 @@ describe("challan / bill / bilty document uploads", () => {
   });
 
   test("a warehouse-scoped operator cannot read another warehouse's paperwork", async () => {
-    const created = await confirmWithDocs(null);
+    // The scanned copies are mandatory, so the transfer is confirmed WITH them —
+    // `{}` keeps the default set. Passing none would be refused at confirm and
+    // never reach the warehouse check this test is about.
+    const created = await confirmWithDocs({});
+    expect(created.statusCode).toBe(201);
+    const supplyOrderId = created.body.data.supplyOrderId;
+
+    // The transfer left companyWh, so an operator assigned to another warehouse
+    // is refused…
     await expect(
-      svc.transferDocuments(companyId, created.body.data.supplyOrderId, {
+      svc.transferDocuments(companyId, supplyOrderId, {
         allowedWarehouseIds: [String(otherWh._id)],
       })
     ).rejects.toMatchObject({ status: 403 });
+
+    // …and the operator of the warehouse it left from reads it.
+    await expect(
+      svc.transferDocuments(companyId, supplyOrderId, {
+        allowedWarehouseIds: [String(companyWh._id)],
+      })
+    ).resolves.toMatchObject({ challanNumber: "CH/2026/0142" });
   });
 
   test("multipart sends everything as strings — quantity and codes still validate", async () => {
@@ -1753,7 +1799,7 @@ describe("closing the seller request", () => {
 
     const recv = mockRes();
     await sellerSupply.receiveSupply({
-      user: { sellerId }, params: { id: res.body.data.supplyOrderId }, body: { qr: res.body.data.qrPayload },
+      user: receivingUser(), params: { id: res.body.data.supplyOrderId }, body: { qr: res.body.data.qrPayload },
     }, recv);
     expect(recv.statusCode).toBe(200);
 
