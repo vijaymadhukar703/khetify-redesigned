@@ -9,7 +9,7 @@ import { useDeliveryPincode } from "../../lib/useDeliveryPincode";
 import DeliveryBadge from "../../Components/shop/DeliveryBadge";
 
 /* ────────────────────────────────────────────────────────────────
-   Khettify Bazaar — customer home / dashboard.
+   Khetify Bazaar — customer home / dashboard.
 
    DATA FLOW IS UNCHANGED from the previous version:
    • one Promise-free effect fetches getShopCategories()
@@ -22,7 +22,7 @@ import DeliveryBadge from "../../Components/shop/DeliveryBadge";
    Everything else is presentation. Deals / best sellers / biggest savings are
    DERIVED from the same fetched array — no new endpoints.
 
-   Theme: Khettify red #EA2831 (+ #B3121A depth) on white, near-black #16191B
+   Theme: Khetify red #EA2831 (+ #B3121A depth) on white, near-black #16191B
    for text and image veils. Sora display (font-heading) / Manrope body.
 
    LAYOUT: offer bar → full-width slider → categories → advertisements, then
@@ -52,32 +52,47 @@ const IMG = {
   harvest: U("1470072768013-bf9532016c10", 900),
   rows: U("1523741543316-beb7fc7023d8", 1200),
   market: U("1533900298318-6b8da08a523e", 1200),
+  // Registration CTAs
+  companyReg:"/company-register.jpg", // professional business / team
+  sellerReg: "/seller-register.jpg",   // seller at counter / commerce
 };
 
 /* ── Static demo ads ── */
 const PROMO_SLIDES = [
   {
-    id: "s1",
-    img: IMG.farmers,
-    pos: "center 42%",
+    id: "s3",                          // 1st: Welcome / marketplace
+    img: IMG.field,
+    pos: "center 50%",
     to: "/customer-shop/products",
   },
   {
-    id: "s2",
+    id: "s1",                          // 2nd: Seeds
     img: IMG.seedlings,
     pos: "center",
-    to: "/customer-shop/products?category=Seeds",
+    to: "/customer-shop/products?q=seeds",
   },
   {
-    id: "s3",
-    img: IMG.rows,
-    pos: "center 60%",
-    to: "/customer-shop/products?category=Irrigation",
+    id: "s5",                          // 3rd: Company register CTA
+    img: IMG.companyReg,
+    pos: "center 40%",
+    to: "/register",
   },
   {
-    id: "s4",
-    img: IMG.market,
-    pos: "center",
+    id: "s2",                          // 4th: Fertilizers
+    img: IMG.soil,
+    pos: "center 40%",
+    to: "/customer-shop/products?q=fertilizer",
+  },
+  {
+    id: "s6",                          // 5th: Seller register CTA
+    img: IMG.sellerReg,
+    pos: "center 45%",
+    to: "/seller/register",
+  },
+  {
+    id: "s4",                          // 6th: Tools & crop care
+    img: IMG.farmers,
+    pos: "center 42%",
     to: "/customer-shop/products",
   },
 ];
@@ -94,17 +109,17 @@ const PROMO_SLIDES = [
 const AD_BANNERS = [
   {
     id: "b1",
-    company: "Kisan Agro",
-    img: IMG.veggies,
+    company: "Khettify",
+    img: IMG.companyReg,
     tone: "cream",
-    to: "/customer-shop/products",
+    to: "/company-about",
   },
   {
     id: "b2",
-    company: "Harit Farms",
-    img: IMG.harvest,
+    company: "Khettify",
+    img: IMG.sellerReg,
     tone: "red",
-    to: "/customer-shop/products",
+    to: "/seller-about",
   },
   {
     id: "b3",
@@ -618,7 +633,7 @@ const AdBannerCard = ({ ad: a, className = "", decorative = false }) => {
 const FEATURED_AD_COUNT = 2;
 const FEATURED_ADS = AD_BANNERS.slice(0, FEATURED_AD_COUNT);
 
-/* ── WHY KHETTIFY ─────────────────────────────────────────────────────────
+/* ── WHY KHETIFY ─────────────────────────────────────────────────────────
    This slot briefly held customer testimonials. It does not any more: the
    marketplace is still being built, so there are no customers to quote, and a
    storefront that opens with invented praise misleads the people reading it —
@@ -628,7 +643,7 @@ const FEATURED_ADS = AD_BANNERS.slice(0, FEATURED_AD_COUNT);
 
    THE THREE POINTS ARE FACTS ABOUT THE SYSTEM, not marketing adjectives.
    Principal Certificates, lot/unit labelling and FEFO dating are things
-   Khettify genuinely does — which is why they can be printed flatly, and why
+   Khetify genuinely does — which is why they can be printed flatly, and why
    they will still be true a year from now. */
 const WHY_KHETIFY = [
   { id: "w1", icon: "verified" },
@@ -748,6 +763,63 @@ const BRANDS = [
   { id: "br6", name: "Bhoomi Nutrients", img: IMG.wheat },
   { id: "br7", name: "Surya Crop Care", img: IMG.maize },
 ];
+
+
+/* ── SPONSORED PROMO BANNER — Jain Beej Bhandar Agro Pvt. Ltd. ─────────────
+   Full-width clickable ad banner shown above the "Straight from the makers"
+   section. Replace IMG_SRC with an S3/CDN URL once assets are uploaded. */
+
+   const BEEJ_BHANDAR_IMG = "/bij_bhandar_logo.png";
+
+function PromoBanner() {
+  const t = useT();
+  return (
+    <div className="overflow-hidden rounded-[20px] bg-gradient-to-r from-red-50 via-white to-red-50 border border-red-100 shadow-sm">
+      {/* Mobile: stacked layout; Desktop: side-by-side */}
+      <div className="flex flex-col sm:flex-row items-center gap-4 px-6 py-5 sm:px-8 sm:py-6">
+
+        {/* Logo */}
+        <div className="shrink-0">
+          <img
+            src={BEEJ_BHANDAR_IMG}
+            alt="बीज भण्डार — Jain Beej Bhandar Agro Pvt. Ltd."
+            className="h-20 w-auto object-contain sm:h-24"
+            loading="lazy"
+          />
+        </div>
+
+        {/* Text */}
+        <div className="flex-1 text-center sm:text-left">
+         
+          <h3 className="font-heading text-[20px] sm:text-[24px] font-extrabold text-[#16191B] -tracking-[0.02em] leading-tight">
+            {t("promo.beej.name")}
+          </h3>
+          <p className="mt-1 text-[13px] text-stone-500 sm:text-[14px]">
+            {t("promo.beej.tagline")}
+          </p>
+        </div>
+
+        {/* CTA */}
+        {/* <div className="shrink-0">
+          <a
+            href="/customer-shop?seller=beej-bhandar"
+            className="inline-flex items-center gap-1.5 rounded-full bg-[#EA2831] px-5 py-2.5 text-[13px] font-bold text-white shadow hover:bg-red-700 transition-colors"
+          >
+            {t("promo.beej.cta")}
+            <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
+          </a>
+        </div> */}
+      </div>
+
+      {/* Bottom strip */}
+      {/* <div className="bg-red-600 px-6 py-1.5 text-center">
+        <p className="text-[11px] font-semibold text-red-100 tracking-wide">
+          {t("promo.beej.strip")}
+        </p>
+      </div> */}
+    </div>
+  );
+}
 
 /* ── PART 1 of 2: the announcement band ──
    Just the "Straight from the makers" headline + subtitle, on its own soft
@@ -1149,14 +1221,9 @@ export default function ShopHome() {
           <SponsoredTiles />
         </section>
 
-        {/* ── Straight from the makers — now TWO separate sections/parts ──
-            Part 1: the "Straight from the makers" announcement banner.
-            Part 2: the KhetifyDirect wordmark + brand rail.
-            Each is its own rounded card with its own top margin, instead of
-            being fused into one tall block — so they can be spaced, reordered
-            or reused independently. */}
-        <section data-reveal className="mt-9 sm:mt-12 lg:mt-14">
-          <MakersBanner />
+        {/* ── Promotional Banner — Jain Beej Bhandar ── */}
+        <section data-reveal className="mt-6 sm:mt-8 lg:mt-10">
+          <PromoBanner />
         </section>
 
         <section data-reveal className="mt-3 pb-10 sm:mt-4 lg:pb-14">

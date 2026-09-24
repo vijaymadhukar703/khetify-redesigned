@@ -53,6 +53,18 @@ exports.resendRegistrationOtp = async (req, res) => {
   }
 };
 
+/* Register की पहली screen: phone / email पहले से registered है? सिर्फ़ पढ़ता है. */
+exports.checkRegistration = async (req, res) => {
+  try {
+    const result = await authService.checkRegistrationAvailability(req.body);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res
+      .status(err.status || 500)
+      .json({ success: false, message: err.message || "Server error" });
+  }
+};
+
 /* ─────────── 🔑 FORGOT PASSWORD ───────────
  * तीनों PUBLIC: shopper password भूल चुका है, log in कर ही नहीं सकता.
  * changePassword नीचे वैसा ही है — वो logged-in shopper के लिए है. */

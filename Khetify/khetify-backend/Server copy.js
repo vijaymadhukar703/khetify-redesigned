@@ -87,10 +87,6 @@ const principalRouteGuard = require("./middlewares/principalRouteGuard"); // sel
 /* ----- NEW: realtime ----- */
 const { initSocket } = require("./sockets");
 
-/* ----- NEW: Passport for Google OAuth ----- */
-const session = require('express-session');
-const passport = require('./config/googleAuth');
-
 // Absolute path so local-served file URLs (/uploads/<key>) resolve regardless
 // of the process working directory — matches where services/storage.js writes.
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
@@ -119,9 +115,7 @@ const RAZORPAY_WEBHOOK_PATH = "/api/shop/payments/webhook";
 app.use(express.json({
   limit: "2mb",
   verify: (req, res, buf) => {
-    // Compare the path only, so a query string on the configured webhook URL
-    // cannot silently disable signature verification.
-    if (req.originalUrl.split("?")[0] === RAZORPAY_WEBHOOK_PATH) req.rawBody = buf;
+    if (req.originalUrl === RAZORPAY_WEBHOOK_PATH) req.rawBody = buf;
   },
 }));
 app.use(requestId);
@@ -132,23 +126,6 @@ const globalLimiter = rateLimit({ windowMs: 60 * 1000, max: 300, standardHeaders
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 30, standardHeaders: true, legacyHeaders: false, message: { success: false, message: "Too many attempts, try again later" } });
 app.use("/api", globalLimiter);
 app.use(["/api/company/login", "/api/company/register", "/api/company/forgot-password", "/api/company/reset-password", "/api/driver/login", "/api/seller/login", "/api/seller/register", "/api/admin/login", "/api/shop/auth/login", "/api/shop/auth/register"], authLimiter);
-
-/* ===== NEW: Session + Passport middleware (MUST be before routes) ===== */
-app.use(session({
-  secret: env.jwtSecret || 'your-secret-key',
-  resave: false,
-  saveUninitialized: false,
-  cookie: { 
-    secure: env.nodeEnv === 'production', // HTTPS only in production
-    httpOnly: true,
-    maxAge: 24 * 60 * 60 * 1000 // 24 hours
-  }
-}));
-
-// Passport middleware
-app.use(passport.initialize());
-app.use(passport.session());
-/* ===== END: Session + Passport middleware ===== */
 
 // Defence in depth: a seller token may only reach /api/seller/*, and no other
 // principal may. Runs before every route mount; no-ops for tokenless/public
@@ -196,27 +173,9 @@ mongoose
   .then(async () => {
     logger.info('✅ MongoDB Connected');
     await dropLegacyIndexes(); // self-heal stale unique indexes before serving
-    // Schedule background jobs (ABC classification, outbox, ...) after DB is up.
-    if (env.jobsEnabled) {
-      startJobs();
-      // Hourly product auto-cleanup: deletes soft-deleted products once every
-      // warehouse holds 0 stock. Gated like the other jobs so it runs in ONE process.
-      try {
-        const { startAutoCleanupJob } = require("./controller/Company/productController");
-        startAutoCleanupJob();
-      } catch (err) {
-        logger.warn({ err }, 'Auto-cleanup job failed to start');
-      }
-    }
-    else logger.warn('⏸️  JOBS_ENABLED=false — background jobs NOT scheduled in this process');
+    startJobs(); // schedule background jobs (ABC classification, outbox) after DB is up
   })
-  .catch(err => {
-    logger.error({ err }, '❌ MongoDB Error');
-    // Mongoose does not retry a failed INITIAL connection. In production exit
-    // so the container restart policy retries, instead of serving 503s forever
-    // with background jobs never scheduled. Dev keeps running for convenience.
-    if (env.nodeEnv === 'production') process.exit(1);
-  });
+  .catch(err => logger.error({ err }, '❌ MongoDB Error'));
 
 /* =========================
    Routes
@@ -335,6 +294,15 @@ initSocket(server); // attaches Socket.IO to the same HTTP server
 
 server.listen(PORT, () => {
   logger.info(`🔥 Server running on port ${PORT}`);
+  
+  // Start automatic product cleanup job
+  // Deletes soft-deleted products when all warehouses have 0 stock
+  try {
+    const { startAutoCleanupJob } = require("./controller/Company/productController");
+    startAutoCleanupJob();
+  } catch (error) {
+    logger.warn("Auto-cleanup job failed to start:", error.message);
+  }
 });
 
 /* ----- Graceful shutdown ----- */

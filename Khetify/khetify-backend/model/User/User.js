@@ -42,6 +42,10 @@ const userSchema = new mongoose.Schema(
     warehouseIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "Warehouse" }],
     status: { type: String, enum: ["active", "invited", "disabled"], default: "active" },
     lastLoginAt: { type: Date },
+
+    googleId: { type: String, sparse: true }, 
+    authMethod: { type: String, enum: ["email", "google"], default: "email" }, 
+
   },
   { timestamps: true }
 );

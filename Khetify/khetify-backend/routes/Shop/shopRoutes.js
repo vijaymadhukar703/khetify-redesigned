@@ -26,6 +26,9 @@ router.post("/auth/register", auth.register);
 router.post("/auth/register/send-otp", auth.sendRegistrationOtp);
 router.post("/auth/register/verify-otp", auth.verifyRegistrationOtp);
 router.post("/auth/register/resend-otp", auth.resendRegistrationOtp);
+// Phone / email पहले से registered? कोई OTP नहीं भेजता. /api/shop/auth/register
+// prefix की वजह से Server.js का authLimiter इस पर भी लगता है.
+router.post("/auth/register/check", auth.checkRegistration);
 
 /* 🔑 FORGOT PASSWORD — तीनों PUBLIC. Shopper password भूल चुका है, इसलिए
    consumerAuth लगाना उसे उसी दरवाज़े से बाहर कर देगा जिसे वो खोलना चाहता है.

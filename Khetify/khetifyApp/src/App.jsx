@@ -134,6 +134,10 @@ import ShopCart from './pages/shop/ShopCart';
 import ShopNotifications from './pages/shop/ShopNotifications';
 import ShopLogin from './pages/shop/ShopLogin';
 import ShopRegister from './pages/shop/ShopRegister';
+
+
+import ShopRegister_Nykaa_Final from './Components/shop/ShopRegister_Nykaa_Final';  //added by vijay
+
 import ShopWishlist from './pages/shop/ShopWishlist';
 import ShopDashboard from './pages/shop/ShopDashboard';
 import ShopCheckout from './pages/shop/ShopCheckout';
@@ -412,8 +416,9 @@ function App() {
               payment screen: nothing to wander off to mid-commit. */}
           <Route path="confirm" element={<RequireConsumer><ShopConfirmOrder /></RequireConsumer>} />
           <Route path="login" element={<ShopLogin />} />
-          <Route path="register" element={<ShopRegister />} />
-            
+
+          {/* <Route path="register" element={<ShopRegister />} />  commented by vijay*/}
+             <Route path="register" element={<ShopRegister_Nykaa_Final />} />    {/* added by vijay */}
 
           {/* ── Everything else gets the full storefront chrome ── */}
           <Route element={<ShopLayout />}>

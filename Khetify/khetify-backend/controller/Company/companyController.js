@@ -13,6 +13,165 @@ const {
 const fileService = require("../../services/fileService");
 const { sendMail } = require("../../services/mailerService");
 const { sendSMS, otpMessageText } = require("../../services/smsService");
+
+// ── IN-MEMORY OTP STORE (company registration) ───────────────────────────────
+// email → { otp, expiresAt, attempts, formData }
+// Production note: replace with Redis for multi-instance deployments.
+const regOtpStore = new Map();
+const OTP_TTL_MS   = 10 * 60 * 1000; // 10 minutes
+const MAX_ATTEMPTS = 5;
+
+function genOtp() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+function maskEmail(email) {
+  const [local, domain] = email.split("@");
+  if (!local || !domain) return email;
+  const show = local.slice(0, 2);
+  return `${show}${"*".repeat(Math.max(1, local.length - 2))}@${domain}`;
+}
+
+async function sendRegOtp(email, otp, fullName) {
+  try {
+    await sendMail({
+      to: email,
+      subject: "Your Khetify verification code",
+      html: `
+        <div style="font-family:sans-serif;max-width:480px;margin:auto;">
+          <h2 style="color:#EA2831;">Verify your email</h2>
+          <p>Hello <strong>${fullName}</strong>,</p>
+          <p>Use the code below to complete your Khetify account registration. It expires in <strong>10 minutes</strong>.</p>
+          <div style="font-size:36px;font-weight:bold;letter-spacing:8px;color:#EA2831;margin:24px 0;text-align:center;">${otp}</div>
+          <p style="color:#888;font-size:12px;">If you did not request this, ignore this email.</p>
+        </div>
+      `,
+      text: `Your Khetify registration code is: ${otp}\nIt expires in 10 minutes.`,
+    });
+    return true;
+  } catch (err) {
+    console.error("[sendRegOtp]", err.message);
+    return false;
+  }
+}
+
+/**
+ * POST /api/company/register/send-otp
+ * Validates form data, sends a 6-digit OTP to the email. No account created yet.
+ */
+exports.sendRegisterOtp = async (req, res) => {
+  try {
+    const { fullName, email, number, password } = req.body || {};
+
+    if (isBlank(fullName))                       return res.status(400).json({ message: "Full name is required" });
+    if (isBlank(email) || !isEmail(email))        return res.status(400).json({ message: "A valid email is required" });
+    if (isBlank(number) || !isPhone10(number))    return res.status(400).json({ message: "Phone must be 10 digits" });
+    if (isBlank(password) || String(password).length < 6)
+                                                  return res.status(400).json({ message: "Password must be at least 6 characters" });
+
+    const normEmail = String(email).toLowerCase().trim();
+
+    // Duplicate check before sending OTP
+    if (await Company.findOne({ email: normEmail }))
+      return res.status(400).json({ message: "This email is already registered." });
+    if (await Company.findOne({ number: String(number).trim() }))
+      return res.status(400).json({ message: "This phone number is already registered." });
+
+    const otp = genOtp();
+    regOtpStore.set(normEmail, {
+      otp,
+      expiresAt: Date.now() + OTP_TTL_MS,
+      attempts: 0,
+      formData: { fullName: fullName.trim(), email: normEmail, number: String(number).trim(), password },
+    });
+
+    const otpSent = await sendRegOtp(normEmail, otp, fullName.trim());
+    // Dev fallback — log to console so testing works without SMTP
+    if (!otpSent) console.info(`[DEV] Company register OTP for ${normEmail}: ${otp}`);
+
+    res.json({ success: true, otpSent, emailMasked: maskEmail(normEmail) });
+  } catch (err) {
+    console.error("[sendRegisterOtp]", err);
+    res.status(500).json({ message: err.message || "Server error" });
+  }
+};
+
+/**
+ * POST /api/company/register/verify-otp
+ * Verifies OTP; creates the account on success.
+ */
+exports.verifyRegisterOtp = async (req, res) => {
+  try {
+    const { email, code } = req.body || {};
+    if (!email || !code) return res.status(400).json({ message: "Email and code are required" });
+
+    const normEmail = String(email).toLowerCase().trim();
+    const record = regOtpStore.get(normEmail);
+
+    if (!record)                         return res.status(400).json({ message: "No code found for this email. Please request a new one." });
+    if (Date.now() > record.expiresAt) { regOtpStore.delete(normEmail); return res.status(400).json({ message: "Code has expired. Please request a new one." }); }
+    record.attempts += 1;
+    if (record.attempts > MAX_ATTEMPTS)  return res.status(429).json({ message: "Too many attempts. Please request a new code." });
+    if (String(code).trim() !== record.otp) return res.status(400).json({ message: "Incorrect code. Please try again." });
+
+    // OTP valid — create account
+    regOtpStore.delete(normEmail);
+    const { fullName, number, password } = record.formData;
+
+    // Re-check duplicates (edge case: parallel registration)
+    if (await Company.findOne({ email: normEmail }))
+      return res.status(400).json({ message: "This email is already registered." });
+    if (await Company.findOne({ number }))
+      return res.status(400).json({ message: "This phone number is already registered." });
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const company = new Company({ fullName, email: normEmail, number, password: hashedPassword, status: "pending" });
+    await company.save();
+
+    const token = jwt.sign(
+      { id: company._id, email: company.email, role: "company_admin" },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    res.status(201).json({
+      success: true,
+      token,
+      company: { _id: company._id, fullName: company.fullName, email: company.email },
+    });
+  } catch (err) {
+    console.error("[verifyRegisterOtp]", err);
+    res.status(500).json({ message: err.message || "Server error" });
+  }
+};
+
+/**
+ * POST /api/company/register/resend-otp
+ * Resends OTP for the same pending registration.
+ */
+exports.resendRegisterOtp = async (req, res) => {
+  try {
+    const { email } = req.body || {};
+    if (!email) return res.status(400).json({ message: "Email is required" });
+
+    const normEmail = String(email).toLowerCase().trim();
+    const record = regOtpStore.get(normEmail);
+    if (!record) return res.status(400).json({ message: "No pending registration found. Please start again." });
+
+    const otp = genOtp();
+    record.otp        = otp;
+    record.expiresAt  = Date.now() + OTP_TTL_MS;
+    record.attempts   = 0;
+
+    const otpSent = await sendRegOtp(normEmail, otp, record.formData.fullName);
+    if (!otpSent) console.info(`[DEV] Company register OTP for ${normEmail}: ${otp}`);
+
+    res.json({ success: true, otpSent, emailMasked: maskEmail(normEmail) });
+  } catch (err) {
+    console.error("[resendRegisterOtp]", err);
+    res.status(500).json({ message: err.message || "Server error" });
+  }
+};
 const path = require("path");
 
 // Reset tokens live for 1 hour. Raw token is emailed; only its SHA-256 hash is
