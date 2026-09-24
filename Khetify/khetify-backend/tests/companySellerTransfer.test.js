@@ -789,6 +789,57 @@ describe("the seller receives by scanning box labels instead of units", () => {
     await ctrl.getTransferHistory(req({}, {}), hist);
     expect(hist.body.data[0].boxCount).toBe(2);
   });
+
+  /**
+   * THE BOX TOKEN IS CHECKED AS THE PRINTED HEX VALUE.
+   *
+   * The label carries "<box id>.<16 lowercase hex>". The box id is matched
+   * case-insensitively like any identifier; the token must be exactly that hex
+   * value — letter case aside, since hex has none — or the scan is refused.
+   */
+  describe("the printed box token", () => {
+    const scanCode = async (out, code) => {
+      const scan = mockRes();
+      await sellerSupply.scanReceiveBox(sellerReq(out.supplyOrderId, { code }), scan);
+      return scan;
+    };
+    const partsOf = (box) => { const [id, token] = box.qrPayload.split("."); return { id, token }; };
+
+    test("is lowercase hex, and the same value with A-F in upper case is accepted", async () => {
+      const out = await dispatchTwoBoxes();
+      const { id, token } = partsOf(out.boxes[0]);
+      expect(token).toMatch(/^[0-9a-f]{16}$/);
+
+      const scan = await scanCode(out, `${id}.${token.toUpperCase()}`);
+      expect(scan.statusCode).toBe(200);
+      expect(scan.body.data).toMatchObject({ kind: "shipment_box", boxNumber: 1, totalUnits: 2 });
+      expect(scan.body.data.serials.sort()).toEqual(serials.slice(0, 2).sort());
+    });
+
+    test("a bare box id, typed in without a token, is still accepted as before", async () => {
+      const out = await dispatchTwoBoxes();
+      const scan = await scanCode(out, out.boxes[0].shipmentBoxId);
+      expect(scan.statusCode).toBe(200);
+      expect(scan.body.data).toMatchObject({ kind: "shipment_box", boxNumber: 1, totalUnits: 2 });
+    });
+
+    const flipLast = (t) => `${t.slice(0, -1)}${t.endsWith("0") ? "1" : "0"}`;
+    test.each([
+      ["one token character changed", (b0) => `${partsOf(b0).id}.${flipLast(partsOf(b0).token)}`, 409],
+      ["the token of the OTHER box", (b0, b1) => `${partsOf(b0).id}.${partsOf(b1).token}`, 409],
+      ["a truncated token", (b0) => `${partsOf(b0).id}.${partsOf(b0).token.slice(0, 8)}`, 409],
+      ["a random token", (b0) => `${partsOf(b0).id}.0123456789abcdef`, 409],
+      ["a non-hex token", (b0) => `${partsOf(b0).id}.zzzzzzzzzzzzzzzz`, 409],
+      ["an extra segment after the token", (b0) => `${b0.qrPayload}.x`, 409],
+      ["an empty token", (b0) => `${partsOf(b0).id}.`, 409],
+      ["a modified box id with the genuine token", (b0) => `${partsOf(b0).id.replace(/-001$/, "-009")}.${partsOf(b0).token}`, 404],
+    ])("%s is refused", async (_name, codeOf, status) => {
+      const out = await dispatchTwoBoxes();
+      const scan = await scanCode(out, codeOf(out.boxes[0], out.boxes[1]));
+      expect(scan.statusCode).toBe(status);
+      if (status === 409) expect(scan.body.message).toContain("could not be verified");
+    });
+  });
 });
 
 

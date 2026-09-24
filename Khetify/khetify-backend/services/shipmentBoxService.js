@@ -238,8 +238,21 @@ async function resolveReceiveScan(shipment, code) {
     if (String(box.shipmentId) !== String(shipment._id)) {
       throw httpErr(`${box.shipmentBoxId} belongs to a different shipment.`, 409);
     }
-    if (value.includes(".") && value.split(".")[1] !== box.qrToken) {
-      throw httpErr(`${box.shipmentBoxId} could not be verified — scan the printed label.`, 409);
+    if (value.includes(".")) {
+      // THE TOKEN IS NOT AN IDENTIFIER. `value` is upper-cased for the box ID's
+      // sake, but the token is lowercase hex (tokenFor), so it is read from the
+      // code as scanned: exactly "<box id>.<16 hex>", compared as hex — letter
+      // case carries no meaning there — in constant time. Both sides are proven
+      // 16 characters first, so the buffers are always the same length.
+      const parts = String(code).trim().split(".");
+      const scanned = parts.length === 2 ? parts[1].toLowerCase() : "";
+      const expected = String(box.qrToken || "").toLowerCase();
+      const hex16 = /^[0-9a-f]{16}$/;
+      const genuine = hex16.test(scanned) && hex16.test(expected)
+        && crypto.timingSafeEqual(Buffer.from(scanned), Buffer.from(expected));
+      if (!genuine) {
+        throw httpErr(`${box.shipmentBoxId} could not be verified — scan the printed label.`, 409);
+      }
     }
     const summary = boxSummary(box);
     return {
