@@ -181,3 +181,48 @@ describe("list / get / update / duplicate-check", () => {
     expect(empty.body).toEqual({ success: true, count: 0, data: [] });
   });
 });
+
+
+describe('admin variant measurements', () => {
+  const measurements = { packagingType: 'Bottle', unit: 'Liters', unitValue: 2, length: 10, width: 8, height: 20, dimensionUnit: 'cm', weight: 2.5, weightUnit: 'kg' };
+  test('multipart Add, Edit and reload preserve independent measurements and product fields', async () => {
+    const variants = [{ label: 'Small', sku: 'SM', measurements }, { label: 'Large', sku: 'LG', measurements: { ...measurements, unitValue: 5, weight: 6 } }];
+    let req = request(app).post('/api/admin/products').set(auth(adminToken()));
+    for (const [key, value] of Object.entries(validBody({ unit: 'Kilograms', unitValue: 25 }))) req = req.field(key, String(value));
+    const added = await req.field('variants', JSON.stringify(variants));
+    expect(added.status).toBe(201);
+    expect(added.body.data.variants[0].measurements).toEqual(measurements);
+    expect(added.body.data.variants[1].measurements.unitValue).toBe(5);
+    variants[0].measurements = { ...measurements, length: 12 };
+    const edited = await request(app).put('/api/admin/products/' + added.body.data._id).set(auth(adminToken())).field('variants', JSON.stringify(variants));
+    expect(edited.status).toBe(200);
+    const loaded = await request(app).get('/api/admin/products/' + added.body.data._id).set(auth(adminToken()));
+    expect(loaded.body.data.variants[0].measurements.length).toBe(12);
+    expect(loaded.body.data.variants[1].measurements.unitValue).toBe(5);
+    expect(loaded.body.data.unitValue).toBe(25);
+    expect(Product.schema.path('variants').schema.path('measurements').options.default).toBeUndefined();
+    expect(Product.schema.path('variants').schema).not.toBe(AdminProduct.schema.path('variants').schema);
+    expect(await Product.countDocuments()).toBe(0);
+  });
+  test.each([
+    { ...measurements, length: 0 }, { ...measurements, weight: -1 },
+    { ...measurements, width: undefined }, { ...measurements, unitValue: '' },
+    { ...measurements, unit: 'Pieces', unitValue: 1.5 },
+    { ...measurements, dimensionUnit: 'bad' }, {},
+  ])('rejects invalid measurements on Add and Edit: %j', async (bad) => {
+    const created = await request(app).post('/api/admin/products').set(auth(adminToken())).send(validBody());
+    const body = validBody({ variants: [{ label: 'Bad', measurements: bad }] });
+    const added = await request(app).post('/api/admin/products').set(auth(adminToken())).send(body);
+    expect(added.status).toBe(400);
+    expect(added.body.errors.length).toBeGreaterThan(0);
+    const edited = await request(app).put('/api/admin/products/' + created.body.data._id).set(auth(adminToken())).send(body);
+    expect(edited.status).toBe(400);
+  });
+  test('legacy variant can be edited without measurements', async () => {
+    const added = await request(app).post('/api/admin/products').set(auth(adminToken())).send(validBody({ variants: [{ label: 'Legacy', sku: 'OLD' }] }));
+    expect(added.status).toBe(201);
+    const edited = await request(app).put('/api/admin/products/' + added.body.data._id).set(auth(adminToken())).send({ variants: [{ label: 'Legacy', sku: 'NEW' }] });
+    expect(edited.status).toBe(200);
+    expect(edited.body.data.variants[0].measurements).toBeUndefined();
+  });
+});

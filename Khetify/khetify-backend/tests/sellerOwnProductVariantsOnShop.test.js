@@ -183,3 +183,51 @@ describe("the company product keeps behaving exactly as before", () => {
     expect(Object.keys(a.variants[0]).sort()).toEqual(Object.keys(b.variants[0]).sort());
   });
 });
+
+
+describe('saved variant measurements reach customer specifications', () => {
+  test('measurements are projected per variant without changing price, image or checkout fields', async () => {
+    const small = { packagingType: 'Bottle', unit: 'Liters', unitValue: 2, length: 10, width: 8, height: 20, dimensionUnit: 'cm', weight: 2.5, weightUnit: 'kg' };
+    const large = { ...small, unit: 'Pieces', unitValue: 12, weight: 6 };
+    const product = await createOwn({ unit: 'Kilograms', unitValue: 99, variants: [
+      { ...TWO_VARIANTS[0], mrp: 150, images: ['uploads/products/red.jpg'], measurements: small },
+      { ...TWO_VARIANTS[1], mrp: 300, measurements: large },
+      { label: 'Legacy', sku: 'OLD' },
+    ] });
+    const listing = await publishOwn(product._id);
+    for (const lang of ['en', 'hi']) {
+      const shown = await shop.getProduct(String(listing._id), lang);
+      expect(shown.variants[0].measurements).toEqual(small);
+      expect(shown.variants[1].measurements).toEqual(large);
+      expect(shown.variants[2]).not.toHaveProperty('measurements');
+      expect(shown.unit).toBe('Kilograms');
+      expect(shown.unitValue).toBe(99);
+      expect(shown.variants[0].mrp).toBe(150);
+      expect(shown.variants[0].images).toEqual(['uploads/products/red.jpg']);
+      expect(shown.variants[0].sku).toBe('UREA-RED');
+      expect(shown.variants[0].attributes).toEqual({ Color: 'red' });
+    }
+    const checkout = await shop.resolveForCheckout([String(listing._id)]);
+    expect(checkout.get(String(listing._id)).variants.map(v => v.mrp)).toEqual([150, 300, null]);
+  });
+  test('legacy products and variants do not acquire invented measurements', async () => {
+    const product = await createOwn({ unit: 'Grams', unitValue: 50, variants: TWO_VARIANTS });
+    const listing = await publishOwn(product._id);
+    const shown = await shop.getProduct(String(listing._id));
+    expect(shown.variants.every(v => !Object.hasOwn(v, 'measurements'))).toBe(true);
+  });
+});
+
+test('legacy dimensions stored in the raw seller record are not dropped by shop mapping', async () => {
+  const product = await createOwn({ variants: TWO_VARIANTS });
+  const saved = { packagingType: 'HDPE Bag', unit: 'Grams', unitValue: 5, length: 5, width: 5, height: 5, dimensionUnit: 'cm', weight: 5, weightUnit: 'kg' };
+  await Product.collection.updateOne({ _id: product._id }, { $set: { 'variants.0.dimensions': saved } });
+  const listing = await publishOwn(product._id);
+  const shown = await shop.getProduct(String(listing._id));
+  expect(shown.variants[0].measurements).toEqual(saved);
+  expect(shown.variants[1].measurements).toBeUndefined();
+  await Product.collection.updateOne({ _id: product._id }, { $set: { 'variants.0.measurements': { packagingType: 'Pouch', unit: 'Kilograms', unitValue: 2 } } });
+  const canonical = await shop.getProduct(String(listing._id));
+  expect(canonical.variants[0].measurements).toMatchObject({ packagingType: 'Pouch', unit: 'Kilograms', unitValue: 2 });
+  expect(canonical.variants[0].measurements.length).toBeUndefined();
+});

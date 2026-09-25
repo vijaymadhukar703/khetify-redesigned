@@ -14,6 +14,11 @@ const Product = require("../Company/productModel");
  * company a library product belongs to is recorded as plain text instead.
  */
 const schema = Product.schema.clone(); // same fields + product_code hook
+// Clone the nested schema explicitly: shared Product variants stay unchanged.
+const adminVariant = Product.schema.path('variants').schema.clone();
+const measurementsSchema = require("../variantMeasurementsSchema");
+adminVariant.add({ measurements: { type: measurementsSchema, default: undefined } });
+schema.path('variants', [adminVariant]);
 schema.remove(["companyId", "ownerType", "sellerId"]);
 schema.add({
   companyName: { type: String, trim: true, required: true },
