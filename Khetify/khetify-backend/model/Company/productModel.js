@@ -4,6 +4,9 @@ const { generateUniqueProductCode } = require("../../services/productCodeService
 // ================= VARIANT SCHEMA =================
 
 const variantSchema = new mongoose.Schema({
+  // Optional nested data copied from the admin library by seller forms.
+  // No default object: existing company/seller variants remain valid and unchanged.
+  measurements: { type: require('../variantMeasurementsSchema'), default: undefined },
   // Human-readable combination label, e.g. "500g / Red"
   label: { type: String, required: true },
 

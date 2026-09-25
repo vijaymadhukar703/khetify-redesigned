@@ -1,5 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Swal from 'sweetalert2';
+import VariantMeasurements from '../admin/VariantMeasurements.jsx';
+import { measurementError } from '../admin/variantMeasurements.js';
+import { hydrateSellerVariant, sellerVariantPayload } from './sellerVariantRows.js';
 import 'sweetalert2/dist/sweetalert2.min.css';
 import 'animate.css';
 import { ChevronDown, X } from 'lucide-react';
@@ -369,6 +372,7 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
   const [attrs, setAttrs] = useState([]);
   // Each row: { label, attrMap, sku, mrp }
   const [variantRows, setVariantRows] = useState([]);
+  const [expandedVariant, setExpandedVariant] = useState(null);
 
   /* PRODUCT GALLERY, in the same two halves the company edit form uses:
        keptImages  — server paths ("uploads/products/x.jpg") already on the
@@ -463,20 +467,7 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
             }
           }
           setAttrs([...byName.entries()].map(([name, values]) => ({ id: attrId.current++, name, values, draft: '' })));
-          setVariantRows(rows.map(v => ({
-            label: v.label,
-            attrMap: v.attributes || {},
-            sku: v.sku || '',
-            mrp: v.mrp ?? '',
-            // The photos already on the variant, re-sent on save so an edit
-            // that adds one does not drop the rest. `images` is the new list;
-            // a variant saved before multi-image has only the single `image`,
-            // which is folded in here so it is never lost.
-            keptImages: v.images?.length ? [...v.images] : (v.image ? [v.image] : []),
-            // Files picked in this session, with their object URLs.
-            newFiles: [],
-            newPreviews: [],
-          })));
+          setVariantRows(rows.map(hydrateSellerVariant));
         }
       })
       .catch(() => {
@@ -566,6 +557,7 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
           attrMap,
           sku: existing?.sku ?? autoSku(formData.product_name, combo),
           mrp: existing?.mrp ?? formData.mrp ?? '',
+          measurements: existing?.measurements,
           keptImages: existing?.keptImages ?? [],
           newFiles: existing?.newFiles ?? [],
           newPreviews: existing?.newPreviews ?? [],
@@ -820,6 +812,10 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
     if (!Number.isInteger(days)) return 'Shelf Life must be a whole number of days.';
 
     if (formData.has_variants === 'yes') {
+      for (const row of variantRows) {
+        const error = measurementError(row.measurements);
+        if (error) { setExpandedVariant(row.label); return 'Variant ' + row.label + ': ' + error; }
+      }
       const filled = attrs.filter(a => a.name.trim() && a.values.length > 0);
       if (!filled.length) return 'Add at least one variant attribute with a name and one value, or answer "No".';
       const names = filled.map(a => a.name.trim().toLowerCase());
@@ -902,16 +898,7 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
          advances once per appended file and the append loop below walks the rows
          in the same order, which is what keeps red's photos on red. */
       let fileIdx = 0;
-      const variantPayload = variantRows.map((r) => ({
-        label: r.label,
-        attributes: r.attrMap,
-        sku: r.sku,
-        mrp: num(r.mrp),
-        // The photos already saved on this variant, re-sent so they survive.
-        images: r.keptImages,
-        // Positions of this variant's NEW files in the combined upload list.
-        imageIndexes: r.newFiles.map(() => fileIdx++),
-      }));
+      const variantPayload = variantRows.map(r => sellerVariantPayload(r, () => fileIdx++));
       data.append('variants', JSON.stringify(variantPayload));
       // SAME ROW ORDER as the index assignment above.
       variantRows.forEach((r) => r.newFiles.forEach((f) => data.append('variantImages', f)));
@@ -1577,7 +1564,7 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
 
                     <div className="rounded-xl border border-stone-200 overflow-hidden">
                      <div className="overflow-x-auto">
-                      <div className="min-w-[760px]">
+                      <div className="min-w-[880px]">
                       {/* Table header.
 
                           NO STOCK COLUMN — unlike the company table, which keeps
@@ -1587,17 +1574,18 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
                           a second, parallel number that nothing reconciles. The
                           API agrees: it does not accept a variant `stock` at all,
                           so every variant stays at the schema default of 0. */}
-                      <div className="grid grid-cols-[120px_140px_92px_minmax(320px,1fr)] bg-stone-100 border-b border-stone-200 px-4 py-2.5 gap-3">
+                      <div className="grid grid-cols-[120px_140px_92px_minmax(320px,1fr)_100px] bg-stone-100 border-b border-stone-200 px-4 py-2.5 gap-3">
                         <span className="text-[10px] font-black uppercase tracking-widest text-stone-400">Variant</span>
                         <span className="text-[10px] font-black uppercase tracking-widest text-stone-400">SKU</span>
                         <span className="text-[10px] font-black uppercase tracking-widest text-stone-400">MRP (₹)</span>
                         <span className="text-[10px] font-black uppercase tracking-widest text-stone-400">Photo</span>
+                        <span className="text-[10px] font-black uppercase tracking-widest text-stone-400">Dimensions</span>
                       </div>
                       {/* Table rows */}
                       {variantRows.map((row, i) => (
                         <div
                           key={row.label}
-                          className={`grid grid-cols-[120px_140px_92px_minmax(320px,1fr)] gap-3 px-4 py-3 items-center ${
+                          className={`grid grid-cols-[120px_140px_92px_minmax(320px,1fr)_100px] gap-3 px-4 py-3 items-center ${
                             i % 2 === 0 ? 'bg-white' : 'bg-stone-50/50'
                           } ${i < variantRows.length - 1 ? 'border-b border-stone-100' : ''}`}
                         >
@@ -1726,6 +1714,17 @@ const SellerMyProductForm = ({ productId = null, onCancel, onSaved }) => {
                               </p>
                             )}
                           </div>
+                          <button type="button" className="rounded-lg border border-stone-200 p-2 text-[#EA2831] text-xl font-bold"
+                            aria-label={'Dimensions for ' + row.label} aria-expanded={expandedVariant === row.label}
+                            aria-controls={'my-product-variant-measurements-' + i}
+                            onClick={() => setExpandedVariant(current => current === row.label ? null : row.label)}>+</button>
+                          {expandedVariant === row.label && (
+                            <div id={'my-product-variant-measurements-' + i} className="col-span-full border-t border-stone-100 bg-white p-4">
+                              <VariantMeasurements value={row.measurements} units={UNIT_OPTIONS} idPrefix={'my-product-variant-' + i}
+                                ThemedSelect={ThemedSelect} inputClass={inputClass} labelClass={labelClass} hintClass={hintClass}
+                                onChange={measurements => patchVariantRow(row.label, { measurements })} />
+                            </div>
+                          )}
                         </div>
                       ))}
                       </div>

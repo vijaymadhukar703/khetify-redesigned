@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import Swal from 'sweetalert2';
+import CompanyVariantMeasurements from './CompanyVariantMeasurements.jsx';
+import { measurementError, measurementPayload } from '../admin/variantMeasurements.js';
 import 'sweetalert2/dist/sweetalert2.min.css'; 
 import 'animate.css'; 
 import config from "../../../config/config";
@@ -226,6 +228,7 @@ const CompanyUploadProduct = () => {
   // Each row: { label, attrMap, sku, mrp, stock }
   // Auto-computed from bulkAttrs; existing edits are preserved when attrs change.
   const [variantRows, setVariantRows] = useState([]);
+  const [expandedVariant, setExpandedVariant] = useState(null);
 
   const patchVariantRow = (label, patch) =>
     setVariantRows(prev => prev.map(r => (r.label === label ? { ...r, ...patch } : r)));
@@ -412,6 +415,7 @@ const CompanyUploadProduct = () => {
           sku: existing?.sku ?? autoSku(formData.product_name, combo),
           mrp: existing?.mrp ?? formData.mrp ?? '',
           stock: existing?.stock ?? '',
+          measurements: existing?.measurements,
           newFiles: existing?.newFiles ?? [],
           newPreviews: existing?.newPreviews ?? [],
         };
@@ -703,6 +707,13 @@ const CompanyUploadProduct = () => {
 
   const handleSubmit = async (e, uploadStatus = 'uploaded') => {
     if (e) e.preventDefault();
+    for (const row of variantRows) {
+      const problem = measurementError(row.measurements);
+      if (problem) {
+        setExpandedVariant(row.label);
+        return Swal.fire({ title: 'Check variant measurements', text: row.label + ': ' + problem, icon: 'warning' });
+      }
+    }
 
     if (uploadStatus !== 'draft') {
       const problem = validateForUpload();
@@ -780,6 +791,7 @@ const CompanyUploadProduct = () => {
       let fileIdx = 0;
       data.append('variants', JSON.stringify(
         variantRows.map((r) => ({
+          ...measurementPayload(r.measurements),
           label: r.label,
           attributes: r.attrMap,
           sku: r.sku,
@@ -1498,20 +1510,22 @@ const CompanyUploadProduct = () => {
                         </div>
                       </div>
 
-                      <div className="rounded-xl border border-stone-200 overflow-hidden">
+                      <div className="rounded-xl border border-stone-200 overflow-x-auto">
+                        <div className="min-w-[880px]">
                         {/* Table header */}
-                        <div className="grid grid-cols-[1.5fr_1.5fr_1fr_1fr_72px] bg-stone-100 border-b border-stone-200 px-4 py-2.5 gap-3">
+                        <div className="grid grid-cols-[1.5fr_1.5fr_1fr_1fr_72px_100px] bg-stone-100 border-b border-stone-200 px-4 py-2.5 gap-3">
                           <span className="text-[10px] font-black uppercase tracking-widest text-stone-400">Variant</span>
                           <span className="text-[10px] font-black uppercase tracking-widest text-stone-400">SKU</span>
                           <span className="text-[10px] font-black uppercase tracking-widest text-stone-400">MRP (₹)</span>
                           <span className="text-[10px] font-black uppercase tracking-widest text-stone-400">Stock</span>
                           <span className="text-[10px] font-black uppercase tracking-widest text-stone-400">Photo</span>
+                          <span className="text-[10px] font-black uppercase tracking-widest text-stone-400">Dimensions</span>
                         </div>
                         {/* Table rows */}
                         {variantRows.map((row, i) => (
                           <div
                             key={row.label}
-                            className={`grid grid-cols-[1.5fr_1.5fr_1fr_1fr_72px] gap-3 px-4 py-3 items-center ${
+                            className={`grid grid-cols-[1.5fr_1.5fr_1fr_1fr_72px_100px] gap-3 px-4 py-3 items-center ${
                               i % 2 === 0 ? 'bg-white' : 'bg-stone-50/50'
                             } ${i < variantRows.length - 1 ? 'border-b border-stone-100' : ''}`}
                           >
@@ -1594,8 +1608,16 @@ const CompanyUploadProduct = () => {
                                 </p>
                               )}
                             </div>
+                            <button type="button" className="rounded-lg border border-stone-200 p-2 text-xl font-bold text-[#EA2831]"
+                              aria-label={'Dimensions for ' + row.label} aria-expanded={expandedVariant === row.label}
+                              onClick={() => setExpandedVariant(current => current === row.label ? null : row.label)}>+</button>
+                            {expandedVariant === row.label && <div className="col-span-full border-t border-stone-100 bg-white p-4">
+                              <CompanyVariantMeasurements value={row.measurements} idPrefix={'company-upload-variant-' + i}
+                                onChange={measurements => patchVariantRow(row.label, { measurements })} />
+                            </div>}
                           </div>
                         ))}
+                        </div>
                       </div>
                     </div>
                   )}

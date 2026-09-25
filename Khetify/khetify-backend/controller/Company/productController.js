@@ -495,20 +495,11 @@ exports.updateProduct = async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(productId)) {
       return res.status(400).json({ success: false, message: "Invalid product ID" });
     }
-    // The edit form loads the product with companyId POPULATED (an object), so
-    // multipart form-data stringifies it to the literal "[object Object]".
-    // Validate only a real ObjectId; anything else is dropped so the product
-    // keeps its existing company (a product's owner never changes on edit).
-    // Without this, Company.findById("[object Object]") throws a CastError on
-    // path _id ("Invalid value for _id: [object Object]").
-    if (req.body.companyId && mongoose.Types.ObjectId.isValid(req.body.companyId)) {
-      const company = await Company.findById(req.body.companyId);
-      if (!company) {
-        return res.status(404).json({ success: false, message: "Company not found" });
-      }
-    } else {
-      delete req.body.companyId;
-    }
+    // Ownership is immutable on edit. Older clients send null/empty sellerId
+    // and populated companyId; never cast or apply these client-owned values.
+    delete req.body.companyId;
+    delete req.body.sellerId;
+    delete req.body.ownerType;
     const existingProduct = await Product.findById(productId);
     if (!existingProduct) {
       return res.status(404).json({ success: false, message: "Product not found" });
