@@ -199,18 +199,7 @@ const CompanyProductCatalog = () => {
     setPage(1);
   }, [searchTerm, categoryFilter, statusFilter]);
 
-  useEffect(() => {
-    const fonts = [
-      "https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&family=Sora:wght@400;600;700&display=swap",
-      "https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@100..700&display=swap"
-    ];
-    fonts.forEach(url => {
-      const link = document.createElement("link");
-      link.href = url;
-      link.rel = "stylesheet";
-      document.head.appendChild(link);
-    });
-  }, []);
+  
 
   const nextImage = (e) => {
     e.stopPropagation();

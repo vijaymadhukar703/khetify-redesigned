@@ -4,6 +4,9 @@ import Swal from 'sweetalert2';
 import { Modal, Field, inputCls, PrimaryBtn, GhostBtn, Th } from '../Company/ims/ImsUi';
 import { ManifestModal } from '../../Components/ims/TransferModals';
 import ScanBox from '../../Components/ims/ScanBox';
+
+import { useSellerSubscription } from '../../context/SellerSubscriptionContext';
+
 // SELLER WAREHOUSE → WAREHOUSE TRANSFER. Its own scan → box → dispatch popup and
 // its own box-label receive popup, modelled on the COMPANY warehouse transfer
 // (DispatchScanModal / ReceiveModal in pages/Company/ims/ImsTransport.jsx).
@@ -165,7 +168,10 @@ const SellerOperations = () => {
   // Warehouse work is for whoever may actually move stock. Anyone without
   // transfer:create (seller_admin, seller_staff) gets the review-only set.
   const allowedTabs = canWrite ? WAREHOUSE_TABS : SELLER_ADMIN_TABS;
-  const tabs = TAB_DEFS.filter((t) => allowedTabs.includes(t.key));
+    // Free plan (no subscription): hide the Receive Stock tab.
+  const { sellerPlan, loading: planLoading } = useSellerSubscription();
+  const isFreePlan = !planLoading && sellerPlan === 'free';
+  const tabs = TAB_DEFS.filter((t) => allowedTabs.includes(t.key) && !(isFreePlan && t.key === 'receive'));
   // A hand-typed ?tab=send falls back to the first tab this role may see.
   const active = tabs.find((t) => t.key === params.get('tab')) || tabs[0];
   const myWh = (warehouseIds || []).map(String);
@@ -1483,8 +1489,9 @@ const ShipmentsTab = ({ shipments, requests, canWrite, canActOn, onLabel, onRece
                     <td className="px-3 py-4 text-xs text-stone-500 align-top" data-label="Dispatched">{s.dispatchedAt ? fmtDate(s.dispatchedAt) : '—'}</td>
                     <td className="px-3 py-4 cell-actions align-top">
                       <div className="flex flex-wrap items-center justify-end gap-2">
-                        {s.qrToken && canActOn(s.fromWarehouseId) && (
-                          <GhostBtn onClick={() => onLabel(s)}>
+                        {/* SHIPPING LABEL — hidden for customer orders only. */}
+{s.qrToken && s.toType !== 'customer' && canActOn(s.fromWarehouseId) && (
+  <GhostBtn onClick={() => onLabel(s)}>
                             <span className="material-symbols-outlined text-sm">qr_code_2</span> Shipping Label
                           </GhostBtn>
                         )}
