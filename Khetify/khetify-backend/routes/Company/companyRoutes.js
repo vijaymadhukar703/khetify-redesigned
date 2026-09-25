@@ -13,6 +13,11 @@ const {
   updateImsSettings,
   getCompanyProfile,
   updateCompanyProfile,
+  sendCompanyPhoneOtp,
+  verifyCompanyPhoneOtp,
+  sendRegisterOtp,
+  verifyRegisterOtp,
+  resendRegisterOtp,
 } = require("../../controller/Company/companyController");
 const {
   listSellers,
@@ -24,7 +29,12 @@ const upload = require("../../middlewares/upload");
 const uploadDocuments = require("../../middlewares/uploadDocuments");
 
 // Auth
-router.post("/register", registerCompany);
+// OTP-based registration — 3 steps: send code, verify code (creates account), resend code.
+// Declared BEFORE the legacy /register so express matches these first.
+router.post("/register/send-otp",    sendRegisterOtp);
+router.post("/register/verify-otp",  verifyRegisterOtp);
+router.post("/register/resend-otp",  resendRegisterOtp);
+router.post("/register", registerCompany); // kept for backward compatibility
 router.post("/login", loginCompany);
 
 // Password reset (email link flow). forgot-password emails a one-time token;
@@ -37,13 +47,23 @@ router.post("/reset-password", resetPassword);
 // changing settings is owner-only (company:settings resolves only via the
 // company_admin/super_admin "*" wildcard).
 router.get("/settings/ims", authMiddleware, getImsSettings);
-router.put("/settings/ims", authMiddleware, authorize("company:settings"), updateImsSettings);
+router.put(
+  "/settings/ims",
+  authMiddleware,
+  authorize("company:settings"),
+  updateImsSettings,
+);
 
 // Own registration profile (identity + GSTIN/PAN + KYC docs as signed URLs).
 // Declared BEFORE "/:id" so "profile" isn't captured as an id. Resolved from
 // the token — any authenticated company member can view its own company; PATCH
 // edits identity/compliance + replaces docs (multipart → S3, stored as keys).
 router.get("/profile", authMiddleware, getCompanyProfile);
+
+// 📱 PHONE VERIFICATION. authMiddleware के पीछे — number token वाले account
+// का अपना है, body से नहीं आता. "/:id" से ऊपर, ताकि "profile" को id न समझा जाए.
+router.post("/profile/phone/send-otp", authMiddleware, sendCompanyPhoneOtp);
+router.post("/profile/phone/verify", authMiddleware, verifyCompanyPhoneOtp);
 router.patch(
   "/profile",
   authMiddleware,
@@ -64,7 +84,14 @@ router.patch(
 const loadSubscriptionMw = require("../../middlewares/loadSubscription");
 const requireFeatureMw = require("../../middlewares/requireFeature");
 const { FEATURES: PLAN_FEATURES } = require("../../config/plans");
-router.get("/sellers", authMiddleware, authorize("inventory:read"), loadSubscriptionMw, requireFeatureMw(PLAN_FEATURES.ADMINISTRATION), listSellers);
+router.get(
+  "/sellers",
+  authMiddleware,
+  authorize("inventory:read"),
+  loadSubscriptionMw,
+  requireFeatureMw(PLAN_FEATURES.ADMINISTRATION),
+  listSellers,
+);
 
 // Protected
 router.get("/", authMiddleware, getAllCompanies);

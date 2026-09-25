@@ -43,16 +43,16 @@ const WarehouseAnalyticsDetails = () => {
       .catch((e) => {
         if (cancelled) return;
         setD(null);
-        setErr(e?.response?.data?.message || 'Could not load this analytics record.');
+        setErr(e?.response?.data?.message || 'Could not load this stock valuation record.');
         setLoadedFor(lotId);
       });
     return () => { cancelled = true; };
   }, [lotId]);
 
-  const back = { backTo: '/analytics', backLabel: 'Back to Analytics' };
+  const back = { backTo: '/analytics', backLabel: 'Back to Stock Valuation' };
   if (loading) return <AnalyticsDetailsShell {...back}><p className="mt-6 text-sm text-stone-400">Loading…</p></AnalyticsDetailsShell>;
   if (err) return <AnalyticsDetailsShell {...back}><p className="mt-6 text-sm text-stone-500">{err}</p></AnalyticsDetailsShell>;
-  if (!d?.lot) return <AnalyticsDetailsShell {...back}><p className="mt-6 text-sm text-stone-500">This analytics record could not be loaded.</p></AnalyticsDetailsShell>;
+  if (!d?.lot) return <AnalyticsDetailsShell {...back}><p className="mt-6 text-sm text-stone-500">This stock valuation record could not be loaded.</p></AnalyticsDetailsShell>;
 
   const lot = d.lot;
   const p = lot.productId || {};

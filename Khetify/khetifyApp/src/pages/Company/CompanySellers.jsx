@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import Swal from 'sweetalert2';
 import { useNavigate } from 'react-router-dom';
 import { getCompanySellers } from '../../lib/imsApi';
-import BackButton from '../../Components/BackButton';
+
 
 const toast = (icon, title) => Swal.fire({ icon, title, toast: true, position: 'top-end', timer: 2200, showConfirmButton: false });
 const apiError = (err) => toast('error', err?.response?.data?.message || err.message || 'Something went wrong');
@@ -28,7 +28,7 @@ const CompanySellers = () => {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-8 py-6 font-sora">
-      <BackButton />
+     
       <div className="flex items-start justify-between gap-3 mb-1">
         <h1 className="text-2xl font-bold text-stone-900">Sellers</h1>
         <button onClick={() => navigate('/pc-applications')} className="text-xs font-bold px-3.5 py-2 rounded-lg border border-[#EA2831] text-[#EA2831] hover:bg-red-50 transition-colors">

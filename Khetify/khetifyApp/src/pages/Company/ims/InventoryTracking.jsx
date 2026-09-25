@@ -61,14 +61,23 @@ const InventoryTracking = () => {
         {/* Main Company mints lots (Create) but doesn't perform receipts; the
             Company Warehouse never mints a lot — its "Receive Lot" scans an
             incoming parent lot and confirms the transfer into this warehouse. */}
-        {/* Main Company reads its Inventory as the ORIGINAL LOT REGISTER: the
-            lots it minted, at their created quantity. The Company Warehouse keeps
-            the live-stock view — same component, flag off. */}
+        {/* The Main Company reads its Inventory as the ORIGINAL LOT REGISTER —
+            the lots it minted, at their created quantity. That is now its ONLY
+            reading: warehouse-by-warehouse live stock is shown elsewhere in the
+            app, and repeating it here produced a duplicate row per warehouse for
+            the same lot. The Company Warehouse keeps the live-stock view — same
+            component, flag off. */}
         {/* No warehouse yet → Lot creation is unavailable. Only the main Company
             is gated: a Company Warehouse user is, by definition, attached to one,
             and the check runs on the company-wide directory. If the lookup could
             not complete (whChecked false) the page renders normally and the
             backend rejects any lot creation. */}
+        {/* No tab bar for either role now. Neither reads ?tab, so a stale
+            param cannot change what renders. */}
+        {isMainCompany && (
+          <p className="text-stone-500 mb-5">Every lot you created, at its created quantity.</p>
+        )}
+
         {isMainCompany && whChecked && !hasWarehouse ? (
           <div className="py-6">
             <NoWarehouseNotice />

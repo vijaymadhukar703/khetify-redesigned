@@ -12,6 +12,7 @@ import ErrorBoundary from './Components/ErrorBoundary';
 // 1. Basic & Marketing Pages
 import About from './pages/About';
 import CompanyAbout from './pages/Company/CompanyAbout';
+import GuidesPage from './pages/guides/GuidesPage';
 import CompanyRegister from './pages/Company/CompanyRegister';
 // CompanyLogin hataya gaya
 import CompanyRegisterSuccess from './pages/Company/CompanyRegisterSuccess';
@@ -86,22 +87,27 @@ import SellerCompanies from './pages/seller/SellerCompanies';
 import SellerCertifications from './pages/seller/SellerCertifications';
 import SellerWarehouses from './pages/seller/SellerWarehouses';
 import SellerProductCatalog from './pages/seller/SellerProductCatalog';
+import SellerMyProducts from './pages/seller/SellerMyProducts';
 import SellerListings from './pages/seller/SellerListings';
 import SellerSupply from './pages/seller/SellerSupply';
 import SellerInventory from './pages/seller/SellerInventory';
 import SellerLotDetails from './pages/seller/SellerLotDetails';
 import SellerOperations from './pages/seller/SellerOperations';
 import SellerDashboard from './pages/seller/SellerDashboard';
+import SellerDemandMonitor from './pages/seller/SellerDemandMonitor';
 import SellerAnalytics from './pages/seller/SellerAnalytics';
 import SellerAnalyticsDetails from './pages/seller/SellerAnalyticsDetails';
 import SellerLabels from './pages/seller/SellerLabels';
+import SellerPos from './pages/seller/SellerPos';
 import SellerCustomers from './pages/seller/SellerCustomers';
 import SellerOutbound from './pages/seller/SellerOutbound';
 import SellerBilling from './pages/seller/SellerBilling';
 import SellerTeam from './pages/seller/SellerTeam';
 import SellerAdministration from './pages/seller/SellerAdministration';
 import SellerProfile from './pages/seller/SellerProfile';
+import SellerWarehouseSettings from './pages/seller/SellerWarehouseSettings';
 import SellerFaq from './pages/seller/SellerFaq';
+import SellerStockRequests from './pages/seller/SellerStockRequests';
 import { SellerSubscriptionProvider } from './context/SellerSubscriptionContext';
 import { SellerPermissionProvider } from './context/SellerPermissionContext';
 
@@ -114,6 +120,7 @@ import AdminDashboard from './pages/admin/AdminDashboard';
 import AdminCompanies from './pages/admin/AdminCompanies';
 import AdminCompanyDetail from './pages/admin/AdminCompanyDetail';
 import AdminSupportChats from './pages/admin/AdminSupportChats';
+import AdminProducts from './pages/admin/AdminProducts';
 import AdminPlaceholder from './pages/admin/AdminPlaceholder';
 
 // 🛒 Customer storefront (/customer-shop/*): public browse + guest cart +
@@ -126,16 +133,29 @@ import ShopHome from './pages/shop/ShopHome';
 import ShopProducts from './pages/shop/ShopProducts';
 import ShopProductDetail from './pages/shop/ShopProductDetail';
 import ShopCart from './pages/shop/ShopCart';
+import ShopNotifications from './pages/shop/ShopNotifications';
 import ShopLogin from './pages/shop/ShopLogin';
 import ShopRegister from './pages/shop/ShopRegister';
+
+
+import ShopRegister_Nykaa_Final from './Components/shop/ShopRegister_Nykaa_Final';  //added by vijay
+
 import ShopWishlist from './pages/shop/ShopWishlist';
 import ShopDashboard from './pages/shop/ShopDashboard';
 import ShopCheckout from './pages/shop/ShopCheckout';
 import ShopOrderSuccess from './pages/shop/ShopOrderSuccess';
+// 💳 Payment screen (online payment lane). Renders whichever gateway the
+//    server has live — Razorpay, or the built-in mock when no keys are set.
+//    Chrome-less like order-success: nothing to wander off to mid-transaction.
+import ShopPayment from './pages/shop/ShopPayment';
+// 🧾 COD confirmation screen — the COD twin of the payment screen, so both
+//    payment lanes get a final look before anything is committed.
+import ShopConfirmOrder from './pages/shop/ShopConfirmOrder';
 import ShopOrders from './pages/shop/ShopOrders';
 import ShopOrderDetail from './pages/shop/ShopOrderDetail';
 import ShopProfile from './pages/shop/ShopProfile';
 import ShopCategories from './pages/shop/ShopCategories';
+import ShopForgotPassword from './pages/shop/Shopforgotpassword';
 
 
 import { useShopAuth } from "./context/ShopAuthContext"; // Aapke auth context ka sahi path
@@ -191,7 +211,8 @@ function App() {
       <ErrorBoundary>
       <Routes>
         {/* Default Path Redirect -> About Page */}
-        <Route path="/" element={<Navigate to="/about" replace />} />
+        {/* <Route path="/" element={<Navigate to="/about" replace />} /> */}
+        <Route path="/" element={<Navigate to="/customer-shop" replace />} />
 
         {/* Driver mobile app (standalone, phone + PIN login) */}
         <Route path="/driver" element={<DriverApp />} />
@@ -199,6 +220,7 @@ function App() {
         {/* Auth & Marketing Routes */}
         <Route path="/about" element={<About />} />
         <Route path="/company-about" element={<CompanyAbout />} />
+        <Route path="/guides/:type" element={<GuidesPage />} />
         <Route path="/seller-about" element={<SellerAbout />} />
         <Route path="/register" element={<CompanyRegister />} />
         <Route path="/login" element={<CompanyLogin />} />
@@ -318,8 +340,15 @@ function App() {
         <Route element={<RequireSeller><SellerSubscriptionProvider><SellerPermissionProvider><SellerLayout /></SellerPermissionProvider></SellerSubscriptionProvider></RequireSeller>}>
           <Route path="/seller/hub" element={<SellerHub />} />
           <Route path="/seller/profile" element={<SellerProfile />} />
+          {/* SELLER WAREHOUSE — Account Settings (Change / Forgot password).
+              Inside the seller layout, so it inherits the same auth guard and
+              chrome as every other seller page. The menu entry that reaches it
+              is warehouse-role only; the route itself stays plain, exactly like
+              the company Warehouse Settings route. */}
+          <Route path="/seller/settings" element={<SellerWarehouseSettings />} />
           <Route path="/seller/admin" element={<SellerAdministration />} />
           <Route path="/seller/dashboard" element={<SellerDashboard />} />
+          <Route path="/seller/demand-monitor" element={<RequireSeller><SellerDemandMonitor /></RequireSeller>} />
           <Route path="/seller/analytics" element={<SellerAnalytics />} />
           {/* Seller AND Seller Warehouse — one page; the warehouse scope is
               applied server-side from the token. */}
@@ -329,6 +358,7 @@ function App() {
           <Route path="/seller/team" element={<SellerTeam />} />
           <Route path="/seller/warehouses" element={<SellerWarehouses />} />
           <Route path="/seller/products" element={<SellerProductCatalog />} />
+          <Route path="/seller/my-products" element={<SellerMyProducts />} />
           <Route path="/seller/listings" element={<SellerListings />} />
           <Route path="/seller/supply" element={<SellerSupply />} />
           <Route path="/seller/inventory" element={<SellerInventory />} />
@@ -338,10 +368,13 @@ function App() {
           {/* Transfers now live inside the unified Operations module. */}
           <Route path="/seller/transfers" element={<Navigate to="/seller/operations?tab=shipments" replace />} />
           <Route path="/seller/labels" element={<SellerLabels />} />
+          <Route path="/seller/pos" element={<SellerPos />} />
           <Route path="/seller/customers" element={<SellerCustomers />} />
           <Route path="/seller/outbound" element={<SellerOutbound />} />
           <Route path="/seller/billing" element={<SellerBilling />} />
           <Route path="/seller/faq" element={<SellerFaq />} />
+          <Route path="/seller/billing" element={<SellerBilling />} />
+          <Route path="/seller/stock-requests" element={<SellerStockRequests />} />
         </Route>
 
         {/* ───────────── Platform admin panel (/admin/*) ───────────── */}
@@ -354,6 +387,7 @@ function App() {
           <Route path="/admin/companies" element={<AdminCompanies />} />
           <Route path="/admin/companies/:id" element={<AdminCompanyDetail />} />
           <Route path="/admin/support" element={<AdminSupportChats />} />
+          <Route path="/admin/my-products" element={<AdminProducts />} />
           {/* UI-only sections + quick filters — present so navigation never breaks */}
           <Route path="/admin/sellers" element={<AdminPlaceholder title="Sellers" subtitle="Review and approve registered sellers." icon="storefront" />} />
           <Route path="/admin/pending" element={<Navigate to="/admin/companies?status=pending" replace />} />
@@ -380,9 +414,17 @@ function App() {
           <Route path="orders/:id" element={<RequireConsumer><ShopOrderDetail /></RequireConsumer>} />
           <Route path="profile" element={<RequireConsumer><ShopProfile /></RequireConsumer>} />
           <Route path="checkout" element={<RequireConsumer><ShopCheckout /></RequireConsumer>} />
+          {/* 💳 Online payment. Sits OUTSIDE ShopLayout for the same reason
+              order-success does. No order exists yet at this point — the
+              server creates it only once the payment succeeds. */}
+          <Route path="payment/:paymentId" element={<RequireConsumer><ShopPayment /></RequireConsumer>} />
+          {/* 🧾 COD confirmation. Outside ShopLayout for the same reason as the
+              payment screen: nothing to wander off to mid-commit. */}
+          <Route path="confirm" element={<RequireConsumer><ShopConfirmOrder /></RequireConsumer>} />
           <Route path="login" element={<ShopLogin />} />
-          <Route path="register" element={<ShopRegister />} />
-            
+
+          {/* <Route path="register" element={<ShopRegister />} />  commented by vijay*/}
+             <Route path="register" element={<ShopRegister_Nykaa_Final />} />    {/* added by vijay */}
 
           {/* ── Everything else gets the full storefront chrome ── */}
           <Route element={<ShopLayout />}>
@@ -396,7 +438,9 @@ function App() {
             <Route path="wishlist" element={<ShopWishlist />} />
             <Route path="orders" element={<RequireConsumer><ShopOrders /></RequireConsumer>} />
              <Route path="categories" element={<ShopCategories />} />
-           
+            <Route path="orders" element={<RequireConsumer><ShopOrders /></RequireConsumer>} />
+            <Route path="notifications" element={<RequireConsumer><ShopNotifications /></RequireConsumer>} />
+
             
             {/* Unknown /customer-shop/* → storefront home */}
             <Route path="*" element={<Navigate to="/customer-shop" replace />} />

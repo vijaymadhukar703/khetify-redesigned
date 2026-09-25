@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import BackButton from '../../Components/BackButton';
+
 import { getSupportTickets, createSupportTicket } from '../../lib/imsApi';
 
 // Must match the backend enum (model/Support/SupportTicket.js).
@@ -91,7 +91,7 @@ const CompanySupport = () => {
     <div className="flex-1 overflow-x-hidden overflow-y-auto p-4 sm:p-8 bg-white font-sora">
       <div className="max-w-7xl mx-auto w-full">
 
-        <BackButton />
+       
 
         {/* Header - Text alignment mobile par center ho sakti hai agar aap chahein */}
         <div className="mb-8 sm:mb-10">

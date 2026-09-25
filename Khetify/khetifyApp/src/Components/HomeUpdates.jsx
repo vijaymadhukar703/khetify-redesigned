@@ -32,7 +32,7 @@ const HomeUpdates = ({ items = [], unread = 0, markRead, markAll, resolveRoute, 
   };
 
   return (
-    <div className="bg-white border border-stone-200 rounded-2xl shadow-sm overflow-hidden">
+    <div className="bg-white border border-stone-200 rounded-2xl shadow-sm overflow-hidden mt-[30px]">
       <div className="flex items-center justify-between px-5 py-3.5 border-b border-stone-100">
         <p className="font-bold text-stone-900 text-sm flex items-center gap-2">
           <span className="material-symbols-outlined text-[20px] text-[#EA2831]">notifications_active</span>

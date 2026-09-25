@@ -25,7 +25,7 @@ const KEY = "khetify:buyNow";
 
 /** Shape a catalog product into a cart-style line. Mirrors CartContext.addItem
  *  exactly, so ShopCheckout can render either source with the same code. */
-export function toBuyNowItem(product, qty = 1) {
+export function toBuyNowItem(product, qty = 1, variant = null) {
   const max =
     Number.isFinite(product.availableStock) && product.availableStock > 0
       ? product.availableStock
@@ -33,12 +33,21 @@ export function toBuyNowItem(product, qty = 1) {
   const n = Math.max(1, Math.floor(Number(qty) || 1));
 
   return {
+    // Mirrors CartContext's line key so ShopCheckout can treat either source
+    // identically. Without a variant it is just the listingId, as before.
+    lineId: variant?.id ? `${product.listingId}::${variant.id}` : String(product.listingId),
     listingId: product.listingId,
     productId: product.productId,
     sellerId: product.sellerId,
+    // The chosen variant rides along, so buy-now buys the SAME thing the
+    // product page was showing. The server re-derives price/image from this id
+    // at checkout — these copies are for display only.
+    variantId: variant?.id || null,
+    variantLabel: variant?.label || null,
+    variantAttributes: variant?.attributes || null,
     name: product.name,
-    price: product.price,
-    image: product.images?.[0] || null,
+    price: variant?.mrp != null ? Number(variant.mrp) : product.price,
+    image: variant?.image || product.images?.[0] || null,
     unit: product.unit,
     sellerName: product.seller?.name,
     availableStock: Number.isFinite(product.availableStock) ? product.availableStock : null,

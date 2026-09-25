@@ -1,4 +1,5 @@
 import React from "react";
+import { useT } from "../../context/ShopLanguageContext";
 
 export default function SearchSuggestions({
   open,
@@ -16,6 +17,7 @@ export default function SearchSuggestions({
   overlayRef = null,
   className = "",
 }) {
+  const t = useT();
   const trimmedQuery = (query || "").trim();
   const hasQuery = trimmedQuery.length > 0;
 
@@ -24,7 +26,7 @@ export default function SearchSuggestions({
 const emptyStateClass = "px-4 py-6 text-sm text-stone-500 text-center font-medium";
   const renderBody = () => {
     if (loading) {
-      return <div className={emptyStateClass}>Searching products…</div>;
+      return <div className={emptyStateClass}>{t("search.searching")}</div>;
     }
 
     if (error) {
@@ -32,11 +34,11 @@ const emptyStateClass = "px-4 py-6 text-sm text-stone-500 text-center font-mediu
     }
 
     if (!hasQuery) {
-      return <div className={emptyStateClass}>Type a product name to see live suggestions.</div>;
+      return <div className={emptyStateClass}>{t("search.typeToSee")}</div>;
     }
 
     if (suggestions.length === 0) {
-      return <div className={emptyStateClass}>No results found</div>;
+      return <div className={emptyStateClass}>{t("search.noResults")}</div>;
     }
 
     return (
@@ -65,7 +67,7 @@ const emptyStateClass = "px-4 py-6 text-sm text-stone-500 text-center font-mediu
             <button
               type="button"
               onClick={onClose}
-              aria-label="Close search"
+              aria-label={t("search.close")}
               className="flex size-10 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-700 transition-colors hover:bg-stone-50"
             >
               <span className="material-symbols-outlined text-[22px]">arrow_back</span>
@@ -84,10 +86,10 @@ const emptyStateClass = "px-4 py-6 text-sm text-stone-500 text-center font-mediu
                     onClose?.();
                   }
                 }}
-                placeholder="Search products..."
+                placeholder={t("nav.searchPlaceholder")}
                 autoFocus
                 className="flex-1 bg-transparent text-sm text-stone-800 outline-none placeholder:text-stone-400"
-                aria-label="Search products"
+                aria-label={t("search.aria")}
               />
             </div>
           </div>

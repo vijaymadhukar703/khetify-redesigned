@@ -25,9 +25,39 @@ export const STATUS_BLURB = {
   confirmed: "The seller accepted your order and reserved your stock.",
   packed: "Your items are packed and waiting for pickup.",
   shipped: "Your order is on its way.",
-  delivered: "Delivered. Thanks for shopping with Khetify!",
+  delivered: "Delivered. Thanks for shopping with Khettify!",
   cancelled: "This order was cancelled.",
   returned: "This order was returned.",
+};
+
+/**
+ * TRANSLATION KEYS for the same vocabulary.
+ *
+ * The English maps above stay exactly as they are — they are the fallback and
+ * are still imported by screens that have not been translated yet. These key
+ * maps are what a translated screen resolves through t(), so the two order
+ * screens keep saying the same thing in whichever language is active.
+ *
+ * Keys, not strings, because this file is module scope: there is no t() here.
+ */
+export const STATUS_LABEL_KEY = {
+  pending: "status.pending",
+  confirmed: "status.confirmed",
+  packed: "status.packed",
+  shipped: "status.shipped",
+  delivered: "status.delivered",
+  returned: "status.returned",
+  cancelled: "status.cancelled",
+};
+
+export const STATUS_BLURB_KEY = {
+  pending: "blurb.pending",
+  confirmed: "blurb.confirmed",
+  packed: "blurb.packed",
+  shipped: "blurb.shipped",
+  delivered: "blurb.delivered",
+  cancelled: "blurb.cancelled",
+  returned: "blurb.returned",
 };
 
 export const STATUS_ICON = {

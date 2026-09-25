@@ -391,8 +391,17 @@ async function ensureLotUnitLabels(companyId, inventoryId, { performedBy } = {})
  */
 async function unitCountsByLot(owner, { identityScope = false } = {}) {
   const { ownerType, ownerId } = normalizeOwner(owner);
+  // identityScope is only ever true for company_admin. The originating
+  // company reads its lot as one thing: units it minted stay its labels even
+  // after ownership of the goods passes to a seller. companyId is the
+  // immutable trace root and never changes on transfer.
+  // $match does NOT auto-cast, so ownerId keeps the explicit ObjectId cast it
+  // has always had on this path.
+  const scope = identityScope
+    ? { companyId: new mongoose.Types.ObjectId(String(ownerId)) }
+    : { ownerType, ownerId: new mongoose.Types.ObjectId(String(ownerId)) };
   const rows = await UnitSerial.aggregate([
-    { $match: { ownerType, ownerId: new mongoose.Types.ObjectId(String(ownerId)) } },
+    { $match: scope },
     { $group: { _id: "$inventoryId", count: { $sum: 1 } } },
   ]);
   const byRow = rows.reduce((acc, r) => { acc[String(r._id)] = r.count; return acc; }, {});
@@ -402,7 +411,11 @@ async function unitCountsByLot(owner, { identityScope = false } = {}) {
   // per-row counts are summed per LOT NUMBER and every row of that lot is given
   // the whole figure: the company reads one lot of 20, not a 12 here and an 8
   // there that both look like short lots.
-  const lots = await Inventory.find({ ownerType, ownerId, _id: { $in: Object.keys(byRow) } })
+  // Reached only when identityScope is true. The identity of EVERY row now
+  // holding this company’s units — a seller row included — or a supplied unit
+  // lands under a fallback key and the lot reads short all over again. Only the
+  // company’s own rows are ever returned, from allRows below.
+  const lots = await Inventory.find({ _id: { $in: Object.keys(byRow) } })
     .select("lotNumber batchNumber")
     .lean();
   const identityOf = new Map(lots.map((l) => [String(l._id), l.lotNumber || l.batchNumber || String(l._id)]));
@@ -447,7 +460,14 @@ async function listUnits(owner, {
   inventoryId, lotNumber, status, limit = 2000, identityScope = false, excludeDispatched = false,
 } = {}) {
   const { ownerType, ownerId } = normalizeOwner(owner);
-  const filter = { ownerType, ownerId };
+  // identityScope is only ever true for company_admin. The originating
+  // company reads its lot as one thing: units it minted stay its labels even
+  // after ownership of the goods passes to a seller. companyId is the
+  // immutable trace root and never changes on transfer.
+  const scope = identityScope
+    ? { companyId: new mongoose.Types.ObjectId(String(ownerId)) }
+    : { ownerType, ownerId };
+  const filter = { ...scope };
 
   // ALREADY ON A TRUCK. A dispatched unit keeps `inventoryId` pointing at the
   // sending row until the far end receives it, so a row-scoped list went on

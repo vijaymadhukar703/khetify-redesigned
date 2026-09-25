@@ -5,6 +5,7 @@ const UnitEvent = require("../../model/Barcode/UnitEvent");
 const Location = require("../../model/Warehouse/Location");
 const Warehouse = require("../../model/Warehouse/Warehouse");
 const Inventory = require("../../model/Inventory/Inventory");
+const Product = require("../../model/Company/productModel");
 const Shipment = require("../../model/Transport/Shipment");
 const lotService = require("../../services/lotService");
 const barcodeService = require("../../services/barcodeService");
@@ -83,7 +84,21 @@ exports.getSupplyOrders = async (req, res) => {
       .populate({ path: "warehouseId", select: "name code address" })
       .populate({ path: "sourceWarehouseId", select: "name code" });
     const pendingCount = rows.filter((r) => r.status === "requested").length;
-    res.json({ success: true, count: rows.length, pendingCount, data: rows });
+
+    // A "Dispatch to Seller" transfer leaves TWO SupplyOrder rows for one
+    // consignment: the seller's request and the company-initiated order that
+    // fulfils it. The management list shows one row (the request, which holds
+    // the original serial and requested date, and which the dispatch path
+    // already updates); the stage-filtered Send Stock queues are left alone.
+    // A company push with no sourceRequestId, or one whose source falls outside
+    // a scoped user's warehouses, is never hidden.
+    const ids = new Set(rows.map((r) => String(r._id)));
+    const data = stageStatuses
+      ? rows
+      : rows.filter(
+          (r) => !(r.initiatedBy === "company" && r.sourceRequestId && ids.has(String(r.sourceRequestId)))
+        );
+    res.json({ success: true, count: data.length, pendingCount, data });
   } catch (err) {
     res.status(500).json({ success: false, message: "Server error" });
   }
@@ -343,16 +358,35 @@ exports.getSupplyOrderDetails = async (req, res) => {
     const invIds = [...new Set((order.items || []).flatMap((it) => (it.allocations || []).map((a) => String(a.inventoryId))))];
     const invRows = invIds.length
       ? await Inventory.find({ _id: { $in: invIds } })
-          .select("mfgBatchNo mfgDate expiryDate lotNumber batchNumber warehouseId")
+          .select("mfgBatchNo mfgDate expiryDate lotNumber batchNumber warehouseId originalQty availableStock has_bulk_packaging packaging_main_boxes packaging_boxes_per_main")
           .populate("warehouseId", "name").lean()
       : [];
     const byInv = new Map(invRows.map((r) => [String(r._id), r]));
+
+    // Product details for MRP, category, packaging type
+    const productIds = [...new Set((order.items || []).map((it) => String(it.productId?._id || it.productId)).filter(Boolean))];
+    const productRows = productIds.length
+      ? await Product.find({ _id: { $in: productIds } })
+          .select("mrp category packagingType productName trackSerial").lean()
+      : [];
+    const byProduct = new Map(productRows.map((p) => [String(p._id), p]));
+
+    // Count of unit labels per lot (UnitSerial count per inventoryId)
+    const unitCountByInv = invIds.length
+      ? await UnitSerial.aggregate([
+          { $match: { inventoryId: { $in: invIds.map((id) => new mongoose.Types.ObjectId(id)) } } },
+          { $group: { _id: "$inventoryId", count: { $sum: 1 } } },
+        ])
+      : [];
+    const unitCountMap = new Map(unitCountByInv.map((r) => [String(r._id), r.count]));
 
     const parentLots = [];
     for (const it of order.items || []) {
       for (const a of it.allocations || []) {
         const meta = byInv.get(String(a.inventoryId)) || {};
         const line = (shipment?.lines || []).find((l) => String(l.inventoryId) === String(a.inventoryId));
+        const prod = byProduct.get(String(it.productId?._id || it.productId)) || {};
+        const unitLabelCount = unitCountMap.get(String(a.inventoryId)) || 0;
         parentLots.push({
           lotNumber: a.lotNumber || a.batchNumber || meta.lotNumber || "—",
           batchNumber: a.batchNumber || null,
@@ -364,6 +398,13 @@ exports.getSupplyOrderDetails = async (req, res) => {
           receivedQty: line?.receivedQty ?? null,
           mfgDate: meta.mfgDate || null,
           expiryDate: meta.expiryDate || null,
+          // Lot Summary extras — mirrors the Inventory Lot Details page
+          mrp: prod.mrp ?? null,
+          category: prod.category || null,
+          packagingType: prod.packagingType || (meta.has_bulk_packaging ? "Bulk package" : "Single package"),
+          originalQty: meta.originalQty ?? null,
+          unitLabelCount,
+          trackSerial: !!prod.trackSerial,
           status: a.committed ? "dispatched" : ((a.serials || []).length ? "picked" : "awaiting pick"),
           units: (a.serials || []).map((s) => {
             const u = bySerial.get(s) || {};
@@ -515,6 +556,15 @@ exports.pickSupplyOrder = async (req, res) => {
       } else {
         pickQty = Number(pick.qty);
         if (!pickQty || pickQty <= 0) return res.status(400).json({ success: false, message: "Each pick needs serials or a positive qty" });
+        // A serial-tracked product must be SCANNED, not typed in as a bare qty —
+        // a manual pick here never fills a.serials, so those exact units are
+        // silently unrecorded and later vanish from the Supply Request detail
+        // page's "child units" table (see getSupplyOrderDetails). Reject it here
+        // instead of letting it happen quietly.
+        const prod = await Product.findById(item.productId).select("trackSerial").lean();
+        if (prod?.trackSerial) {
+          return res.status(400).json({ success: false, message: "This product is serial-tracked — scan the unit barcodes to pick it, a manual quantity is not accepted" });
+        }
         // Non-serialized: reserve the picked qty across this item's planned lots.
         let remaining = pickQty;
         for (const a of item.allocations || []) {

@@ -40,7 +40,7 @@ const CompanyRegisterSuccess = () => {
           <h2 className="text-xl font-semibold text-gray-900 mb-4">Your account is ready</h2>
           
           <p className="text-gray-600 mb-8">
-            Your Khetify account has been created successfully. You can now log in and start exploring the platform.
+            Your Khettify account has been created successfully. You can now log in and start exploring the platform.
           </p>
 
           {/* Action Button */}

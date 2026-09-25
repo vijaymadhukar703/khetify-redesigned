@@ -4,6 +4,9 @@ import Swal from 'sweetalert2';
 import { Modal, Field, inputCls, PrimaryBtn, GhostBtn, Th } from '../Company/ims/ImsUi';
 import { ManifestModal } from '../../Components/ims/TransferModals';
 import ScanBox from '../../Components/ims/ScanBox';
+
+import { useSellerSubscription } from '../../context/SellerSubscriptionContext';
+
 // SELLER WAREHOUSE → WAREHOUSE TRANSFER. Its own scan → box → dispatch popup and
 // its own box-label receive popup, modelled on the COMPANY warehouse transfer
 // (DispatchScanModal / ReceiveModal in pages/Company/ims/ImsTransport.jsx).
@@ -19,10 +22,12 @@ import { movementKind } from '../../lib/movementLabel';
 // helper the company transfer table uses for its challan link.
 import { fileHref } from '../../lib/fileHref';
 import {
-  getSellerLink, getSellerWarehouses,
+  getSellerWarehouses,
   getSellerShipments,
+  getSellerShipmentBox,
+  getSellerDeliveryLabel,
   scanSellerShipment, getSellerScanState,
-  previewSellerBoxLabel, dispatchSellerOrder, receiveSellerShipment,
+  previewSellerBoxLabel, dispatchSellerOrder, dispatchSellerDirect, receiveSellerShipment,
   getSellerTransfers, createSellerTransfer, directSellerTransfer, getSellerTransferStock, getSellerTransferWarehouses, acceptSellerTransfer, rejectSellerTransfer,
   getSellerSupplyOrders, receiveSellerSupply,
   getSellerTransferBoxes,
@@ -163,19 +168,29 @@ const SellerOperations = () => {
   // Warehouse work is for whoever may actually move stock. Anyone without
   // transfer:create (seller_admin, seller_staff) gets the review-only set.
   const allowedTabs = canWrite ? WAREHOUSE_TABS : SELLER_ADMIN_TABS;
-  const tabs = TAB_DEFS.filter((t) => allowedTabs.includes(t.key));
+    // Free plan (no subscription): hide the Receive Stock tab.
+  const { sellerPlan, loading: planLoading } = useSellerSubscription();
+  const isFreePlan = !planLoading && sellerPlan === 'free';
+  const tabs = TAB_DEFS.filter((t) => allowedTabs.includes(t.key) && !(isFreePlan && t.key === 'receive'));
   // A hand-typed ?tab=send falls back to the first tab this role may see.
   const active = tabs.find((t) => t.key === params.get('tab')) || tabs[0];
   const myWh = (warehouseIds || []).map(String);
   const scoped = role !== 'seller_admin' && myWh.length > 0;
   const canActOn = (whId) => { const id = String(whId?._id ?? whId ?? ''); return !scoped || myWh.includes(id); };
 
-  const [approved, setApproved] = useState(null);
   const [shipments, setShipments] = useState([]);
   const [requests, setRequests] = useState([]);
   const [supply, setSupply] = useState([]);
   const [warehouses, setWarehouses] = useState([]);
+  // The single warehouse this user is scoped to, if exactly one. Used to lock
+  // the New Transfer source. null for seller_admin or multi-warehouse users,
+  // which keeps the dropdown behaviour unchanged for them. Declared here rather
+  // than beside `scoped` because it reads the `warehouses` state above.
+  const lockedWh = scoped && myWh.length === 1
+    ? (warehouses.find((w) => String(w._id) === myWh[0]) || null)
+    : null;
   const [manifest, setManifest] = useState(null); // { qrPayload } shipping label
+  const [customerDeliveryLabels, setCustomerDeliveryLabels] = useState(null); // [label, ...] for customer order boxes
   const [receiving, setReceiving] = useState(null); // { kind, item }
   // ONE guided Pick → Pack → Label → Dispatch flow; it opens at whichever step
   // the shipment's current status implies.
@@ -193,14 +208,8 @@ const SellerOperations = () => {
 
   useEffect(() => {
     let alive = true;
-    getSellerLink().then((r) => {
-      const ok = r?.data?.linkStatus === 'approved';
-      if (!alive) return;
-      setApproved(ok);
-      if (!ok) return;
-      reload();
-      getSellerWarehouses().then((w) => { if (alive) setWarehouses(w?.data || []); }).catch(() => {});
-    }).catch(() => { if (alive) setApproved(false); });
+    reload();
+    getSellerWarehouses().then((w) => { if (alive) setWarehouses(w?.data || []); }).catch(() => {});
     return () => { alive = false; };
   }, [reload]);
 
@@ -214,31 +223,43 @@ const SellerOperations = () => {
     try { await rejectSellerTransfer(req._id, { note: value || '' }); toast('success', 'Rejected'); reload(); }
     catch (e) { apiErr(e); }
   };
-  /** Reprint the box labels of a dispatched warehouse transfer. */
+  /** Reprint box labels of a dispatched shipment.
+   *  Customer orders → DeliveryLabelModal (customer name, address, barcode)
+   *  Warehouse transfers → SellerTransferBoxLabels (from/to warehouse) */
   const openBoxLabels = async (s) => {
     try {
-      const r = await getSellerTransferBoxes(s._id);
-      const boxes = r?.data || [];
-      if (!boxes.length) { toast('info', 'No boxes were packed for this transfer.'); return; }
-      setBoxLabels({ boxes, ref: s.lrNumber || `SH-${String(s._id).slice(-6).toUpperCase()}` });
+      if (isWarehouseTransfer(s)) {
+        // Warehouse transfer — SellerRepackBox model
+        const r = await getSellerTransferBoxes(s._id);
+        const boxes = r?.data || [];
+        if (!boxes.length) { toast('info', 'No boxes found for this transfer.'); return; }
+        setBoxLabels({ boxes, ref: s.lrNumber || `SH-${String(s._id).slice(-6).toUpperCase()}` });
+      } else {
+        // Customer order — fetch each Package's delivery label (customer name + address + barcode)
+        const r = await getSellerShipmentBox(s._id);
+        const pkgs = r?.data || [];
+        if (!pkgs.length) { toast('info', 'No boxes found for this order.'); return; }
+        // Fetch delivery label for each box in parallel
+        const labels = await Promise.all(
+          pkgs.map((pkg) =>
+            getSellerDeliveryLabel(s._id, pkg._id)
+              .catch(() => null)
+          )
+        );
+        const valid = labels.filter(Boolean).map((r) => r?.data || r);
+        if (!valid.length) { toast('error', 'Could not load delivery labels.'); return; }
+        setCustomerDeliveryLabels(valid);
+      }
     } catch (e) { apiErr(e); }
   };
-  const incomingShipments = useMemo(() => shipments.filter((s) => RECEIVABLE.includes(s.status)), [shipments]);
+  const incomingShipments = useMemo(
+    // Only warehouse-to-warehouse transfers need to be received by the manager.
+    // Customer orders are received by the customer — they never appear here.
+    () => shipments.filter((s) => RECEIVABLE.includes(s.status) && isWarehouseTransfer(s)),
+    [shipments]
+  );
   const incomingSupply = useMemo(() => supply.filter((o) => SUPPLY_RECEIVABLE.includes(o.status)), [supply]);
   const outgoing = useMemo(() => shipments.filter((s) => DISPATCHABLE.includes(s.status)), [shipments]);
-
-  if (approved === null) return <div className="flex-1 p-8 text-center text-stone-400 font-sora">Loading…</div>;
-  if (!approved) {
-    return (
-      <div className="flex-1 p-4 sm:p-8 bg-white font-sora">
-        <div className="max-w-xl mx-auto mt-10 bg-amber-50 border border-amber-200 rounded-2xl p-6 text-center">
-          <span className="material-symbols-outlined text-amber-500 text-4xl">lock</span>
-          <h2 className="text-lg font-bold text-amber-800 mt-2">Operations are locked</h2>
-          <p className="text-sm text-amber-700 mt-1">Available after your supplying company approves you.</p>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-8 py-6 font-sora">
@@ -283,6 +304,13 @@ const SellerOperations = () => {
       {active.key === 'trace' && <TraceTab />}
 
       {manifest && <ManifestModal info={manifest} onClose={() => setManifest(null)} />}
+      {/* Customer order box labels — same DeliveryLabelModal used at dispatch time */}
+      {customerDeliveryLabels && customerDeliveryLabels.length > 0 && (
+        <CustomerBoxLabelsModal
+          labels={customerDeliveryLabels}
+          onClose={() => setCustomerDeliveryLabels(null)}
+        />
+      )}
       {/* ONE ROW, TWO FLOWS. A warehouse transfer opens the transfer popup —
           scan → tick units → box → dispatch → box labels. A customer order
           opens the untouched order popup. */}
@@ -324,6 +352,7 @@ const SellerOperations = () => {
       {showTransfer && (
         <DirectTransferModal
           warehouses={warehouses}
+          lockedWarehouse={lockedWh}
           onClose={() => setShowTransfer(false)}
           onDone={() => { setShowTransfer(false); reload(); setParams({ tab: 'send' }); }}
         />
@@ -389,6 +418,7 @@ const productRows = (s) => {
     return s.products.map((p) => ({
       key: p.productId,
       name: p.productName,
+      variant: p.variantLabel || null,
       requested: p.requestedQty,
       picked: p.pickedQty || 0,
       note: p.lotCount > 1 ? `${p.lotCount} lots` : null,
@@ -397,6 +427,7 @@ const productRows = (s) => {
   return (s.lines || []).map((l, i) => ({
     key: `${l.productId || 'line'}-${i}`,
     name: l.productName || l.lotNumber || l.batchNumber || 'Item',
+    variant: null,
     requested: l.qty || 0,
     picked: l.pickedQty || 0,
     note: l.productName ? (l.lotNumber || l.batchNumber || null) : null,
@@ -445,6 +476,7 @@ const SendRow = ({ shipment: s, canWrite, actionLabel, actionIcon, onAction }) =
           {rows.map((r) => (
             <div key={r.key} className={cellPad}>
               <span className="block text-xs font-semibold text-stone-800">{r.name}</span>
+              {r.variant && <span className="block text-[10px] font-medium text-[#EA2831]">{r.variant}</span>}
               {r.note && <span className="block text-[10px] text-stone-400">{r.note}</span>}
             </div>
           ))}
@@ -561,14 +593,15 @@ const SendTab = ({ shipments, canWrite, canActOn, onProcess }) => {
  * actual order. Nothing is hardcoded — and there is deliberately no country
  * line, because no address in this system stores one.
  */
-const DeliveryLabelModal = ({ label, onClose }) => {
+const DeliveryLabelModal = ({ label, onClose, embedded = false }) => {
   const d = label.deliverTo || {};
   const cityLine = [d.city, d.district].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(', ');
-  return (
-    <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4 font-sora" onClick={onClose}>
-      <div className="bg-white rounded-2xl w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <style>{LABEL_PRINT_CSS}</style>
-        <div className="no-print flex items-center justify-between px-5 py-3 border-b border-stone-200">
+  // In embedded mode (inside CustomerBoxLabelsModal) we render just the label
+  // content — the outer wrapper and header are provided by the parent.
+  const content = (
+    <div className="p-4">
+      {!embedded && (
+        <div className="no-print flex items-center justify-between px-5 py-3 border-b border-stone-200 -mx-4 -mt-4 mb-4">
           <h3 className="font-bold text-stone-900 text-sm">
             Delivery label{label.draft ? ' · dispatch to confirm' : ''}
           </h3>
@@ -581,6 +614,7 @@ const DeliveryLabelModal = ({ label, onClose }) => {
             </button>
           </div>
         </div>
+      )}
 
         {/* The label itself. Black on white with heavy rules — it is meant to be
             printed and stuck on a carton. */}
@@ -656,6 +690,14 @@ const DeliveryLabelModal = ({ label, onClose }) => {
           </div>
         </div>
       </div>
+    );
+  if (embedded) return content;
+  return (
+    <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4 font-sora" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <style>{LABEL_PRINT_CSS}</style>
+        {content}
+      </div>
     </div>
   );
 };
@@ -689,9 +731,12 @@ const OrderProcessModal = ({ shipment: initial, onClose, onDone }) => {
   const [busy, setBusy] = useState(false);
   const [label, setLabel] = useState(null);
   const [showLabel, setShowLabel] = useState(false);
-  // Final labels, available only after dispatch — these carry the real barcode.
   const [finalLabels, setFinalLabels] = useState([]);
   const [dispatchedAt, setDispatchedAt] = useState(null);
+  // Which tab is active — persistent, like the Create Lot popup's top toggle.
+  // 'direct' is selected by default; the seller can switch to 'scan' and back
+  // at any time without losing scanned units or draft boxes.
+  const [mode, setMode] = useState('direct'); // 'direct' | 'scan'
 
   const dispatched = ['dispatched', 'in_transit', 'arrived', 'verifying', 'delivered'].includes(shipment.status);
 
@@ -702,25 +747,18 @@ const OrderProcessModal = ({ shipment: initial, onClose, onDone }) => {
   }, [shipment._id]);
 
   const allComplete = products.length > 0 && products.every((p) => p.complete);
-  // Everything scanned has been boxed, and nothing is still outstanding.
   const readyToDispatch = allComplete && boxes.length > 0 && pending.length === 0;
-  // Every carton needs its own printed label — one label for a three-box order
-  // would leave two cartons unlabelled.
-  const allLabelled = boxes.length > 0 && boxes.every((b) => b.labelPrinted);
+  const allLabelled = true; // labels are optional — dispatch does not require them
 
   const onScan = async (code) => {
     const value = String(code || '').trim();
     if (!value || scanning) return;
     setScanning(true);
     try {
-      // `selectedTokens` includes what is already pending, so the server can
-      // refuse a duplicate and cap the remaining quantity correctly.
       const known = pending.map((u) => u.token);
       const r = await scanSellerShipment(shipment._id, { code: value, selectedTokens: known });
       const d = r?.data;
       if (!d) { toast('error', 'Could not read that label'); return; }
-      // One row per UNIT the scan contributed, so a scanned carton can still be
-      // split across two parcels.
       const added = (d.addedTokens || []).map((tok) => ({
         token: tok,
         code: tok.startsWith('unit:') ? tok.slice(5) : d.label,
@@ -731,8 +769,6 @@ const OrderProcessModal = ({ shipment: initial, onClose, onDone }) => {
         qty: tok.startsWith('lot:') ? d.addedQuantity : 1,
       }));
       setPending((prev) => [...prev, ...added]);
-      // Newly scanned units start ticked — the common case is boxing what you
-      // just scanned, and un-ticking is easier than ticking twenty rows.
       setChecked((prev) => { const n = new Set(prev); added.forEach((u) => n.add(u.token)); return n; });
       setProducts(d.products || []);
       setHistory((h) => [{ key: `${value}-${Date.now()}`, code: d.label || value, type: d.scanType, product: d.productName, qty: d.addedQuantity, ok: true }, ...h]);
@@ -755,16 +791,12 @@ const OrderProcessModal = ({ shipment: initial, onClose, onDone }) => {
   const selected = pending.filter((u) => checked.has(u.token));
   const selectedUnits = selected.reduce((n, u) => n + (u.qty || 1), 0);
 
-  // ADD TO BOX — entirely local. No API call, nothing written. The box exists
-  // only in this component until Dispatch commits the whole operation.
   const addToBox = () => {
     if (!selected.length) return;
     const box = {
       id: `draft-${Date.now()}-${boxes.length + 1}`,
       tokens: selected.map((u) => u.token),
       units: selected.map((u) => ({ code: u.code, productName: u.productName, qty: u.qty || 1 })),
-      // Set the first time this box's label is opened, and kept thereafter — the
-      // number printed on the carton is the number saved at dispatch.
       packageNumber: null,
       labelPrinted: false,
     };
@@ -775,7 +807,6 @@ const OrderProcessModal = ({ shipment: initial, onClose, onDone }) => {
     toast('success', `Box ${boxes.length + 1} prepared — dispatch to confirm`);
   };
 
-  /** Undo a draft box: its units go back to the scanned list. */
   const removeBox = (id) => {
     const box = boxes.find((b) => b.id === id);
     if (!box) return;
@@ -786,11 +817,6 @@ const OrderProcessModal = ({ shipment: initial, onClose, onDone }) => {
     toast('success', 'Box removed — units returned to the list');
   };
 
-  // Renders a label from the draft box's contents. Saves nothing — the parcel's
-  // real barcode is minted at dispatch, so this preview has none.
-  // Renders this box's label. The barcode is real and printable: the number is
-  // minted here but SAVED NOWHERE until dispatch, and the box keeps it so
-  // re-opening shows the same barcode that is already on the carton.
   const openLabel = async (box) => {
     const idx = boxes.findIndex((b) => b.id === box.id);
     try {
@@ -811,28 +837,30 @@ const OrderProcessModal = ({ shipment: initial, onClose, onDone }) => {
     }
   };
 
-  // THE ONLY WRITE. Sends every draft box; the server validates, picks, packs,
-  // creates the real parcels and dispatches — all or nothing.
   const dispatchNow = async () => {
     setBusy(true);
     try {
-      const r = await dispatchSellerOrder(shipment._id, {
+      await dispatchSellerOrder(shipment._id, {
         boxes: boxes.map((b) => ({ tokens: b.tokens, packageNumber: b.packageNumber || undefined })),
       });
       toast('success', 'Dispatched — on its way to the customer');
-      // The parcels are real now, so their labels finally carry a scannable
-      // barcode. Show them for printing INSTEAD of closing — closing here would
-      // send the manager back to a list where the row has already gone, with no
-      // way to print the label they are about to stick on the carton.
-      const finals = r?.labels || [];
-      if (finals.length) {
-        setFinalLabels(finals);
-        setLabel(finals[0]);
-        setShowLabel(true);
-        setDispatchedAt(new Date());
-      } else {
-        onDone();
-      }
+      onDone();
+    } catch (e) {
+      toast('error', e?.response?.data?.message || e.message || 'Could not dispatch');
+    } finally { setBusy(false); }
+  };
+
+  /** DIRECT DISPATCH — no boxes required. Uses shipment lines as-is. */
+  const dispatchDirect = async () => {
+    setBusy(true);
+    try {
+      // Pass any scanned tokens so serialized units get tracked correctly
+      const scannedTokens = [...pending.map((u) => u.token), ...boxes.flatMap((b) => b.tokens)];
+      await dispatchSellerDirect(shipment._id, {
+        tokens: scannedTokens.length ? scannedTokens : undefined,
+      });
+      toast('success', 'Dispatched — stock deducted from inventory');
+      onDone();
     } catch (e) {
       toast('error', e?.response?.data?.message || e.message || 'Could not dispatch');
     } finally { setBusy(false); }
@@ -861,10 +889,99 @@ const OrderProcessModal = ({ shipment: initial, onClose, onDone }) => {
 
   const order = shipment.order;
   const addr = addressText(order?.address);
-  const title = order?.customerName ? `${orderRef(order) || 'Order'} → ${order.customerName}` : `Send → ${shipment.toLabel}`;
+  const orderTitle = `Process order · ${initial.ref || orderRef(initial.order) || `SH-${String(initial._id).slice(-6).toUpperCase()}`}`;
 
   return (
-    <Modal title={title} onClose={close}>
+    <Modal title={orderTitle} onClose={close}>
+      {/* Dispatch mode — a persistent top toggle, same pattern as the Create Lot
+          popup's "Khetify-generated / Enter manually" switch: pick one, its
+          content shows below, switching keeps whatever the other tab holds
+          (scanned units / draft boxes are never lost by switching tabs). */}
+      <div className="grid grid-cols-2 gap-3 mb-5 no-print">
+        <button
+          type="button"
+          onClick={() => setMode('direct')}
+          disabled={busy}
+          className={`rounded-2xl border-2 px-4 py-3 text-left transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
+            mode === 'direct'
+              ? 'border-[#EA2831] bg-[#EA2831] hover:bg-[#D91C22] shadow-lg shadow-[#EA2831]/25'
+              : 'border-stone-200 bg-white hover:border-[#EA2831]/40 hover:bg-red-50'
+          }`}
+        >
+          <div className="flex items-center gap-2.5">
+            <span className={`material-symbols-outlined text-2xl shrink-0 ${mode === 'direct' ? 'text-white' : 'text-[#EA2831]'}`}>local_shipping</span>
+            <div>
+              <p className={`font-bold text-sm leading-tight ${mode === 'direct' ? 'text-white' : 'text-stone-900'}`}>Dispatch Directly</p>
+              <p className={`text-[11px] mt-0.5 leading-snug ${mode === 'direct' ? 'text-red-100' : 'text-stone-500'}`}>No scanning — stock deducted automatically</p>
+            </div>
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setMode('scan')}
+          disabled={busy}
+          className={`rounded-2xl border-2 px-4 py-3 text-left transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
+            mode === 'scan'
+              ? 'border-[#EA2831] bg-[#EA2831] hover:bg-[#D91C22] shadow-lg shadow-[#EA2831]/25'
+              : 'border-stone-200 bg-white hover:border-stone-300 hover:bg-stone-50'
+          }`}
+        >
+          <div className="flex items-center gap-2.5">
+            <span className={`material-symbols-outlined text-2xl shrink-0 ${mode === 'scan' ? 'text-white' : 'text-stone-500'}`}>qr_code_scanner</span>
+            <div>
+              <p className={`font-bold text-sm leading-tight ${mode === 'scan' ? 'text-white' : 'text-stone-900'}`}>Scan & Pack</p>
+              <p className={`text-[11px] mt-0.5 leading-snug ${mode === 'scan' ? 'text-red-100' : 'text-stone-500'}`}>Scan barcodes before dispatch</p>
+            </div>
+          </div>
+        </button>
+      </div>
+
+      {mode === 'direct' ? (
+        <>
+          {/* Order contents — product, variant (when there is one), quantity. */}
+          <div className="mb-5">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400 mb-2">Order contents</p>
+            <div className="rounded-xl border border-stone-200 divide-y divide-stone-100">
+              {products.map((p) => (
+                <div key={p.productId} className="flex items-center justify-between px-4 py-3">
+                  <div>
+                    <p className="text-sm font-semibold text-stone-900">{p.productName}</p>
+                    {p.variantLabel && (
+                      <p className="text-xs font-medium text-[#EA2831]">{p.variantLabel}</p>
+                    )}
+                  </div>
+                  <span className="text-sm font-bold text-stone-900">{p.requestedQty} units</span>
+                </div>
+              ))}
+              {!products.length && (
+                <div className="px-4 py-3 text-sm text-stone-400">Loading order details…</div>
+              )}
+            </div>
+          </div>
+
+          {/* Customer's basic details */}
+          <div className="mb-5 rounded-xl bg-stone-50 px-4 py-3">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400 mb-1">Deliver to</p>
+            <p className="text-sm font-semibold text-stone-900">{initial.order?.customerName || initial.toLabel || 'Customer'}</p>
+            {initial.order?.address?.phone && (
+              <p className="text-xs text-stone-500 mt-0.5">{initial.order.address.phone}</p>
+            )}
+            {initial.order?.address && (
+              <p className="text-xs text-stone-500 mt-0.5">{addressText(initial.order.address)}</p>
+            )}
+          </div>
+
+          <div className="flex justify-end gap-2 mt-4">
+            <GhostBtn onClick={close}>Close</GhostBtn>
+            <PrimaryBtn disabled={busy || !products.length} onClick={dispatchDirect}>
+              <span className="material-symbols-outlined text-base">local_shipping</span>
+              {busy ? 'Dispatching…' : 'Dispatch'}
+            </PrimaryBtn>
+          </div>
+        </>
+      ) : (
+      <>
       {order && (
         <div className="rounded-xl border border-stone-200 bg-stone-50/60 px-3 py-2.5 mb-3">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -890,7 +1007,12 @@ const OrderProcessModal = ({ shipment: initial, onClose, onDone }) => {
           <tbody className="divide-y divide-stone-100">
             {products.map((p) => (
               <tr key={p.productId} className={p.complete ? 'bg-green-50/40' : undefined}>
-                <td className="px-3 py-1.5 text-xs font-semibold text-stone-800">{p.productName}</td>
+                <td className="px-3 py-1.5 text-xs font-semibold text-stone-800">
+                  {p.productName}
+                  {p.variantLabel && (
+                    <span className="block text-[10px] font-medium text-[#EA2831]">{p.variantLabel}</span>
+                  )}
+                </td>
                 <td className="px-3 py-1.5 text-center text-xs font-bold text-stone-700">{p.requestedQty}</td>
                 <td className="px-3 py-1.5 text-center text-xs font-bold text-stone-900">{p.scannedQty}</td>
                 <td className={`px-3 py-1.5 text-center text-xs font-bold ${p.remainingQty ? 'text-[#EA2831]' : 'text-green-600'}`}>{p.remainingQty}</td>
@@ -988,10 +1110,6 @@ const OrderProcessModal = ({ shipment: initial, onClose, onDone }) => {
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
-                  <GhostBtn onClick={() => openLabel(b)}>
-                    <span className="material-symbols-outlined text-sm">local_shipping</span>
-                    {b.labelPrinted ? 'Re-print' : 'Label'}
-                  </GhostBtn>
                   <button onClick={() => removeBox(b.id)}
                     className="text-[11px] font-bold text-stone-400 hover:text-[#EA2831] px-2">
                     Undo
@@ -1021,35 +1139,12 @@ const OrderProcessModal = ({ shipment: initial, onClose, onDone }) => {
         </div>
       )}
 
-      {/* DISPATCHED — the parcels exist, so their real labels can be printed. */}
-      {dispatchedAt && (
-        <div className="mt-3 rounded-xl border border-green-200 bg-green-50/60 px-3 py-2.5">
-          <p className="text-xs font-bold text-green-700 mb-1.5">
-            Dispatched · {finalLabels.length} label(s) ready to print
-          </p>
-          <div className="flex flex-wrap gap-1.5">
-            {finalLabels.map((l, i) => (
-              <GhostBtn key={l.packageId || i} onClick={() => { setLabel(l); setShowLabel(true); }}>
-                <span className="material-symbols-outlined text-sm">print</span>
-                Box {i + 1} · {l.packageNumber}
-              </GhostBtn>
-            ))}
-          </div>
-        </div>
-      )}
-
       <div className="flex justify-end gap-2 mt-4">
-        {dispatchedAt ? (
-          <PrimaryBtn onClick={onDone}>Done</PrimaryBtn>
-        ) : (
-          <>
-            <GhostBtn onClick={close}>Close</GhostBtn>
-            <PrimaryBtn disabled={!readyToDispatch || !allLabelled || busy} onClick={dispatchNow}>
-              <span className="material-symbols-outlined text-base">local_shipping</span>
-              {busy ? 'Dispatching…' : 'Dispatch'}
-            </PrimaryBtn>
-          </>
-        )}
+        <GhostBtn onClick={close}>Close</GhostBtn>
+        <PrimaryBtn disabled={!readyToDispatch || busy} onClick={dispatchNow}>
+          <span className="material-symbols-outlined text-base">local_shipping</span>
+          {busy ? 'Dispatching…' : 'Dispatch'}
+        </PrimaryBtn>
       </div>
       {!readyToDispatch && !dispatchedAt && (
         <p className="text-[11px] text-stone-400 text-right mt-1">
@@ -1058,10 +1153,7 @@ const OrderProcessModal = ({ shipment: initial, onClose, onDone }) => {
               : 'Create a box to dispatch.'}
         </p>
       )}
-      {readyToDispatch && !allLabelled && !dispatchedAt && (
-        <p className="text-[11px] text-stone-400 text-right mt-1">
-          Print the label for every box to enable dispatch.
-        </p>
+      </>
       )}
 
       {showLabel && label && <DeliveryLabelModal label={label} onClose={() => setShowLabel(false)} />}
@@ -1070,10 +1162,129 @@ const OrderProcessModal = ({ shipment: initial, onClose, onDone }) => {
 };
 
 /* ───────── Shipment Tracking & Transfers ───────── */
+// Both tables on this tab paginate 10 rows at a time — the same convention the
+// company Transfers/Requests tables use (Company/ims/ImsTransport.jsx).
+const PAGE_SIZE = 10;
+
+/**
+ * Page numbers to render. Short runs list every page; longer ones show a
+ * window around the current page with the first and last always reachable and
+ * '…' for the gap — identical to the helper in ImsTransport.jsx, so every
+ * paginated table in the app behaves the same way.
+ */
+const pageWindow = (current, total) => {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const pages = [1];
+  const from = Math.max(2, current - 1);
+  const to = Math.min(total - 1, current + 1);
+  if (from > 2) pages.push('start-gap');
+  for (let n = from; n <= to; n += 1) pages.push(n);
+  if (to < total - 1) pages.push('end-gap');
+  pages.push(total);
+  return pages;
+};
+
+/** Previous / page-numbers / Next — one control shared by both tables below. */
+const Pagination = ({ currentPage, totalPages, onPage, rangeStart, rangeEnd, total, noun }) => (
+  <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mt-3">
+    <p className="text-[11px] font-bold uppercase tracking-wider text-stone-400">
+      Showing {rangeStart}–{rangeEnd} of {total} {noun}
+    </p>
+    <div className="flex items-center gap-1">
+      <button
+        onClick={() => onPage(Math.max(1, currentPage - 1))}
+        disabled={currentPage <= 1}
+        className="inline-flex items-center gap-1 text-xs font-bold px-3 py-2 rounded-lg border border-stone-200 text-stone-600 hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        <span className="material-symbols-outlined text-base">chevron_left</span> Previous
+      </button>
+      {pageWindow(currentPage, totalPages).map((n) => (
+        typeof n === 'string'
+          ? <span key={n} className="px-1 text-xs font-bold text-stone-300 select-none">…</span>
+          : (
+            <button
+              key={n}
+              onClick={() => onPage(n)}
+              className={`min-w-[36px] text-xs font-bold px-3 py-2 rounded-lg border transition-colors ${
+                n === currentPage
+                  ? 'bg-[#EA2831] border-[#EA2831] text-white'
+                  : 'border-stone-200 text-stone-600 hover:bg-stone-50'
+              }`}
+            >
+              {n}
+            </button>
+          )
+      ))}
+      <button
+        onClick={() => onPage(Math.min(totalPages, currentPage + 1))}
+        disabled={currentPage >= totalPages}
+        className="inline-flex items-center gap-1 text-xs font-bold px-3 py-2 rounded-lg border border-stone-200 text-stone-600 hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        Next <span className="material-symbols-outlined text-base">chevron_right</span>
+      </button>
+    </div>
+  </div>
+);
+
+/**
+ * Shows all delivery labels for a multi-box customer order.
+ * Uses the same DeliveryLabelModal that dispatch generates — customer name,
+ * address, barcode and items are all there.
+ */
+const CustomerBoxLabelsModal = ({ labels, onClose }) => {
+  const [idx, setIdx] = useState(0);
+  const label = labels[idx];
+  return (
+    <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4 font-sora" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <style>{`
+@media print {
+  body * { visibility: hidden; }
+  #seller-delivery-label, #seller-delivery-label * { visibility: visible; }
+  #seller-delivery-label { position: absolute; left: 0; top: 0; width: 100%; }
+  .no-print { display: none !important; }
+  @page { margin: 10mm; }
+}`}</style>
+        <div className="no-print flex items-center justify-between px-5 py-3 border-b border-stone-200">
+          <h3 className="font-bold text-stone-900 text-sm">
+            Box Labels — {labels.length} box{labels.length > 1 ? 'es' : ''}
+          </h3>
+          <div className="flex items-center gap-2">
+            {labels.length > 1 && (
+              <div className="flex items-center gap-1">
+                <button disabled={idx === 0} onClick={() => setIdx(i => i - 1)}
+                  className="px-2 py-1 rounded text-sm disabled:opacity-30 hover:bg-stone-100">‹</button>
+                <span className="text-xs text-stone-500">{idx + 1} / {labels.length}</span>
+                <button disabled={idx === labels.length - 1} onClick={() => setIdx(i => i + 1)}
+                  className="px-2 py-1 rounded text-sm disabled:opacity-30 hover:bg-stone-100">›</button>
+              </div>
+            )}
+            <GhostBtn onClick={() => window.print()}>
+              <span className="material-symbols-outlined text-base">print</span> Print
+            </GhostBtn>
+            <button onClick={onClose} className="text-stone-400 hover:text-stone-600">
+              <span className="material-symbols-outlined">close</span>
+            </button>
+          </div>
+        </div>
+        {/* Reuse the same label content as DeliveryLabelModal */}
+        {label && <DeliveryLabelModal label={label} onClose={onClose} embedded />}
+      </div>
+    </div>
+  );
+};
+
 const ShipmentsTab = ({ shipments, requests, canWrite, canActOn, onLabel, onReceive, onAccept, onReject, onNewRequest, onNewTransfer, onBoxLabels }) => {
   const [sub, setSub] = useState('shipments');
   // Search over the requests list, mirroring the company Requests tab.
   const [q, setQ] = useState('');
+  // Search over the All Transfers list — same pattern/placement as the
+  // Requests search above, just its own field and its own state.
+  const [shipQ, setShipQ] = useState('');
+  // Pagination — each table keeps its own page, so switching sub-tabs never
+  // resets or shares state between the two.
+  const [shipPage, setShipPage] = useState(1);
+  const [reqPage, setReqPage] = useState(1);
   // The decider for a request: pull → the HOLDER (from); push → the DESTINATION (to).
   const deciderWh = (r) => (r.mode === 'pull' ? r.fromWarehouseId : r.toWarehouseId);
 
@@ -1086,6 +1297,31 @@ const ShipmentsTab = ({ shipments, requests, canWrite, canActOn, onLabel, onRece
       [r.transferRef, r.productId?.productName, r.fromWarehouseId?.name, r.toWarehouseId?.name]
         .some((f) => (f || '').toLowerCase().includes(needle)))
     : requests;
+
+  // Same case-insensitive search, applied to the All Transfers list — matches
+  // on the shipment ref and both warehouse names/labels. Read-only, same as
+  // above; the underlying `shipments` data and its fetch are untouched.
+  const shipNeedle = shipQ.trim().toLowerCase();
+  const visibleShipments = shipNeedle
+    ? shipments.filter((s) =>
+      [s.ref, s.fromName, s.fromLabel, s.toName, s.toLabel]
+        .some((f) => (f || '').toLowerCase().includes(shipNeedle)))
+    : shipments;
+
+  // Derived, never stored. currentPage is clamped so a search or a status
+  // change shrinking the list can never strand the table on a page that no
+  // longer exists.
+  const shipTotalPages = Math.max(1, Math.ceil(visibleShipments.length / PAGE_SIZE));
+  const shipCurrentPage = Math.min(shipPage, shipTotalPages);
+  const shipRangeStart = visibleShipments.length === 0 ? 0 : (shipCurrentPage - 1) * PAGE_SIZE + 1;
+  const shipRangeEnd = Math.min(shipCurrentPage * PAGE_SIZE, visibleShipments.length);
+  const pagedShipments = visibleShipments.slice((shipCurrentPage - 1) * PAGE_SIZE, shipCurrentPage * PAGE_SIZE);
+
+  const reqTotalPages = Math.max(1, Math.ceil(visibleRequests.length / PAGE_SIZE));
+  const reqCurrentPage = Math.min(reqPage, reqTotalPages);
+  const reqRangeStart = visibleRequests.length === 0 ? 0 : (reqCurrentPage - 1) * PAGE_SIZE + 1;
+  const reqRangeEnd = Math.min(reqCurrentPage * PAGE_SIZE, visibleRequests.length);
+  const pagedRequests = visibleRequests.slice((reqCurrentPage - 1) * PAGE_SIZE, reqCurrentPage * PAGE_SIZE);
 
   return (
     <div>
@@ -1110,15 +1346,25 @@ const ShipmentsTab = ({ shipments, requests, canWrite, canActOn, onLabel, onRece
           (All Transfers), Request Stock asks for it (Requests). */}
       <div className="flex flex-wrap justify-between items-center gap-3 mb-4">
         <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400">
-          {sub === 'requests' ? `${visibleRequests.length} request(s)` : `${shipments.length} transfer(s)`}
+          {sub === 'requests' ? `${visibleRequests.length} request(s)` : `${visibleShipments.length} transfer(s)`}
         </p>
         <div className="flex items-center gap-3">
           {sub === 'requests' && (
             <input
               value={q}
-              onChange={(e) => setQ(e.target.value)}
+              onChange={(e) => { setQ(e.target.value); setReqPage(1); }}
               placeholder="Search ref (SH-…), product or warehouse…"
-              className="w-56 sm:w-72 border border-stone-200 rounded-lg text-sm px-3 py-2 bg-white focus:ring-[#EA2831]"
+              className="w-56 sm:w-72 border border-stone-200 rounded-lg text-sm px-3 py-2 bg-white outline-none transition-colors focus:border-[#EA2831] focus:ring-2 focus:ring-[#EA2831]/10"
+            />
+          )}
+          {/* Same field, same placement, same styling as the Requests search
+              above — just scoped to the All Transfers list. */}
+          {sub === 'shipments' && (
+            <input
+              value={shipQ}
+              onChange={(e) => { setShipQ(e.target.value); setShipPage(1); }}
+              placeholder="Search ref (SH-…), product or warehouse…"
+              className="w-56 sm:w-72 border border-stone-200 rounded-lg text-sm px-3 py-2 bg-white outline-none transition-colors focus:border-[#EA2831] focus:ring-2 focus:ring-[#EA2831]/10"
             />
           )}
           {canWrite && sub === 'requests' && (
@@ -1137,13 +1383,14 @@ const ShipmentsTab = ({ shipments, requests, canWrite, canActOn, onLabel, onRece
       </div>
 
       {sub === 'shipments' ? (
-        /* THE TRANSFERS TABLE, laid out exactly like the company one
+        <>
+        {/* THE TRANSFERS TABLE, laid out exactly like the company one
            (pages/Company/ims/ImsTransport.jsx): fixed table-layout with a
            colgroup proportioning every column to the full page width, so nothing
            scrolls horizontally on desktop and long warehouse names wrap instead
            of forcing a min-width. Below lg the shared `resp-table` CSS collapses
            each row into a labelled card, which is what the `data-label`
-           attributes are for. Same Th component, same paddings, same badges. */
+           attributes are for. Same Th component, same paddings, same badges. */}
         <div className="border border-stone-200 rounded-2xl shadow-sm bg-white overflow-hidden">
           <table className="w-full text-left border-collapse table-fixed resp-table">
             <colgroup>
@@ -1169,8 +1416,13 @@ const ShipmentsTab = ({ shipments, requests, canWrite, canActOn, onLabel, onRece
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-100">
-              {shipments.length === 0 ? <tr><td colSpan={8} className="px-3 py-12 text-center text-sm text-stone-400">No transfers yet.</td></tr>
-                : shipments.map((s) => (
+              {visibleShipments.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-3 py-12 text-center text-sm text-stone-400">
+                    {shipNeedle ? `No transfer matches “${shipQ.trim()}”.` : 'No transfers yet.'}
+                  </td>
+                </tr>
+              ) : pagedShipments.map((s) => (
                   <tr key={s._id} className="hover:bg-stone-50/40">
                     {/* The reference the backend derives (shipmentService.shipmentRef)
                         — never rebuilt here, so a row can be matched against the
@@ -1237,15 +1489,14 @@ const ShipmentsTab = ({ shipments, requests, canWrite, canActOn, onLabel, onRece
                     <td className="px-3 py-4 text-xs text-stone-500 align-top" data-label="Dispatched">{s.dispatchedAt ? fmtDate(s.dispatchedAt) : '—'}</td>
                     <td className="px-3 py-4 cell-actions align-top">
                       <div className="flex flex-wrap items-center justify-end gap-2">
-                        {s.qrToken && canActOn(s.fromWarehouseId) && (
-                          <GhostBtn onClick={() => onLabel(s)}>
+                        {/* SHIPPING LABEL — hidden for customer orders only. */}
+{s.qrToken && s.toType !== 'customer' && canActOn(s.fromWarehouseId) && (
+  <GhostBtn onClick={() => onLabel(s)}>
                             <span className="material-symbols-outlined text-sm">qr_code_2</span> Shipping Label
                           </GhostBtn>
                         )}
-                        {/* BOX LABELS — a SENDING-SIDE control for a dispatched
-                            warehouse transfer, so a torn or lost sticker can
-                            always be reprinted. Never shown for a customer
-                            order, which carries a delivery label instead. */}
+                        {/* BOX LABELS — warehouse transfers only.
+                            Customer orders don't get a box label. */}
                         {isWarehouseTransfer(s) && s.dispatchedAt && canActOn(s.fromWarehouseId) && (
                           <GhostBtn onClick={() => onBoxLabels(s)}>
                             <span className="material-symbols-outlined text-sm">inventory_2</span> Box Labels
@@ -1262,17 +1513,50 @@ const ShipmentsTab = ({ shipments, requests, canWrite, canActOn, onLabel, onRece
             </tbody>
           </table>
         </div>
+        {/* Pagination — 10 transfers per page. Hidden when one page holds
+            everything, exactly like the company Transfers table. */}
+        {visibleShipments.length > 0 && shipTotalPages > 1 && (
+          <Pagination
+            currentPage={shipCurrentPage}
+            totalPages={shipTotalPages}
+            onPage={setShipPage}
+            rangeStart={shipRangeStart}
+            rangeEnd={shipRangeEnd}
+            total={visibleShipments.length}
+            noun="transfers"
+          />
+        )}
+        </>
       ) : (
-        /* THE REQUESTS TABLE, laid out like the company one: same eight columns,
+        <>
+        {/* THE REQUESTS TABLE, laid out like the company one: same eight columns,
            same paddings, same ref pill, same status chip and the same
            acknowledgment line in Actions once a decision has been made. Only the
            DATA is seller-side — seller warehouses, the seller's own accept /
            reject calls, and the push/pull distinction the company flow does not
-           have. */
-        <div className="border border-stone-200 rounded-2xl overflow-x-auto">
-          <table className="w-full text-left border-collapse min-w-[920px] resp-table">
+           have.
+
+           NO MIN-WIDTH — same fix as the company Requests table
+           (Company/ims/ImsTransport.jsx): `table-fixed` plus the colgroup
+           percentages make every column share whatever width the page has,
+           instead of forcing a horizontal scrollbar the moment the content area
+           drops under a hard-coded floor. overflow-x-auto stays as a safety net
+           for a genuinely tiny window. Below lg the resp-table CSS collapses
+           rows into cards regardless, so mobile is unaffected. */}
+        <div className="border border-stone-200 rounded-2xl shadow-sm bg-white overflow-x-auto">
+          <table className="w-full text-left border-collapse table-fixed resp-table">
+            <colgroup>
+              <col style={{ width: '16%' }} />{/* Product */}
+              <col style={{ width: '6%' }} />{/* Qty */}
+              <col style={{ width: '14%' }} />{/* From (source) */}
+              <col style={{ width: '16%' }} />{/* For (requester) */}
+              <col style={{ width: '12%' }} />{/* Transfer Ref. */}
+              <col style={{ width: '10%' }} />{/* Status */}
+              <col style={{ width: '10%' }} />{/* Requested */}
+              <col style={{ width: '16%' }} />{/* Actions */}
+            </colgroup>
             <thead>
-              <tr className="text-[10px] uppercase text-stone-400 bg-stone-50">
+              <tr className="text-[10px] uppercase text-stone-400 bg-stone-50 border-b border-stone-200">
                 <Th>Product</Th>
                 <Th right>Qty</Th>
                 <Th>From (source)</Th>
@@ -1284,7 +1568,7 @@ const ShipmentsTab = ({ shipments, requests, canWrite, canActOn, onLabel, onRece
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-100">
-              {visibleRequests.map((r) => {
+              {pagedRequests.map((r) => {
                 const isPull = r.mode === 'pull';
                 const canDecide = canActOn(deciderWh(r));
                 return (
@@ -1364,6 +1648,19 @@ const ShipmentsTab = ({ shipments, requests, canWrite, canActOn, onLabel, onRece
             </tbody>
           </table>
         </div>
+        {/* Pagination — 10 requests per page, the same control as All Transfers. */}
+        {visibleRequests.length > 0 && reqTotalPages > 1 && (
+          <Pagination
+            currentPage={reqCurrentPage}
+            totalPages={reqTotalPages}
+            onPage={setReqPage}
+            rangeStart={reqRangeStart}
+            rangeEnd={reqRangeEnd}
+            total={visibleRequests.length}
+            noun="requests"
+          />
+        )}
+        </>
       )}
     </div>
   );
@@ -1531,9 +1828,12 @@ const ScanReceiveModal = ({ target, onClose, onDone }) => {
  * lot, so listing four lots of one product would only ask them to choose
  * between numbers they have no reason to pick between.
  */
-const DirectTransferModal = ({ warehouses, onClose, onDone }) => {
+const DirectTransferModal = ({ warehouses, lockedWarehouse = null, onClose, onDone }) => {
   const [accountWh, setAccountWh] = useState([]); // every warehouse on the account
-  const [f, setF] = useState({ fromWarehouseId: '', toWarehouseId: '', challanNumber: '', note: '' });
+  const [f, setF] = useState({
+    fromWarehouseId: lockedWarehouse?._id || '',
+    toWarehouseId: '', challanNumber: '', note: '',
+  });
   // The delivery challan scan. `challanUrl` is an object URL used ONLY to
   // preview a picked image; a PDF has no preview and renders as a file row.
   // Revoked on unmount and on every re-pick so nothing leaks.
@@ -1545,6 +1845,16 @@ const DirectTransferModal = ({ warehouses, onClose, onDone }) => {
   const [loadingStock, setLoadingStock] = useState(false);
   const [errors, setErrors] = useState({});
   const [busy, setBusy] = useState(false);
+
+  // A warehouse-scoped user cannot choose the source, so keep it pinned to the
+  // locked warehouse. The warehouse list loads async, so the prop can arrive
+  // after mount and must still apply.
+  useEffect(() => {
+    if (lockedWarehouse?._id) {
+      setF((p) => (p.fromWarehouseId === lockedWarehouse._id ? p
+        : { ...p, fromWarehouseId: lockedWarehouse._id }));
+    }
+  }, [lockedWarehouse?._id]);
 
   // Destinations: any warehouse on the seller account. Sources: only the ones
   // this user may send FROM (already scoped by the caller).
@@ -1686,11 +1996,17 @@ const DirectTransferModal = ({ warehouses, onClose, onDone }) => {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4">
         <Field label="From warehouse *">
-          <select className={inputCls} value={f.fromWarehouseId}
-            onChange={(e) => { setF({ ...f, fromWarehouseId: e.target.value }); setErrors({}); }}>
-            <option value="">Select source…</option>
-            {warehouses.map((w) => <option key={w._id} value={w._id}>{w.name}</option>)}
-          </select>
+          {lockedWarehouse ? (
+            <div className="w-full border border-stone-200 bg-stone-50 rounded-lg px-3 py-2 text-sm text-stone-700">
+              {lockedWarehouse.name}
+            </div>
+          ) : (
+            <select className={inputCls} value={f.fromWarehouseId}
+              onChange={(e) => { setF({ ...f, fromWarehouseId: e.target.value }); setErrors({}); }}>
+              <option value="">Select source…</option>
+              {warehouses.map((w) => <option key={w._id} value={w._id}>{w.name}</option>)}
+            </select>
+          )}
           {errText(errors.fromWarehouseId)}
         </Field>
         <Field label="To warehouse *">

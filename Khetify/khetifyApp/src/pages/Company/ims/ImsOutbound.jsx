@@ -31,8 +31,11 @@ const itemPid = (it) => String(it.productId?._id || it.productId);
  * are all untouched — only this screen stopped surfacing them.
  */
 const ImsOutbound = () => (
-  <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-white font-sora">
-    <div className="max-w-6xl mx-auto space-y-6">
+  // NO MAX-WIDTH. The Operations shell already supplies the page gutter, and the
+  // Transfers tab runs edge to edge — the old max-w-6xl cap here was what left
+  // this table visibly narrower than that one on the same screen.
+  <div className="flex-1 overflow-y-auto p-4 sm:p-6 bg-white font-sora">
+    <div className="w-full space-y-6">
       <SellerRequestsTab />
     </div>
   </div>
@@ -46,6 +49,10 @@ const ImsOutbound = () => (
 // Shipment Tracking table (resolved server-side as `requestRef`), so one piece
 // of work carries one number across both screens.
 const requestNumberOf = (o) => `SR-${String(o._id).slice(-6).toUpperCase()}`;
+
+// Seller Requests pagination — approved requests per page. Client-side, over the
+// list the existing fetch already returns: no API or query change.
+const PAGE_SIZE = 10;
 
 const SUPPLY_STATUS_STYLE = {
   approved: 'bg-indigo-50 text-indigo-700',
@@ -70,6 +77,7 @@ const SellerRequestsTab = () => {
   // again by going Back.
   const [params, setParams] = useSearchParams();
   const activeTab = params.get('tab');
+  const [page, setPage] = useState(1); // 1-based
 
   // Re-read on every visit, including coming BACK from the transfer page. A
   // request only leaves this list once the server has actually moved it off
@@ -79,13 +87,22 @@ const SellerRequestsTab = () => {
   useEffect(() => {
     let alive = true;
     getSupplyOrders({ stage: 'pick' })
-      .then((r) => { if (alive) setRows(listOf(r).filter((o) => o.status === 'approved')); })
+      .then((r) => { if (alive) { setRows(listOf(r).filter((o) => o.status === 'approved')); setPage(1); } })
       .catch((err) => { if (alive) apiError(err); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [activeTab]);
 
   const dispatchToSeller = (o) => setParams({ tab: 'seller-transfer', supply: String(o._id) });
+
+  // Derived, never stored: `rows` stays the single source of truth and only the
+  // SLICE rendered below changes. currentPage is clamped so dispatching the last
+  // request on the last page can't strand the table on a page that is now empty.
+  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const rangeStart = rows.length === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1;
+  const rangeEnd = Math.min(currentPage * PAGE_SIZE, rows.length);
+  const paged = rows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
   if (loading) return <p className="text-sm text-stone-400">Loading approved requests…</p>;
 
@@ -119,7 +136,7 @@ const SellerRequestsTab = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-100">
-              {rows.map((o) => {
+              {paged.map((o) => {
                 const items = o.items || [];
                 // Total across every requested product — the approved (allocated)
                 // quantity, which is what will actually be transferred.
@@ -178,6 +195,45 @@ const SellerRequestsTab = () => {
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Pagination — same control as the Company Lots table. Hidden when a
+          single page holds everything, so a short list stays uncluttered. */}
+      {rows.length > 0 && totalPages > 1 && (
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mt-4">
+          <p className="text-[11px] font-bold uppercase tracking-wider text-stone-400">
+            Showing {rangeStart}–{rangeEnd} of {rows.length} requests
+          </p>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setPage((n) => Math.max(1, n - 1))}
+              disabled={currentPage <= 1}
+              className="inline-flex items-center gap-1 text-xs font-bold px-3 py-2 rounded-lg border border-stone-200 text-stone-600 hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <span className="material-symbols-outlined text-base">chevron_left</span> Previous
+            </button>
+            {Array.from({ length: totalPages }, (_, i) => i + 1).map((n) => (
+              <button
+                key={n}
+                onClick={() => setPage(n)}
+                className={`min-w-[36px] text-xs font-bold px-3 py-2 rounded-lg border transition-colors ${
+                  n === currentPage
+                    ? 'bg-[#EA2831] border-[#EA2831] text-white'
+                    : 'border-stone-200 text-stone-600 hover:bg-stone-50'
+                }`}
+              >
+                {n}
+              </button>
+            ))}
+            <button
+              onClick={() => setPage((n) => Math.min(totalPages, n + 1))}
+              disabled={currentPage >= totalPages}
+              className="inline-flex items-center gap-1 text-xs font-bold px-3 py-2 rounded-lg border border-stone-200 text-stone-600 hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next <span className="material-symbols-outlined text-base">chevron_right</span>
+            </button>
+          </div>
         </div>
       )}
     </>

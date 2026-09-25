@@ -86,6 +86,14 @@ const ROLE_CAPABILITIES = {
     "warehouse:manage",
     "supply:*",
     "inventory:read",
+    // Read-only visibility of the seller's OWN catalogue, so a warehouse user
+    // can see the products their warehouse holds. Every mutation (create,
+    // edit, add stock, publish) stays on "myproduct:manage" — seller_admin only.
+    "myproduct:read",
+    // Read-only visibility of marketplace listing status, so a warehouse user
+    // can see whether a product is live. Publishing and unpublishing stay on
+    // the manage capability.
+    "listing:read",
     "transfer:*",
     "label:*",
     "customer:*",
@@ -100,6 +108,11 @@ const ROLE_CAPABILITIES = {
     "catalog:read",
     "supply:read",
     "inventory:read",
+    // Read-only visibility of the seller's OWN catalogue (see seller_manager).
+    "myproduct:read",
+    // Read-only visibility of marketplace listing status (see seller_manager):
+    // whether a product is live. Publishing and unpublishing stay on manage.
+    "listing:read",
     "transfer:read",
     "label:read",
     "label:print",
@@ -287,8 +300,23 @@ const ROLE_DENIED = {
   // seller_admin's "*" would silently grant it back.
   //
   // Deliberately NOT denied: transfer:read (they still see everything) and
-  // order:* / supply:* (approving is theirs).
-  seller_admin: ["transfer:create"],
+  // order:read / supply:read (approving and tracking are theirs).
+  //
+  // supply:receive is denied for exactly the same reason as transfer:create.
+  // Receiving an inbound supply is a PHYSICAL act: someone stands at the dock,
+  // scans the manifest and the cartons, and confirms what actually arrived. The
+  // warehouse the supply was routed to does that — head office cannot, because
+  // head office is not holding the boxes.
+  //
+  // It is also the moment stock is created. Letting an office role sign for
+  // goods it never saw is how phantom inventory gets into the system: the
+  // record says received, the shelf says otherwise, and nobody can tell which
+  // is wrong. The scan-verify flow only means something if the person scanning
+  // is the person receiving.
+  //
+  // seller_manager keeps it through "supply:*"; seller_staff never had it
+  // (they hold only supply:read).
+  seller_admin: ["transfer:create", "supply:receive"],
 };
 
 /** Capabilities denied to `role` (empty array if none). */

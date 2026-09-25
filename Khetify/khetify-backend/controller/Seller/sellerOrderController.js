@@ -10,6 +10,7 @@ const salesService = require("../../services/salesService");
 const barcodeService = require("../../services/barcodeService");
 const shipmentService = require("../../services/shipmentService");
 const { rankByProximity, planAllocation } = require("../../services/warehouseProximityService");
+const { warehouseScope } = require("../../services/warehouseScope");
 
 // Same workflow map the company order controller uses.
 const TRANSITIONS = {
@@ -24,6 +25,47 @@ const TRANSITIONS = {
 
 const sellerOwner = (req) => ({ ownerType: "seller", ownerId: req.user.sellerId });
 const sellerScope = (req) => ({ ownerType: "seller", ownerId: req.user.sellerId });
+
+/**
+ * WAREHOUSE SCOPING for the order READS. sellerScope() narrows to the seller
+ * ACCOUNT; this narrows to the warehouses the caller is assigned to, so a
+ * warehouse user no longer sees another warehouse's sales and POS bills.
+ *
+ * Scope comes from services/warehouseScope.js — the same helper the inventory,
+ * shipment, supply and report controllers already use. It returns null for an
+ * unscoped caller (seller_admin holds "*"), and {} here means no restriction,
+ * so seller_admin's result set is byte for byte what it is today.
+ *
+ * MATCHED THROUGH THE LINES, not just the order header. Order.js sets the
+ * order-level `sourceWarehouseId` only on a single-warehouse order and leaves
+ * it null on a SPLIT one, so filtering on the header alone would hide every
+ * split order from every warehouse. The $or reads `items.sourceWarehouseId`
+ * too, and a split order surfaces for each warehouse holding one of its lines.
+ *
+ * UNASSIGNED ORDERS FALL OUT BY CONSTRUCTION. A customer web order that has not
+ * been approved and assigned yet carries no source warehouse on the header OR
+ * on any line, so it matches neither arm and stays invisible to warehouse
+ * users — it belongs to the seller admin until they assign it. There is
+ * deliberately no "missing field" fallback: treating an absent warehouse as
+ * "visible to everyone" is exactly the leak this closes.
+ */
+const warehouseOrderScope = async (req) => {
+  const scope = await warehouseScope(req.user); // null = unscoped (seller_admin)
+  if (!scope) return {};
+
+  // Warehouse managers see:
+  // 1. Orders already assigned to their warehouse (sourceWarehouseId on header or line)
+  // 2. Pending orders where ANY line's sourceWarehouseId matches their warehouse
+  //    — this is how new customer orders appear in the manager's queue immediately
+  //    after checkout assigns the warehouse automatically.
+  return {
+    $or: [
+      { sourceWarehouseId: { $in: scope } },
+      { "items.sourceWarehouseId": { $in: scope } },
+    ],
+  };
+};
+
 const fail = (res, err) => res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
 
 /** POST /api/seller/orders — create a confirmed sale order (FEFO reservation from seller stock). */
@@ -34,12 +76,82 @@ exports.createOrder = async (req, res) => {
   } catch (err) { fail(res, err); }
 };
 
+/**
+ * SKU AS SOLD, resolved for a page of orders.
+ *
+ * An order line snapshots `variantId` / `variantLabel` but never the variant's
+ * SKU, so the SKU has to be read back off the product. Doing it here rather
+ * than at checkout means EVERY order answers — including the ones already in
+ * the database, which a write-side snapshot could never fix.
+ *
+ * One extra query per page, not per row: the product ids across the whole page
+ * are collected first and fetched in a single $in, then matched in memory.
+ *
+ * WHICH SKU WINS: the variant's own, whenever the line names a variant that
+ * still carries one. The product-level `skuNumber` is a FALLBACK only — for
+ * lines with no variant (single-variant products, POS/manual orders) or a
+ * variant with no SKU of its own. Nothing is invented: a line that resolves to
+ * neither is left `sku: null` and the table shows a dash.
+ *
+ * Purely ADDITIVE — `sku` is attached to the response objects, the stored
+ * documents are untouched.
+ */
+async function attachItemSkus(orders) {
+  const productIds = [
+    ...new Set(
+      orders
+        .flatMap((o) => (o.items || []).map((it) => it.productId))
+        .filter(Boolean)
+        .map(String)
+    ),
+  ];
+  if (!productIds.length) return orders;
+
+  const products = await Product.find({ _id: { $in: productIds } })
+    .select("skuNumber variants._id variants.sku")
+    .lean();
+
+  const byProduct = new Map();
+  for (const p of products) {
+    const variants = new Map();
+    for (const v of p.variants || []) if (v && v.sku) variants.set(String(v._id), v.sku);
+    byProduct.set(String(p._id), { parentSku: p.skuNumber || null, variants });
+  }
+
+  for (const o of orders) {
+    for (const it of o.items || []) {
+      const entry = it.productId ? byProduct.get(String(it.productId)) : null;
+      if (!entry) { it.sku = null; continue; }
+      const variantSku = it.variantId ? entry.variants.get(String(it.variantId)) : null;
+      it.sku = variantSku || entry.parentSku || null;
+    }
+  }
+  return orders;
+}
+
 /** GET /api/seller/orders */
 exports.getOrders = async (req, res) => {
   try {
-    const filter = sellerScope(req);
+    const filter = { ...sellerScope(req), ...(await warehouseOrderScope(req)) };
     if (req.query.status) filter.status = req.query.status;
-    const rows = await Order.find(filter).sort({ placedAt: -1 }).limit(Math.min(Number(req.query.limit) || 200, 500));
+    // .lean() so the resolved SKU can be attached to the plain rows below. The
+    // serialised shape is unchanged — the schema declares no virtuals.
+    //
+    // WHICH WAREHOUSE MADE THE SALE, by name. Both paths are populated because
+    // Order.js stores the source in two places: the order-level field for a
+    // single-warehouse order, and the per-line field for a SPLIT one, where the
+    // order-level field is null by definition. Both are returned as-is — the
+    // server does not collapse a split order's lines into one "the" warehouse,
+    // because there isn't one; the UI decides how to render that.
+    //
+    // "name code" only: these rows already carry every line and the list caps
+    // at 500, so the full warehouse document would be dead weight. Populate
+    // runs as part of this one query — no extra round trip, no per-row lookup.
+    const rows = await Order.find(filter)
+      .populate("sourceWarehouseId", "name code")
+      .populate("items.sourceWarehouseId", "name code")
+      .sort({ placedAt: -1 }).limit(Math.min(Number(req.query.limit) || 200, 500)).lean();
+    await attachItemSkus(rows);
     res.json({ success: true, count: rows.length, data: rows });
   } catch (err) { fail(res, err); }
 };
@@ -47,7 +159,8 @@ exports.getOrders = async (req, res) => {
 /** GET /api/seller/orders/:id */
 exports.getOrder = async (req, res) => {
   try {
-    const order = await Order.findOne({ _id: req.params.id, ...sellerScope(req) }).lean();
+    // Out of scope reads as NOT FOUND, never 403 — a 403 would confirm the id exists.
+    const order = await Order.findOne({ _id: req.params.id, ...sellerScope(req), ...(await warehouseOrderScope(req)) }).lean();
     if (!order) return res.status(404).json({ success: false, message: "Order not found" });
     order.nextStates = TRANSITIONS[order.status] || [];
     res.json({ success: true, data: order });
@@ -57,7 +170,7 @@ exports.getOrder = async (req, res) => {
 /** GET /api/seller/orders/:id/picklist — FEFO plan over the SELLER's lots. */
 exports.getPicklist = async (req, res) => {
   try {
-    const order = await Order.findOne({ _id: req.params.id, ...sellerScope(req) });
+    const order = await Order.findOne({ _id: req.params.id, ...sellerScope(req), ...(await warehouseOrderScope(req)) });
     if (!order) return res.status(404).json({ success: false, message: "Order not found" });
     const now = new Date();
     const lines = [];
@@ -112,7 +225,7 @@ exports.getPicklist = async (req, res) => {
 exports.getSourceOptions = async (req, res) => {
   try {
     const sellerId = req.user.sellerId;
-    const order = await Order.findOne({ _id: req.params.id, ...sellerScope(req) }).lean();
+    const order = await Order.findOne({ _id: req.params.id, ...sellerScope(req), ...(await warehouseOrderScope(req)) }).lean();
     if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
     const now = new Date();
@@ -250,15 +363,20 @@ exports.getSourceOptions = async (req, res) => {
 
 /**
  * PATCH /api/seller/orders/:id/status — drive the workflow.
- * On "shipped": commit reserved seller stock (or FEFO fallback) AND close the
- * traceability chain — the seller's units for the sold lots become "sold",
- * linked to the buyer. On "cancelled": release reserved stock.
  *
- * On "confirmed" the body may carry `sourceWarehouseId` — the warehouse the
- * seller picked in "Assign a warehouse". It is recorded on the order and scopes
- * the shipment's pick lines. OPTIONAL: omitted, everything behaves exactly as
- * before (lines built FEFO across every warehouse), so existing callers and
- * already-confirmed orders are unaffected.
+ * NEW FLOW (post-logistics integration):
+ *   pending  → confirmed  : warehouse manager approves (warehouse already assigned at checkout)
+ *   confirmed → packed    : warehouse manager
+ *   packed   → shipped    : warehouse manager (after dispatch)
+ *   shipped  → delivered  : system / delivery confirmation
+ *
+ * Seller admin NO LONGER approves orders. Orders land in the warehouse
+ * manager's queue with warehouse already set by checkout auto-assignment.
+ * The `sourceWarehouseId` and `allocation` body params are kept for
+ * backward compat but are no longer required — checkout sets them.
+ *
+ * On "shipped": commit reserved seller stock AND close the traceability chain.
+ * On "cancelled": release reserved stock.
  */
 exports.updateStatus = async (req, res) => {
   try {
@@ -272,12 +390,9 @@ exports.updateStatus = async (req, res) => {
       return res.status(400).json({ success: false, message: `Cannot move an order from "${order.status}" to "${status}".` });
     }
 
-    // ── WAREHOUSE ASSIGNMENT (approval only) ──
-    // `allocation` is [{ productId, warehouseId }] — one entry per ordered line,
-    // which is what a SPLIT order needs. `sourceWarehouseId` is the older
-    // single-warehouse form and is still accepted: it simply assigns every line
-    // to that one warehouse. Neither given, nothing is assigned and the order
-    // behaves exactly as it did before this field existed.
+    // ── WAREHOUSE ASSIGNMENT (kept for backward compat, rarely needed now) ──
+    // Checkout auto-assigns the warehouse, so this block only runs if the order
+    // somehow arrived without one (e.g. manual/POS orders, legacy data).
     if (status === "confirmed" && (allocation || sourceWarehouseId)) {
       const lines = (order.items || []).filter((it) => it.productId);
       const wanted = Array.isArray(allocation) && allocation.length
@@ -592,6 +707,16 @@ exports.shipOrder = async (orderId, sellerId, shipment = null) => {
   const order = await Order.findOne({ _id: orderId, ownerType: "seller", ownerId: sellerId });
   if (!order || ["shipped", "delivered", "cancelled", "returned"].includes(order.status)) return;
 
+  /**
+   * Ek baar dispatch ho gaya to dobara nahi.
+   *
+   * Pehle ye rok `status === "shipped"` se lagti thi. Ab hum status ko "packed"
+   * pe chhod rahe hain (shipped logistics lagata hai jab delivery boy uthaye),
+   * isliye wo purani rok kaam nahi karegi — aur bina iske dobara call aane par
+   * STOCK DO BAAR KAT JAATA.
+   */
+  if (order.dispatchedAt) return;
+
   const siblings = await findOrderShipments(orderId, sellerId);
   const isSplit = siblings.length > 1;
 
@@ -610,7 +735,22 @@ exports.shipOrder = async (orderId, sellerId, shipment = null) => {
   );
   if (isSplit && !allGone) { await order.save(); return; } // partial: keep status, persist deduction
 
-  order.status = "shipped";
+  /**
+   * "packed" pe rukte hain — "shipped" YAHAN NAHI lagta.
+   *
+   * Warehouse ne dabba bandh kar diya, lekin parcel abhi godown me hi pada
+   * hai. Customer ko us waqt "Your order is on its way" dikhana jhooth hai —
+   * delivery boy ne use uthaya tak nahi.
+   *
+   * "shipped" ab Khetify Logistics lagata hai, us lamhe jab agent sach me
+   * parcel utha leta hai. Wahi ek jagah hai jise pata hai ki saman nikla ya
+   * nahi.
+   *
+   * Stock yahin katta hai, jaisa pehle tha — wo sahi hai. Saman godown se
+   * nikalne ke liye taiyaar ho gaya, bas customer ko batane ka waqt abhi nahi
+   * aaya.
+   */
+  if (order.status === "confirmed") order.status = "packed";
   order.dispatchedAt = new Date();
   await order.save();
 };

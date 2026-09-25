@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import config from '../../../config/config';
-import BackButton from '../../Components/BackButton';
+
 import {
   getSellerDocuments, uploadSellerDocuments, deleteSellerDocument,
   getPcApplications, getPcApplyForm, createPcApplication, attachPcDocuments,
@@ -45,7 +45,7 @@ const SellerCertifications = () => {
   return (
     <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-stone-50/50 font-sora">
       <div className="max-w-5xl mx-auto space-y-8">
-        <BackButton to="/seller/admin" />
+     
         <div>
           <h1 className="text-xl font-bold text-stone-900">Certifications</h1>
           <p className="text-sm text-stone-500">Apply for a Principal Certificate to become an authorized reseller. Search a company, fill its application form (your profile details auto-fill), and submit — once the company issues the PC, you can sell its products.</p>

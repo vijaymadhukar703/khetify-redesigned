@@ -3,7 +3,7 @@ import Swal from 'sweetalert2';
 import { getSellerPlans, changeSellerPlan } from '../../lib/sellerApi';
 import { useSellerSubscription } from '../../context/SellerSubscriptionContext';
 import { useSellerPermission } from '../../context/SellerPermissionContext';
-import BackButton from '../../Components/BackButton';
+
 
 const toast = (icon, title) => Swal.fire({ icon, title, toast: true, position: 'top-end', timer: 2200, showConfirmButton: false });
 
@@ -12,8 +12,34 @@ const FEATURE_LABEL = {
   low_stock_alerts: 'Low-stock alerts', inventory_view: 'Inventory views (stock / lots / batches)',
   multi_warehouse: 'Unlimited warehouses', unit_labels: 'Unit labels (print & scan)', batch_expiry: 'Batch & expiry tracking',
   reserved_stock: 'Reserved stock', advanced_analytics: 'Analytics',
+  stock_transfers: 'Stock transfers',
 };
 const PLAN_PRICE = { free: '₹0', pro: '₹999 / mo', enterprise: 'Contact us' };
+
+/* WHAT THE FREE CARD SAYS — a DISPLAY list, not the gate.
+ *
+ * Most of what Free actually gives is not in SELLER_PLANS.free at all: My
+ * Products, Marketplace Listings, Warehouses, Sales, the Dashboard and Team &
+ * Roles carry no `feature` tag, so they are open by being UNTAGGED rather than
+ * by being listed. Deriving this card from the feature array therefore showed
+ * two lines for a plan that unlocks eight modules, and read like Free gives
+ * almost nothing.
+ *
+ * So the Free card is written out by hand. It changes NOTHING about access:
+ * config/plans.js is still the only thing that decides what opens, and Pro /
+ * Enterprise still render straight from it. If the free tier is ever re-cut in
+ * plans.js, this list has to be re-read by a human — which is the cost of
+ * saying more here than the data can say on its own.
+ */
+const FREE_PLAN_DISPLAY = [
+  'My Products (upload & stock)',
+  'Marketplace listings',
+  'Warehouse (1)',
+  'Sales',
+  'Dashboard',
+  'Team & roles',
+  'Low-stock alerts',
+];
 
 const SellerBilling = () => {
   const { sellerPlan, refresh } = useSellerSubscription();
@@ -35,7 +61,7 @@ const SellerBilling = () => {
 
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-8 py-8 font-sora">
-      <BackButton to="/seller/admin" />
+     
       <h1 className="text-2xl font-bold text-stone-900 mb-1">Billing &amp; Usage</h1>
       <p className="text-stone-500 mb-6">
         You are on the <b className="text-stone-800 capitalize">{sellerPlan}</b> plan.
@@ -55,14 +81,21 @@ const SellerBilling = () => {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         {Object.entries(plans).map(([key, p]) => {
           const isCurrent = key === sellerPlan;
+          // 🚧 Pro / Enterprise upgrades are not live yet — the switch button for
+          // either is commented out below and replaced with a "Coming soon"
+          // badge next to the plan name. Free is unaffected.
+          const isComingSoon = key !== 'free';
           const feats = p.features === 'ALL'
             ? ['Everything in Pro', 'All current & future features']
-            : (p.features || []).map((f) => FEATURE_LABEL[f] || f);
+            : key === 'free'
+              ? FREE_PLAN_DISPLAY // hand-written; see the note above
+              : (p.features || []).map((f) => FEATURE_LABEL[f] || f);
           return (
             <div key={key} className={`rounded-2xl border p-6 shadow-sm flex flex-col ${isCurrent ? 'border-[#EA2831] ring-2 ring-[#EA2831]/20' : 'border-stone-200'}`}>
               <div className="flex items-center justify-between">
                 <h3 className="text-lg font-bold text-stone-900">{p.label || key}</h3>
                 {isCurrent && <span className="text-[10px] font-bold uppercase tracking-wider text-[#EA2831] bg-[#EA2831]/10 rounded-full px-2 py-0.5">Current</span>}
+                {!isCurrent && isComingSoon && <span className="text-[10px] font-bold uppercase tracking-wider text-stone-500 bg-stone-100 rounded-full px-2 py-0.5">Coming soon</span>}
               </div>
               <p className="text-2xl font-black text-stone-900 mt-2">{PLAN_PRICE[key] || '—'}</p>
               <p className="text-[11px] text-stone-400 mt-1">
@@ -75,14 +108,28 @@ const SellerBilling = () => {
                   </li>
                 ))}
               </ul>
-              <button
-                onClick={() => choose(key)}
-                disabled={isCurrent || busy === key || !canManage}
-                title={!canManage ? 'Only your seller admin can change the plan' : undefined}
-                className={`mt-5 rounded-lg px-4 py-2.5 text-sm font-bold transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${isCurrent ? 'bg-stone-100 text-stone-500' : 'bg-[#EA2831] text-white hover:bg-red-600'}`}
-              >
-                {isCurrent ? 'Your plan' : !canManage ? 'Admin only' : busy === key ? 'Switching…' : `Switch to ${p.label || key}`}
-              </button>
+              {/* 🚧 "Switch to Pro" / "Switch to Enterprise" — commented out
+                  until upgrades go live. Free's button is untouched below. */}
+              {/* {isComingSoon && (
+                <button
+                  onClick={() => choose(key)}
+                  disabled={isCurrent || busy === key || !canManage}
+                  title={!canManage ? 'Only your seller admin can change the plan' : undefined}
+                  className={`mt-5 rounded-lg px-4 py-2.5 text-sm font-bold transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${isCurrent ? 'bg-stone-100 text-stone-500' : 'bg-[#EA2831] text-white hover:bg-red-600'}`}
+                >
+                  {isCurrent ? 'Your plan' : !canManage ? 'Admin only' : busy === key ? 'Switching…' : `Switch to ${p.label || key}`}
+                </button>
+              )} */}
+              {!isComingSoon && (
+                <button
+                  onClick={() => choose(key)}
+                  disabled={isCurrent || busy === key || !canManage}
+                  title={!canManage ? 'Only your seller admin can change the plan' : undefined}
+                  className={`mt-5 rounded-lg px-4 py-2.5 text-sm font-bold transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${isCurrent ? 'bg-stone-100 text-stone-500' : 'bg-[#EA2831] text-white hover:bg-red-600'}`}
+                >
+                  {isCurrent ? 'Your plan' : !canManage ? 'Admin only' : busy === key ? 'Switching…' : `Switch to ${p.label || key}`}
+                </button>
+              )}
             </div>
           );
         })}

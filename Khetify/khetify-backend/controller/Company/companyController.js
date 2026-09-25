@@ -1,16 +1,191 @@
-const Company = require("../../model/Company/Company")
+const Company = require("../../model/Company/Company");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
-const { isBlank, isEmail, isPhone10, isGstin, isPan, isValidYear } = require("../../utils/fieldValidators");
+const {
+  isBlank,
+  isEmail,
+  isPhone10,
+  isGstin,
+  isPan,
+  isValidYear,
+} = require("../../utils/fieldValidators");
 const fileService = require("../../services/fileService");
 const { sendMail } = require("../../services/mailerService");
+const { sendSMS, otpMessageText } = require("../../services/smsService");
+
+// ── IN-MEMORY OTP STORE (company registration) ───────────────────────────────
+// email → { otp, expiresAt, attempts, formData }
+// Production note: replace with Redis for multi-instance deployments.
+const regOtpStore = new Map();
+const OTP_TTL_MS   = 10 * 60 * 1000; // 10 minutes
+const MAX_ATTEMPTS = 5;
+
+function genOtp() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+function maskEmail(email) {
+  const [local, domain] = email.split("@");
+  if (!local || !domain) return email;
+  const show = local.slice(0, 2);
+  return `${show}${"*".repeat(Math.max(1, local.length - 2))}@${domain}`;
+}
+
+async function sendRegOtp(email, otp, fullName) {
+  try {
+    await sendMail({
+      to: email,
+      subject: "Your Khetify verification code",
+      html: `
+        <div style="font-family:sans-serif;max-width:480px;margin:auto;">
+          <h2 style="color:#EA2831;">Verify your email</h2>
+          <p>Hello <strong>${fullName}</strong>,</p>
+          <p>Use the code below to complete your Khetify account registration. It expires in <strong>10 minutes</strong>.</p>
+          <div style="font-size:36px;font-weight:bold;letter-spacing:8px;color:#EA2831;margin:24px 0;text-align:center;">${otp}</div>
+          <p style="color:#888;font-size:12px;">If you did not request this, ignore this email.</p>
+        </div>
+      `,
+      text: `Your Khetify registration code is: ${otp}\nIt expires in 10 minutes.`,
+    });
+    return true;
+  } catch (err) {
+    console.error("[sendRegOtp]", err.message);
+    return false;
+  }
+}
+
+/**
+ * POST /api/company/register/send-otp
+ * Validates form data, sends a 6-digit OTP to the email. No account created yet.
+ */
+exports.sendRegisterOtp = async (req, res) => {
+  try {
+    const { fullName, email, number, password } = req.body || {};
+
+    if (isBlank(fullName))                       return res.status(400).json({ message: "Full name is required" });
+    if (isBlank(email) || !isEmail(email))        return res.status(400).json({ message: "A valid email is required" });
+    if (isBlank(number) || !isPhone10(number))    return res.status(400).json({ message: "Phone must be 10 digits" });
+    if (isBlank(password) || String(password).length < 6)
+                                                  return res.status(400).json({ message: "Password must be at least 6 characters" });
+
+    const normEmail = String(email).toLowerCase().trim();
+
+    // Duplicate check before sending OTP
+    if (await Company.findOne({ email: normEmail }))
+      return res.status(400).json({ message: "This email is already registered." });
+    if (await Company.findOne({ number: String(number).trim() }))
+      return res.status(400).json({ message: "This phone number is already registered." });
+
+    const otp = genOtp();
+    regOtpStore.set(normEmail, {
+      otp,
+      expiresAt: Date.now() + OTP_TTL_MS,
+      attempts: 0,
+      formData: { fullName: fullName.trim(), email: normEmail, number: String(number).trim(), password },
+    });
+
+    const otpSent = await sendRegOtp(normEmail, otp, fullName.trim());
+    // Dev fallback — log to console so testing works without SMTP
+    if (!otpSent) console.info(`[DEV] Company register OTP for ${normEmail}: ${otp}`);
+
+    res.json({ success: true, otpSent, emailMasked: maskEmail(normEmail) });
+  } catch (err) {
+    console.error("[sendRegisterOtp]", err);
+    res.status(500).json({ message: err.message || "Server error" });
+  }
+};
+
+/**
+ * POST /api/company/register/verify-otp
+ * Verifies OTP; creates the account on success.
+ */
+exports.verifyRegisterOtp = async (req, res) => {
+  try {
+    const { email, code } = req.body || {};
+    if (!email || !code) return res.status(400).json({ message: "Email and code are required" });
+
+    const normEmail = String(email).toLowerCase().trim();
+    const record = regOtpStore.get(normEmail);
+
+    if (!record)                         return res.status(400).json({ message: "No code found for this email. Please request a new one." });
+    if (Date.now() > record.expiresAt) { regOtpStore.delete(normEmail); return res.status(400).json({ message: "Code has expired. Please request a new one." }); }
+    record.attempts += 1;
+    if (record.attempts > MAX_ATTEMPTS)  return res.status(429).json({ message: "Too many attempts. Please request a new code." });
+    if (String(code).trim() !== record.otp) return res.status(400).json({ message: "Incorrect code. Please try again." });
+
+    // OTP valid — create account
+    regOtpStore.delete(normEmail);
+    const { fullName, number, password } = record.formData;
+
+    // Re-check duplicates (edge case: parallel registration)
+    if (await Company.findOne({ email: normEmail }))
+      return res.status(400).json({ message: "This email is already registered." });
+    if (await Company.findOne({ number }))
+      return res.status(400).json({ message: "This phone number is already registered." });
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const company = new Company({ fullName, email: normEmail, number, password: hashedPassword, status: "pending" });
+    await company.save();
+
+    const token = jwt.sign(
+      { id: company._id, email: company.email, role: "company_admin" },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    res.status(201).json({
+      success: true,
+      token,
+      company: { _id: company._id, fullName: company.fullName, email: company.email },
+    });
+  } catch (err) {
+    console.error("[verifyRegisterOtp]", err);
+    res.status(500).json({ message: err.message || "Server error" });
+  }
+};
+
+/**
+ * POST /api/company/register/resend-otp
+ * Resends OTP for the same pending registration.
+ */
+exports.resendRegisterOtp = async (req, res) => {
+  try {
+    const { email } = req.body || {};
+    if (!email) return res.status(400).json({ message: "Email is required" });
+
+    const normEmail = String(email).toLowerCase().trim();
+    const record = regOtpStore.get(normEmail);
+    if (!record) return res.status(400).json({ message: "No pending registration found. Please start again." });
+
+    const otp = genOtp();
+    record.otp        = otp;
+    record.expiresAt  = Date.now() + OTP_TTL_MS;
+    record.attempts   = 0;
+
+    const otpSent = await sendRegOtp(normEmail, otp, record.formData.fullName);
+    if (!otpSent) console.info(`[DEV] Company register OTP for ${normEmail}: ${otp}`);
+
+    res.json({ success: true, otpSent, emailMasked: maskEmail(normEmail) });
+  } catch (err) {
+    console.error("[resendRegisterOtp]", err);
+    res.status(500).json({ message: err.message || "Server error" });
+  }
+};
 const path = require("path");
 
 // Reset tokens live for 1 hour. Raw token is emailed; only its SHA-256 hash is
 // persisted, so a DB read cannot be used to hijack an account.
 const RESET_TOKEN_TTL_MS = 60 * 60 * 1000;
-const hashResetToken = (raw) => crypto.createHash("sha256").update(raw).digest("hex");
+const hashResetToken = (raw) =>
+  crypto.createHash("sha256").update(raw).digest("hex");
+
+/** "9898765432" → "******5432". User पहचान ले, पर पूरा number screen पर
+ *  दोबारा न छपे. */
+const maskPhone = (p) => {
+  const v = String(p || "");
+  return v.length <= 4 ? v : "*".repeat(v.length - 4) + v.slice(-4);
+};
 
 /* ================= PROFILE (registration details + KYC docs) ================= */
 
@@ -21,15 +196,24 @@ async function companyProfilePayload(company) {
   const info = company.companyInfo || {};
   const contact = company.businessContact || {};
   const docu = company.companyDocument || {};
-  const [gstCertificateUrl, panFileUrl, udyamCertificateUrl] = await Promise.all([
-    fileService.publicFileUrl(docu.gstCertificate),
-    fileService.publicFileUrl(docu.panFile),
-    fileService.publicFileUrl(docu.udyamIncorporationCertificate),
-  ]);
-  const certifications = (await Promise.all((info.certifications || []).map(async (c, i) => ({
-    _id: `cert-${i}`, docType: "certification", label: `Certification ${i + 1}`, fileName: null, status: null,
-    url: await fileService.publicFileUrl(c),
-  })))).filter((c) => c.url);
+  const [gstCertificateUrl, panFileUrl, udyamCertificateUrl] =
+    await Promise.all([
+      fileService.publicFileUrl(docu.gstCertificate),
+      fileService.publicFileUrl(docu.panFile),
+      fileService.publicFileUrl(docu.udyamIncorporationCertificate),
+    ]);
+  const certifications = (
+    await Promise.all(
+      (info.certifications || []).map(async (c, i) => ({
+        _id: `cert-${i}`,
+        docType: "certification",
+        label: `Certification ${i + 1}`,
+        fileName: null,
+        status: null,
+        url: await fileService.publicFileUrl(c),
+      })),
+    )
+  ).filter((c) => c.url);
   return {
     identity: {
       businessName: info.companyName || company.fullName || "",
@@ -37,6 +221,13 @@ async function companyProfilePayload(company) {
       email: contact.businessEmail || company.email || "",
       phone: contact.businessNumber || company.number || "",
       address: contact.address || info.location || "",
+      // PHONE VERIFICATION. `phone` ऊपर business contact का number हो सकता है,
+      // पर सत्यापित होता है account का अपना `number` — वही login और recovery
+      // से जुड़ा है. दोनों अलग हो सकते हैं, इसलिए दोनों भेजे जाते हैं और UI
+      // साफ़ बताता है कि code किस number पर गया.
+      accountPhone: company.number || "",
+      accountPhoneMasked: maskPhone(company.number || ""),
+      phoneVerified: company.numberVerified === true,
     },
     compliance: {
       gstin: docu.gstinNumber || "",
@@ -55,7 +246,11 @@ async function companyProfilePayload(company) {
 async function storeCompanyDoc(companyId, file, slug) {
   const ext = (path.extname(file.originalname || "") || ".bin").toLowerCase();
   const key = `companies/${companyId}/${slug}-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
-  const { key: stored } = await fileService.uploadBuffer(file.buffer, key, file.mimetype);
+  const { key: stored } = await fileService.uploadBuffer(
+    file.buffer,
+    key,
+    file.mimetype,
+  );
   return stored;
 }
 
@@ -68,14 +263,26 @@ async function storeCompanyDoc(companyId, file, slug) {
 exports.getCompanyProfile = async (req, res) => {
   try {
     const companyId = req.user.companyId || req.user.id;
-    if (!companyId) return res.status(401).json({ success: false, message: "No company in this session — please log in again" });
+    if (!companyId)
+      return res
+        .status(401)
+        .json({
+          success: false,
+          message: "No company in this session — please log in again",
+        });
 
-    const company = await Company.findById(companyId).select("-password -token");
-    if (!company) return res.status(404).json({ success: false, message: "Company not found" });
+    const company =
+      await Company.findById(companyId).select("-password -token");
+    if (!company)
+      return res
+        .status(404)
+        .json({ success: false, message: "Company not found" });
 
     res.json({ success: true, data: await companyProfilePayload(company) });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message || "Server error" });
+    res
+      .status(500)
+      .json({ success: false, message: err.message || "Server error" });
   }
 };
 
@@ -89,10 +296,19 @@ exports.getCompanyProfile = async (req, res) => {
 exports.updateCompanyProfile = async (req, res) => {
   try {
     const companyId = req.user.companyId || req.user.id;
-    if (!companyId) return res.status(401).json({ success: false, message: "No company in this session — please log in again" });
+    if (!companyId)
+      return res
+        .status(401)
+        .json({
+          success: false,
+          message: "No company in this session — please log in again",
+        });
 
     const company = await Company.findById(companyId);
-    if (!company) return res.status(404).json({ success: false, message: "Company not found" });
+    if (!company)
+      return res
+        .status(404)
+        .json({ success: false, message: "Company not found" });
 
     const b = req.body || {};
     company.companyInfo = company.companyInfo || {};
@@ -101,46 +317,86 @@ exports.updateCompanyProfile = async (req, res) => {
 
     // Identity (the shared Profile UI sends `businessName`; `companyName` kept too)
     if (b.companyName !== undefined || b.businessName !== undefined) {
-      company.companyInfo.companyName = String(b.companyName ?? b.businessName).trim();
+      company.companyInfo.companyName = String(
+        b.companyName ?? b.businessName,
+      ).trim();
     }
-    if (b.contactPerson !== undefined) company.businessContact.authorizedPerson = String(b.contactPerson).trim();
+    if (b.contactPerson !== undefined)
+      company.businessContact.authorizedPerson = String(b.contactPerson).trim();
     if (b.email !== undefined) {
       const v = String(b.email).trim();
-      if (v && !isEmail(v)) return res.status(400).json({ success: false, message: "Enter a valid email address" });
+      if (v && !isEmail(v))
+        return res
+          .status(400)
+          .json({ success: false, message: "Enter a valid email address" });
       company.businessContact.businessEmail = v;
     }
     if (b.phone !== undefined) {
       const v = String(b.phone).trim();
-      if (v && !isPhone10(v)) return res.status(400).json({ success: false, message: "Phone must be a 10-digit number" });
+      if (v && !isPhone10(v))
+        return res
+          .status(400)
+          .json({ success: false, message: "Phone must be a 10-digit number" });
       company.businessContact.businessNumber = v;
     }
-    if (b.address !== undefined) company.businessContact.address = String(b.address).trim();
+    if (b.address !== undefined)
+      company.businessContact.address = String(b.address).trim();
 
     // Compliance (validate format only when a non-blank value is supplied)
     if (b.gstin !== undefined) {
       const v = String(b.gstin).trim().toUpperCase();
-      if (v && !isGstin(v)) return res.status(400).json({ success: false, message: "Enter a valid 15-character GSTIN" });
+      if (v && !isGstin(v))
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message: "Enter a valid 15-character GSTIN",
+          });
       company.companyDocument.gstinNumber = v;
     }
     if (b.pan !== undefined) {
       const v = String(b.pan).trim().toUpperCase();
-      if (v && !isPan(v)) return res.status(400).json({ success: false, message: "Enter a valid 10-character PAN" });
+      if (v && !isPan(v))
+        return res
+          .status(400)
+          .json({ success: false, message: "Enter a valid 10-character PAN" });
       company.companyDocument.panNumber = v;
     }
 
     // Document replacements (multipart fields)
     const files = req.files || {};
-    if (files.gstCertificate?.[0]) company.companyDocument.gstCertificate = await storeCompanyDoc(companyId, files.gstCertificate[0], "gst");
-    if (files.panFile?.[0]) company.companyDocument.panFile = await storeCompanyDoc(companyId, files.panFile[0], "pan");
+    if (files.gstCertificate?.[0])
+      company.companyDocument.gstCertificate = await storeCompanyDoc(
+        companyId,
+        files.gstCertificate[0],
+        "gst",
+      );
+    if (files.panFile?.[0])
+      company.companyDocument.panFile = await storeCompanyDoc(
+        companyId,
+        files.panFile[0],
+        "pan",
+      );
     if (files.otherDocs?.length) {
-      const keys = await Promise.all(files.otherDocs.map((f) => storeCompanyDoc(companyId, f, "doc")));
-      company.companyInfo.certifications = [...(company.companyInfo.certifications || []), ...keys];
+      const keys = await Promise.all(
+        files.otherDocs.map((f) => storeCompanyDoc(companyId, f, "doc")),
+      );
+      company.companyInfo.certifications = [
+        ...(company.companyInfo.certifications || []),
+        ...keys,
+      ];
     }
 
     await company.save({ validateModifiedOnly: true });
-    res.json({ success: true, message: "Profile updated", data: await companyProfilePayload(company) });
+    res.json({
+      success: true,
+      message: "Profile updated",
+      data: await companyProfilePayload(company),
+    });
   } catch (err) {
-    res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
+    res
+      .status(err.status || 500)
+      .json({ success: false, message: err.message || "Server error" });
   }
 };
 
@@ -150,56 +406,93 @@ exports.registerCompany = async (req, res) => {
     const { fullName, email, number, password } = req.body;
 
     // Every field is required. (Defense in depth — the UI blocks blank submits
-    // too.) Full name must be non-blank; an email (if given) must be valid and a
-    // number (if given) must be 10 digits; at least one of email/number; and a
+    // too.) Full name must be non-blank; email AND phone number are BOTH
+    // mandatory (not either/or) and must each pass format validation; and a
     // password of at least 6 characters.
     if (isBlank(fullName)) {
       return res.status(400).json({ message: "Full name is required" });
     }
-    if (!email && !number) {
-      return res.status(400).json({ message: "Email or phone number is required" });
+    if (isBlank(email)) {
+      return res.status(400).json({ message: "Email is required" });
     }
-    if (email && !isEmail(email)) {
+    if (!isEmail(email)) {
       return res.status(400).json({ message: "Please enter a valid email" });
     }
-    if (number && !isPhone10(number)) {
-      return res.status(400).json({ message: "Phone number must be 10 digits" });
+    if (isBlank(number)) {
+      return res.status(400).json({ message: "Phone number is required" });
+    }
+    if (!isPhone10(number)) {
+      return res
+        .status(400)
+        .json({ message: "Phone number must be 10 digits" });
     }
     if (isBlank(password) || String(password).length < 6) {
-      return res.status(400).json({ message: "Password must be at least 6 characters" });
+      return res
+        .status(400)
+        .json({ message: "Password must be at least 6 characters" });
     }
 
-    // Check existing company
-    const query = [];
-    if (email) query.push({ email });
-    if (number) query.push({ number });
+    // Check existing company — check email and phone separately for specific error messages
+    const existingEmail = email
+      ? await Company.findOne({ email: String(email).toLowerCase().trim() })
+      : null;
+    if (existingEmail) {
+      return res
+        .status(400)
+        .json({ message: "This email is already registered." });
+    }
 
-    const existing = await Company.findOne({ $or: query });
-
-    if (existing) {
-      return res.status(400).json({ message: "Company already exists" });
+    const existingPhone = number
+      ? await Company.findOne({ number: String(number).trim() })
+      : null;
+    if (existingPhone) {
+      return res
+        .status(400)
+        .json({ message: "This phone number is already registered." });
     }
 
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Create company
+    // Create company — normalize email (lowercase + trim)
+    const normEmail = email ? String(email).toLowerCase().trim() : null;
+    const normNumber = number ? String(number).trim() : null;
     const company = new Company({
       fullName,
-      email: email || null,
-      number: number || null,
+      email: normEmail,
+      number: normNumber,
       password: hashedPassword,
       status: "pending",
     });
 
-    await company.save();
+    // Save with duplicate detection — the unique indexes will catch race conditions
+    // where two requests tried to create with the same email/phone simultaneously
+    try {
+      await company.save();
+    } catch (saveErr) {
+      // Mongoose duplicate key error — caught here in case race condition occurred
+      // after the findOne checks above but before the insert (rare but possible)
+      if (saveErr.code === 11000) {
+        const field = Object.keys(saveErr.keyPattern)[0];
+        if (field === "email") {
+          return res
+            .status(400)
+            .json({ message: "This email is already registered." });
+        } else if (field === "number") {
+          return res
+            .status(400)
+            .json({ message: "This phone number is already registered." });
+        }
+      }
+      throw saveErr;
+    }
 
     // Generate JWT. Company-owner tokens carry companyId === id and the
     // company_admin role so authorize()/RBAC works without a separate login.
     const token = jwt.sign(
       { id: company._id, companyId: company._id, role: "company_admin" },
       process.env.JWT_SECRET,
-      { expiresIn: "7d" }
+      { expiresIn: "7d" },
     );
 
     res.status(201).json({
@@ -219,6 +512,270 @@ exports.registerCompany = async (req, res) => {
   }
 };
 
+/* ═══════════════ 📱 PHONE VERIFICATION (profile) ═══════════════
+ * Registration email OTP से होती है; phone बाद में यहाँ से सत्यापित होता है.
+ * दोनों authMiddleware के पीछे हैं — company पहले से logged in है, इसलिए
+ * number body से नहीं आता: वो token वाले account का अपना number है. यही
+ * रोकता है कि कोई किसी और का number "verify" करवा ले.
+ * ═══════════════════════════════════════════════════════════════ */
+
+const PHONE_OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const PHONE_OTP_MAX_ATTEMPTS = 5;
+const PHONE_RESEND_COOLDOWN_MS = 60 * 1000;
+const PHONE_MAX_RESENDS = 5;
+
+const hashPhoneOtp = (code) =>
+  crypto.createHash("sha256").update(String(code)).digest("hex");
+
+/**
+ * POST /api/company/profile/phone/send-otp
+ *
+ * Code उसी number पर जाता है जो account पर दर्ज है. Body में कुछ नहीं लिया
+ * जाता — number बदलना एक अलग काम है (PATCH /profile), और उसे यहाँ मिलाना
+ * किसी भी number को "verified" करवा लेने का रास्ता खोल देता.
+ */
+exports.sendCompanyPhoneOtp = async (req, res) => {
+  try {
+    const companyId = req.user.companyId || req.user.id;
+    if (!companyId) {
+      return res
+        .status(401)
+        .json({
+          success: false,
+          message: "No company in this session — please log in again",
+        });
+    }
+
+    const company = await Company.findById(companyId);
+    if (!company)
+      return res
+        .status(404)
+        .json({ success: false, message: "Company not found" });
+
+    // Body में number आ सकता है — तब user अपना number बदलकर verify कर रहा है.
+    // न आए तो account का मौजूदा number ही verify होता है.
+    const asked = String(req.body.number || "").trim();
+    const target = asked || String(company.number || "").trim();
+
+    if (isBlank(target)) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "Add a phone number to your profile first",
+        });
+    }
+    if (!isPhone10(target)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Phone must be a 10-digit number" });
+    }
+    // वही number, और वो पहले से verified — दोबारा भेजने का कोई मतलब नहीं.
+    if (
+      company.numberVerified &&
+      target === String(company.number || "").trim()
+    ) {
+      return res.json({
+        success: true,
+        alreadyVerified: true,
+        message: "Phone number is already verified",
+      });
+    }
+    // नया number किसी और company के पास तो नहीं — यह यहीं पकड़ना बेहतर है,
+    // वरना user पूरा OTP भरने के बाद जानेगा कि number लिया जा चुका है.
+    if (target !== String(company.number || "").trim()) {
+      const clash = await Company.findOne({
+        number: target,
+        _id: { $ne: company._id },
+      }).select("_id");
+      if (clash) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message: "This phone number is already registered.",
+          });
+      }
+    }
+
+    // Resend throttle — बार-बार दबाने से SMS credits न उड़ें.
+    const otp = company.numberOtp || {};
+    // Throttle उसी number पर लागू होता है. Number बदला तो यह नई कोशिश है,
+    // पुरानी गिनती उस पर थोपना गलत होगा.
+    const sameTarget =
+      String(otp.pendingNumber || company.number || "").trim() === target;
+    if (sameTarget && otp.lastSentAt) {
+      const sinceLast = Date.now() - new Date(otp.lastSentAt).getTime();
+      if (sinceLast < PHONE_RESEND_COOLDOWN_MS) {
+        const wait = Math.ceil((PHONE_RESEND_COOLDOWN_MS - sinceLast) / 1000);
+        return res
+          .status(429)
+          .json({
+            success: false,
+            message: `Please wait ${wait} seconds before requesting a new code`,
+          });
+      }
+      if ((otp.resendCount || 0) >= PHONE_MAX_RESENDS) {
+        return res
+          .status(429)
+          .json({
+            success: false,
+            message: "Too many code requests. Please try again later.",
+          });
+      }
+    }
+
+    const code = String(crypto.randomInt(100000, 1000000)); // 6 digits
+    company.numberOtp = {
+      codeHash: hashPhoneOtp(code),
+      expiresAt: new Date(Date.now() + PHONE_OTP_TTL_MS),
+      attempts: 0,
+      lastSentAt: new Date(),
+      resendCount: sameTarget ? (otp.resendCount || 0) + 1 : 1,
+      pendingNumber: target,
+    };
+    await company.save({ validateModifiedOnly: true });
+
+    let otpSent = false;
+    try {
+      // Text smsService का है — DLT template से hubahu match होना ज़रूरी है
+      // और वो पूरे system में एक ही जगह रहना चाहिए.
+      const result = await sendSMS({
+        number: target,
+        text: otpMessageText(code),
+      });
+      otpSent = result.delivered;
+    } catch (smsErr) {
+      // SMS fail हो तो भी code सुरक्षित है — user दोबारा भेज सकता है.
+      console.error("[company-phone] SMS failed:", smsErr.message);
+    }
+
+    return res.json({
+      success: true,
+      message: "Verification code sent",
+      otpSent,
+      phoneMasked: maskPhone(target),
+    });
+  } catch (err) {
+    console.error("Send Company Phone OTP Error:", err);
+    res
+      .status(500)
+      .json({ success: false, message: err.message || "Server error" });
+  }
+};
+
+/**
+ * POST /api/company/profile/phone/verify   { code }
+ *
+ * सही code पर numberVerified सच हो जाता है और OTP मिटा दिया जाता है — एक
+ * code दोबारा इस्तेमाल नहीं हो सकता. Response में पूरा profile लौटाया जाता
+ * है (वही shape जो GET /profile का है), ताकि frontend को दूसरी request न
+ * करनी पड़े और badge तुरंत बदल जाए.
+ */
+exports.verifyCompanyPhoneOtp = async (req, res) => {
+  try {
+    const companyId = req.user.companyId || req.user.id;
+    if (!companyId) {
+      return res
+        .status(401)
+        .json({
+          success: false,
+          message: "No company in this session — please log in again",
+        });
+    }
+
+    const code = String(req.body.code || "").trim();
+    if (!code)
+      return res
+        .status(400)
+        .json({ success: false, message: "Verification code is required" });
+
+    const company = await Company.findById(companyId);
+    if (!company)
+      return res
+        .status(404)
+        .json({ success: false, message: "Company not found" });
+
+    const otp = company.numberOtp || {};
+    // Pending code हो तो उसे पहले निपटाओ — "already verified" का जवाब तभी सही
+    // है जब बदलने को कुछ बचा ही न हो.
+    if (company.numberVerified && !otp.codeHash) {
+      return res.json({
+        success: true,
+        message: "Phone number is already verified",
+        data: await companyProfilePayload(company),
+      });
+    }
+    if (!otp.codeHash || !otp.expiresAt) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "No pending verification. Request a new code.",
+        });
+    }
+    if (new Date(otp.expiresAt) < new Date()) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Code expired. Request a new code." });
+    }
+    if ((otp.attempts || 0) >= PHONE_OTP_MAX_ATTEMPTS) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "Too many attempts. Request a new code.",
+        });
+    }
+
+    if (hashPhoneOtp(code) !== otp.codeHash) {
+      company.numberOtp.attempts = (otp.attempts || 0) + 1;
+      await company.save({ validateModifiedOnly: true });
+      return res
+        .status(401)
+        .json({ success: false, message: "Incorrect code" });
+    }
+
+    // सही code — यानी इस number का मालिक होना साबित. अब, और सिर्फ़ अब, वो
+    // account का number बनता है.
+    const proven = String(otp.pendingNumber || company.number || "").trim();
+    company.number = proven;
+    company.numberVerified = true;
+    company.numberOtp = {
+      codeHash: null,
+      expiresAt: null,
+      attempts: 0,
+      lastSentAt: null,
+      resendCount: 0,
+      pendingNumber: null,
+    };
+    try {
+      await company.save({ validateModifiedOnly: true });
+    } catch (saveErr) {
+      // Code भरने के दौरान किसी और ने वही number ले लिया हो.
+      if (saveErr.code === 11000) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message: "This phone number is already registered.",
+          });
+      }
+      throw saveErr;
+    }
+
+    return res.json({
+      success: true,
+      message: "Phone number verified",
+      data: await companyProfilePayload(company),
+    });
+  } catch (err) {
+    console.error("Verify Company Phone OTP Error:", err);
+    res
+      .status(500)
+      .json({ success: false, message: err.message || "Server error" });
+  }
+};
 
 /* ================= LOGIN ================= */
 exports.loginCompany = async (req, res) => {
@@ -251,7 +808,7 @@ exports.loginCompany = async (req, res) => {
     const token = jwt.sign(
       { id: company._id, companyId: company._id, role: "company_admin" },
       process.env.JWT_SECRET,
-      { expiresIn: "7d" }
+      { expiresIn: "7d" },
     );
 
     company.token = token;
@@ -279,7 +836,9 @@ exports.loginCompany = async (req, res) => {
 /* ================= FORGOT PASSWORD (email reset link) ================= */
 exports.forgotPassword = async (req, res) => {
   try {
-    const email = String(req.body.email || "").toLowerCase().trim();
+    const email = String(req.body.email || "")
+      .toLowerCase()
+      .trim();
     if (!email || !isEmail(email)) {
       return res.status(400).json({ message: "A valid email is required" });
     }
@@ -289,7 +848,8 @@ exports.forgotPassword = async (req, res) => {
     // Always respond the same way so this endpoint can't be used to discover
     // which emails are registered (account enumeration).
     const genericResponse = {
-      message: "If an account exists for that email, a reset link has been sent.",
+      message:
+        "If an account exists for that email, a reset link has been sent.",
     };
 
     if (!company) return res.json(genericResponse);
@@ -299,7 +859,9 @@ exports.forgotPassword = async (req, res) => {
     company.resetPasswordExpires = new Date(Date.now() + RESET_TOKEN_TTL_MS);
     await company.save({ validateModifiedOnly: true });
 
-    const frontendUrl = (process.env.FRONTEND_URL || "http://localhost:5173").replace(/\/$/, "");
+    const frontendUrl = (
+      process.env.FRONTEND_URL || "http://localhost:5173"
+    ).replace(/\/$/, "");
     const resetUrl = `${frontendUrl}/reset-password?token=${rawToken}`;
 
     try {
@@ -323,7 +885,11 @@ exports.forgotPassword = async (req, res) => {
       company.resetPasswordToken = null;
       company.resetPasswordExpires = null;
       await company.save({ validateModifiedOnly: true });
-      return res.status(502).json({ message: "Could not send the reset email. Please try again later." });
+      return res
+        .status(502)
+        .json({
+          message: "Could not send the reset email. Please try again later.",
+        });
     }
 
     res.json(genericResponse);
@@ -340,7 +906,9 @@ exports.resetPassword = async (req, res) => {
       return res.status(400).json({ message: "Reset token is required" });
     }
     if (!password || String(password).length < 6) {
-      return res.status(400).json({ message: "Password must be at least 6 characters" });
+      return res
+        .status(400)
+        .json({ message: "Password must be at least 6 characters" });
     }
 
     const company = await Company.findOne({
@@ -349,7 +917,9 @@ exports.resetPassword = async (req, res) => {
     });
 
     if (!company) {
-      return res.status(400).json({ message: "Reset link is invalid or has expired" });
+      return res
+        .status(400)
+        .json({ message: "Reset link is invalid or has expired" });
     }
 
     company.password = await bcrypt.hash(String(password).trim(), 10);
@@ -400,29 +970,46 @@ exports.updateCompany = async (req, res) => {
     // present, which keeps the status-only submit + partial edits working.
     {
       const parse = (v) => (typeof v === "string" ? JSON.parse(v) : v);
-      const reject = (message) => res.status(400).json({ success: false, message });
+      const reject = (message) =>
+        res.status(400).json({ success: false, message });
 
       if (req.body.companyInfo !== undefined) {
         const ci = parse(req.body.companyInfo) || {};
-        if (ci.companyName !== undefined && isBlank(ci.companyName)) return reject("Company name is required");
-        if (ci.businessType !== undefined && isBlank(ci.businessType)) return reject("Business type is required");
-        if (ci.established !== undefined && (isBlank(ci.established) || !isValidYear(ci.established)))
+        if (ci.companyName !== undefined && isBlank(ci.companyName))
+          return reject("Company name is required");
+        if (ci.businessType !== undefined && isBlank(ci.businessType))
+          return reject("Business type is required");
+        if (
+          ci.established !== undefined &&
+          (isBlank(ci.established) || !isValidYear(ci.established))
+        )
           return reject("Enter a valid 4-digit year of establishment");
       }
 
       if (req.body.businessContact !== undefined) {
         const bc = parse(req.body.businessContact) || {};
-        if (bc.address !== undefined && isBlank(bc.address)) return reject("Business address is required");
-        if (bc.region !== undefined && isBlank(bc.region)) return reject("Operating region is required");
-        if (bc.authorizedPerson !== undefined && isBlank(bc.authorizedPerson)) return reject("Authorized person is required");
-        if (bc.businessEmail !== undefined && !isEmail(bc.businessEmail)) return reject("Enter a valid official email");
-        if (bc.businessNumber !== undefined && !isPhone10(bc.businessNumber)) return reject("Official phone must be 10 digits");
+        if (bc.address !== undefined && isBlank(bc.address))
+          return reject("Business address is required");
+        if (bc.region !== undefined && isBlank(bc.region))
+          return reject("Operating region is required");
+        if (bc.authorizedPerson !== undefined && isBlank(bc.authorizedPerson))
+          return reject("Authorized person is required");
+        if (bc.businessEmail !== undefined && !isEmail(bc.businessEmail))
+          return reject("Enter a valid official email");
+        if (bc.businessNumber !== undefined && !isPhone10(bc.businessNumber))
+          return reject("Official phone must be 10 digits");
       }
 
       // Verification ids arrive as top-level body keys (multipart form).
-      if (req.body.gstinNumber !== undefined && isBlank(req.body.gstinNumber)) return reject("GSTIN is required");
-      if (req.body.udyamIncorporationNumber !== undefined && isBlank(req.body.udyamIncorporationNumber)) return reject("Udyam/Incorporation number is required");
-      if (req.body.panNumber !== undefined && isBlank(req.body.panNumber)) return reject("PAN number is required");
+      if (req.body.gstinNumber !== undefined && isBlank(req.body.gstinNumber))
+        return reject("GSTIN is required");
+      if (
+        req.body.udyamIncorporationNumber !== undefined &&
+        isBlank(req.body.udyamIncorporationNumber)
+      )
+        return reject("Udyam/Incorporation number is required");
+      if (req.body.panNumber !== undefined && isBlank(req.body.panNumber))
+        return reject("PAN number is required");
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -625,15 +1212,21 @@ exports.updateCompany = async (req, res) => {
  */
 exports.getImsSettings = async (req, res) => {
   try {
-    const company = await Company.findById(req.user.companyId).select("imsSettings");
+    const company = await Company.findById(req.user.companyId).select(
+      "imsSettings",
+    );
     if (!company) {
-      return res.status(404).json({ success: false, message: "Company not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Company not found" });
     }
     res.json({
       success: true,
       data: {
-        lotNumberingMethod: company.imsSettings?.lotNumberingMethod || "company_defined",
-        lotNumberFormat: company.imsSettings?.lotNumberFormat || "{WH}-{YYYY}{MM}-{SEQ}",
+        lotNumberingMethod:
+          company.imsSettings?.lotNumberingMethod || "company_defined",
+        lotNumberFormat:
+          company.imsSettings?.lotNumberFormat || "{WH}-{YYYY}{MM}-{SEQ}",
       },
     });
   } catch (error) {
@@ -650,10 +1243,13 @@ exports.getImsSettings = async (req, res) => {
 exports.updateImsSettings = async (req, res) => {
   try {
     const { lotNumberingMethod } = req.body;
-    if (!["company_defined", "khetify_generated"].includes(lotNumberingMethod)) {
+    if (
+      !["company_defined", "khetify_generated"].includes(lotNumberingMethod)
+    ) {
       return res.status(400).json({
         success: false,
-        message: "lotNumberingMethod must be 'company_defined' or 'khetify_generated'",
+        message:
+          "lotNumberingMethod must be 'company_defined' or 'khetify_generated'",
       });
     }
 
@@ -663,7 +1259,9 @@ exports.updateImsSettings = async (req, res) => {
       { new: true, runValidators: true },
     ).select("imsSettings");
     if (!company) {
-      return res.status(404).json({ success: false, message: "Company not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Company not found" });
     }
     const audit = require("../../services/auditService");
     await audit.log({

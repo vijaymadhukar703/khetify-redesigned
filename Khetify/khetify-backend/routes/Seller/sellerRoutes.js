@@ -4,15 +4,24 @@ const router = express.Router();
 const {
   registerSeller,
   loginSeller,
+  sendRegistrationOtp,
+  verifyRegistrationOtp,
   getSellerMe,
   getSellerProfile,
   updateSellerProfile,
+  sendSellerPhoneOtp,
+  verifySellerPhoneOtp,
   updateSellerInfo,
   updateSellerContact,
   updateSellerVerification,
   submitSellerOnboarding,
   getSellerLink,
   ackApproval,
+  sellerForgotPassword,
+  sellerResetPassword,
+  sellerChangePassword,
+  updateSellerLocation,
+  previewSellerLocation,
 } = require("../../controller/Seller/sellerAuthController");
 const {
   getSellerCompanyLinks,
@@ -40,10 +49,36 @@ const manageCompanies = authorize("company:manage");
 // company login/register limiter.
 router.post("/register", registerSeller);
 router.post("/login", loginSeller);
+// Email OTP verification for registration
+router.post("/send-otp", sendRegistrationOtp);
+router.post("/verify-otp", verifyRegistrationOtp);
+
+// ── PASSWORD RESET (public, no auth) ──
+// Getting back into your own account must never depend on being signed in, so
+// these sit beside login and carry no auth and no capability. The seller
+// counterpart of /api/users/forgot-password, which is company-members-only.
+// Changing a password while SIGNED IN needs nothing here: that already works
+// through /api/users/change-password, which is scoped to the caller's own
+// account rather than to a company.
+router.post("/forgot-password", sellerForgotPassword);
+router.post("/reset-password", sellerResetPassword);
+
+// CHANGING YOUR PASSWORD WHILE SIGNED IN. It lives here, not on
+// /api/users/change-password, because principalRouteGuard refuses a seller
+// token on any non-/api/seller route ("Company access only"). Authenticated,
+// but no capability check: every principal may change their OWN password.
+router.post("/change-password", authMiddleware, sellerChangePassword);
 
 // Authenticated principal.
 router.get("/me", authMiddleware, getSellerMe);
 router.get("/profile", authMiddleware, getSellerProfile); // registration details + KYC docs (signed)
+
+// 📱 PHONE VERIFICATION. authMiddleware ke peeche — number token wale account
+// ka apna hai; body se sirf tab aata hai jab seller use badal raha ho, aur tab
+// bhi account par tabhi lagta hai jab OTP sahi nikle. Koi capability check
+// nahi: apna number verify karna har principal ka apna kaam hai.
+router.post("/profile/phone/send-otp", authMiddleware, sendSellerPhoneOtp);
+router.post("/profile/phone/verify", authMiddleware, verifySellerPhoneOtp);
 router.patch(
   "/profile",
   authMiddleware,
@@ -51,10 +86,24 @@ router.patch(
     { name: "gstCertificate", maxCount: 1 },
     { name: "panFile", maxCount: 1 },
     { name: "otherDocs", maxCount: 10 },
+    // Other registration licences — one certificate each. multer.fields()
+    // refuses a field name it has not been given, so each has to be listed.
+    { name: "tanCertificate", maxCount: 1 },
+    { name: "gumastaCertificate", maxCount: 1 },
+    { name: "udyamCertificate", maxCount: 1 },
+    { name: "agricultureCertificate", maxCount: 1 },
+    { name: "horticultureCertificate", maxCount: 1 },
   ]),
   updateSellerProfile,
 ); // edit identity/compliance + replace KYC docs (multipart → S3 keys)
 router.post("/ack-approval", authMiddleware, ackApproval); // dismiss the one-time "Linked" banner
+
+// ── LIVE LOCATION CONSENT ──
+// Authenticated, but NO capability check: answering "allow" or "deny" to the
+// browser prompt is every principal's own decision, not a managed permission.
+// The controller restricts the WRITE to the seller owner (see the note there).
+router.post("/location/preview", authMiddleware, previewSellerLocation); // resolve, do not save
+router.patch("/location", authMiddleware, updateSellerLocation);
 
 // Onboarding wizard — all scoped to req.user.sellerId.
 router.put("/onboarding/info", authMiddleware, updateSellerInfo);

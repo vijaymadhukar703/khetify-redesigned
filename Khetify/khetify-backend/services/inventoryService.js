@@ -2,6 +2,7 @@ const Inventory = require("../model/Inventory/Inventory");
 const StockMovement = require("../model/Inventory/StockMovement");
 const { emitToCompany, emitToSeller } = require("../sockets");
 const { notify } = require("./notificationService");
+const stockNotificationService = require("./stockNotificationService");
 
 /* ---------- helpers ---------- */
 
@@ -15,6 +16,19 @@ function emitInventoryUpdate(inv) {
   };
   if (inv.ownerType === "company") emitToCompany(inv.ownerId, "inventory:updated", payload);
   else emitToSeller(inv.ownerId, "inventory:updated", payload);
+
+  // Customer "Notify Me" subscriptions: this is the ONE place every stock-
+  // writing flow already calls (lot receive, seller's own stock add, bulk
+  // packaging, scan-receive, GRN, adjustments, reserve/commit/release...) —
+  // so hooking the check in here covers every restock path at once, instead
+  // of only the single one (GRN) that had it wired before. Deliberately NOT
+  // awaited: checkAndNotifyStockAvailability() catches its own errors and
+  // never throws, and it's a no-op whenever availableStock is <= 0 or there
+  // are no active subscribers, so this never blocks or risks the caller's
+  // own inventory write. It's also self-idempotent — each subscription
+  // flips to "notified" after firing once, so later inventory events for
+  // the same product (e.g. a sale) don't re-notify the same subscriber.
+  stockNotificationService.checkAndNotifyStockAvailability(inv.productId, null, inv.availableStock);
 }
 
 async function writeLedger(inv, { type, channel, quantity, refType, refId, performedBy, note }) {

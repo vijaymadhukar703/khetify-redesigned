@@ -4,7 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import { State, City } from 'country-state-city';
 import { Modal, Field, inputCls, PrimaryBtn } from '../Company/ims/ImsUi';
-import { getSellerLink, getSellerWarehouses, getSellerWarehouseStockSummary, getSellerLots, createSellerWarehouse, updateSellerWarehouse, SELLER_FEATURES } from '../../lib/sellerApi';
+import { getSellerWarehouses, getSellerWarehouseStockSummary, getSellerLots, createSellerWarehouse, updateSellerWarehouse, SELLER_FEATURES } from '../../lib/sellerApi';
+import { getMyStock } from '../../lib/sellerMyProductApi';
 import { getSellerSocket } from '../../lib/socket';
 import { useSellerSubscription } from '../../context/SellerSubscriptionContext';
 import { useSellerPermission } from '../../context/SellerPermissionContext';
@@ -26,18 +27,42 @@ const occupancyInfo = (units, capacity) => {
 const OTHER_CITY = '__other__';
 const toast = (icon, title) => Swal.fire({ icon, title, toast: true, position: 'top-end', timer: 2200, showConfirmButton: false });
 
+// A lot/stock row from either source normalised to one shape, so the card and
+// the detail modal can render both without caring where a row came from.
+// `getSellerLots` (company-supplied stock) and `getMyStock` (the seller's own
+// My Products stock) return the same underlying Inventory document shape —
+// only `source` is added here, purely for the badge in the UI.
+const normaliseRow = (l, source) => ({
+  _id: l._id,
+  warehouseId: l.warehouseId?._id || l.warehouseId,
+  productName: l.productId?.productName || l.productName || '—',
+  variantSku: l.variantSku || null,
+  lotNumber: l.lotNumber || l.batchNumber || '—',
+  availableStock: l.availableStock || 0,
+  expiryDate: l.expiryDate || null,
+  source, // 'mine' | 'company'
+});
+
 // Seller Warehouses — mirrors the company warehouse module (pages/Company/ims/
 // ImsWarehouses.jsx) but is scoped to the seller via the seller API client.
-// Gated by approval: an unapproved seller sees a locked panel (the backend also
-// enforces this via requireApprovedSeller). Seller lots arrive in Phase 4, so
-// per-warehouse occupancy is omitted for now.
+// NOT gated by approval. A seller must be able to create a warehouse before any
+// company issues them a Principal Certificate, or My Products' "Add stock" form
+// has nothing to put stock into — routes/Seller/sellerWarehouseRoutes.js dropped
+// requireApprovedSeller for the same reason. The PLAN LIMIT is unchanged: free
+// still gets one warehouse (see `atFreeLimit` below). Seller lots arrive in
+// Phase 4, so per-warehouse occupancy is omitted for now.
 const SellerWarehouses = () => {
   const navigate = useNavigate();
   const { sellerCan } = useSellerSubscription();
   const canCreate = useSellerPermission('warehouse:create'); // seller_admin only
-  const [approved, setApproved] = useState(null); // null = loading
   const [warehouses, setWarehouses] = useState([]);
   const [lots, setLots] = useState([]);
+  // The seller's OWN uploaded-product stock (My Products > Add stock). Kept
+  // separate from `lots` (company-supplied) because it comes from a different,
+  // ungated endpoint — but merged for display so a warehouse card shows
+  // EVERYTHING physically stored there, not just the company side. See
+  // normaliseRow() and `warehouseLots` below.
+  const [myLots, setMyLots] = useState([]);
   const [showCreate, setShowCreate] = useState(false);
 
   // Deep link from the Inbound Supply gate: /seller/warehouses?new=1 opens Add
@@ -70,47 +95,25 @@ const SellerWarehouses = () => {
   const refresh = useCallback(() => {
     getSellerWarehouses().then((r) => { if (r?.success) setWarehouses(r.data); }).catch(() => {});
     getSellerLots({}).then((r) => { if (r?.success) setLots(r.data || []); }).catch(() => {});
+    // Ungated on purpose (works on the Free plan too, unlike getSellerLots) —
+    // My Products stock should show up here whether or not the seller has Pro.
+    getMyStock({}).then((r) => { if (r?.success) setMyLots(r.data || []); }).catch(() => {});
   }, []);
 
-  const load = useCallback(() => {
-    getSellerLink()
-      .then((r) => {
-        const ok = r?.data?.linkStatus === 'approved';
-        setApproved(ok);
-        if (ok) refresh();
-      })
-      .catch(() => setApproved(false));
-  }, [refresh]);
-  useEffect(() => { load(); }, [load]);
+  // Straight to the data — there is no approval to wait on any more.
+  useEffect(() => { refresh(); }, [refresh]);
 
   // Live stock updates: when a supply lands into one of the seller's warehouses
   // (verifyReceipt → emitToSeller), refresh the cards' occupancy and nudge the
   // open detail modal to refetch — no manual refresh. Fires for the seller's
   // own device too (their socket is in the same room).
   useEffect(() => {
-    if (!approved) return undefined;
     const s = getSellerSocket();
     if (!s) return undefined;
     const onInv = () => { refresh(); setLiveBump((n) => n + 1); };
     s.on('seller:inventory:update', onInv);
     return () => { s.off('seller:inventory:update', onInv); };
-  }, [approved, refresh]);
-
-  if (approved === null) {
-    return <div className="flex-1 p-8 text-center text-stone-400 font-sora">Loading…</div>;
-  }
-
-  if (!approved) {
-    return (
-      <div className="flex-1 p-4 sm:p-8 bg-white font-sora">
-        <div className="max-w-xl mx-auto mt-10 bg-amber-50 border border-amber-200 rounded-2xl p-6 text-center">
-          <span className="material-symbols-outlined text-amber-500 text-4xl">lock</span>
-          <h2 className="text-lg font-bold text-amber-800 mt-2">Warehouses are locked</h2>
-          <p className="text-sm text-amber-700 mt-1">Available after your supplying company approves you.</p>
-        </div>
-      </div>
-    );
-  }
+  }, [refresh]);
 
   return (
     <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-white font-sora">
@@ -131,7 +134,13 @@ const SellerWarehouses = () => {
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
           {warehouses.map((w) => {
             const info = occupancyInfo(w.usedUnits, w.capacityUnits);
-            const warehouseLots = lots.filter((l) => String(l.warehouseId?._id || l.warehouseId) === String(w._id));
+            // Merge both sources so the card lists EVERYTHING physically in
+            // this warehouse — company-supplied lots AND the seller's own
+            // My Products stock — instead of only the company side.
+            const warehouseLots = [
+              ...lots.map((l) => normaliseRow(l, 'company')),
+              ...myLots.map((l) => normaliseRow(l, 'mine')),
+            ].filter((l) => String(l.warehouseId) === String(w._id));
             return (
               <div key={w._id} role="button" tabIndex={0}
                 onClick={() => setDetail(w)}
@@ -181,11 +190,14 @@ const SellerWarehouses = () => {
                 )}
                 <div className="mt-3 space-y-1.5">
                   {warehouseLots.slice(0, 4).map((l) => (
-                    <div key={l._id} className="flex justify-between text-xs border-b border-dashed border-stone-100 pb-1.5">
+                    <div key={`${l.source}-${l._id}`} className="flex justify-between text-xs border-b border-dashed border-stone-100 pb-1.5">
                       <span className="text-stone-500 truncate pr-2">
-                        {l.productId?.productName || l.productName || '—'} · <b>{l.lotNumber || l.batchNumber || '—'}</b>
+                        {l.productName}{l.variantSku ? <span className="text-stone-400"> ({l.variantSku})</span> : null} · <b>{l.lotNumber}</b>{' '}
+                        <span className={`ml-1 inline-block rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider ${l.source === 'mine' ? 'bg-emerald-50 text-emerald-700' : 'bg-stone-100 text-stone-500'}`}>
+                          {l.source === 'mine' ? 'My Product' : 'Company'}
+                        </span>
                       </span>
-                      <span className="font-bold text-stone-900">{fmtUnits(l.availableStock || 0)}</span>
+                      <span className="font-bold text-stone-900">{fmtUnits(l.availableStock)}</span>
                     </div>
                   ))}
                   {warehouseLots.length === 0 && <p className="text-xs text-stone-300">Empty</p>}
@@ -246,7 +258,11 @@ const WarehouseDetailModal = ({ warehouse: w, version, canViewLots, onViewLots, 
   const addr = [w.address?.line1, w.address?.city, w.address?.district, w.address?.state, w.address?.pincode]
     .filter(Boolean).join(', ');
   const [sum, setSum] = useState(null); // { usedUnits, lotCount, capacity, usedPct } — works on any plan
-  const [lots, setLots] = useState(null); // the seller's OWN lot rows in this warehouse (paid)
+  const [lots, setLots] = useState(null); // company-supplied lot rows in this warehouse (paid)
+  // The seller's OWN My Products stock in this warehouse — ungated (works on
+  // Free too), fetched separately from `lots` for the same reason as the list
+  // page: different endpoint, merged only for display.
+  const [myLots, setMyLots] = useState(null);
 
   // Fetch on open and whenever `version` bumps (a live stock event / receive).
   useEffect(() => {
@@ -255,14 +271,25 @@ const WarehouseDetailModal = ({ warehouse: w, version, canViewLots, onViewLots, 
     if (canViewLots) {
       getSellerLots({ warehouseId: w._id }).then((r) => { if (!cancelled && r?.success) setLots(r.data || []); }).catch(() => {});
     }
+    getMyStock({ warehouseId: w._id }).then((r) => { if (!cancelled && r?.success) setMyLots(r.data || []); }).catch(() => {});
     return () => { cancelled = true; };
   }, [w._id, version, canViewLots]);
 
+  // The combined, badge-tagged row list this modal actually renders — company
+  // lots only load when canViewLots (Pro), My Products stock always does.
+  const rows = [
+    ...(canViewLots && lots ? lots.map((l) => normaliseRow(l, 'company')) : []),
+    ...(myLots ? myLots.map((l) => normaliseRow(l, 'mine')) : []),
+  ];
+  const rowsLoading = (canViewLots && lots === null) || myLots === null;
+
   const capacity = sum?.capacity ?? w.capacityUnits ?? null;
   const summaryPct = sum?.usedPct ?? w.usedPct ?? null;
-  // Prefer live lot totals (paid); fall back to the aggregate summary (free).
-  const lotUnits = lots ? lots.reduce((s, l) => s + (l.availableStock || 0), 0) : null;
-  const used = canViewLots && lotUnits != null ? lotUnits : (sum?.usedUnits ?? w.usedUnits ?? 0);
+  // Prefer live totals from the rows actually shown (company + mine) once
+  // both have loaded; fall back to the aggregate summary while loading, or on
+  // Free where per-lot detail for company stock isn't fetched at all.
+  const lotUnits = rowsLoading ? null : rows.reduce((s, l) => s + (l.availableStock || 0), 0);
+  const used = lotUnits != null ? lotUnits : (sum?.usedUnits ?? w.usedUnits ?? 0);
   const pct = capacity ? Math.min(100, Math.round((used / capacity) * 1000) / 10) : summaryPct;
 
   return (
@@ -302,49 +329,58 @@ const WarehouseDetailModal = ({ warehouse: w, version, canViewLots, onViewLots, 
         </div>
       )}
 
-      {canViewLots ? (
-        <>
-          <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400 mb-2">
-            Lots in this warehouse ({lots ? lots.length : '…'})
-          </p>
-          <div className="border border-stone-200 rounded-xl overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-sm min-w-[520px] resp-table">
-                <thead>
-                  <tr className="bg-stone-50 text-[10px] uppercase text-stone-400">
-                    <th className="px-4 py-2 font-bold">Product</th>
-                    <th className="px-4 py-2 font-bold">Lot No.</th>
-                    <th className="px-4 py-2 font-bold">Expiry</th>
-                    <th className="px-4 py-2 font-bold text-right">Qty</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-stone-100">
-                  {(lots || []).map((l) => (
-                    <tr key={l._id}>
-                      <td data-label="Product" className="px-4 py-2 text-stone-700">{l.productId?.productName || '—'}</td>
-                      <td data-label="Lot No." className="px-4 py-2 font-mono text-xs font-bold text-stone-900">{l.lotNumber || l.batchNumber || '—'}</td>
-                      <td data-label="Expiry" className="px-4 py-2 text-xs text-stone-500">{l.expiryDate ? fmtDate(l.expiryDate) : '—'}</td>
-                      <td data-label="Qty" className="px-4 py-2 text-right font-bold text-stone-900">{(l.availableStock ?? 0).toLocaleString('en-IN')}</td>
-                    </tr>
-                  ))}
-                  {lots && lots.length === 0 && (
-                    <tr><td colSpan={4} className="px-4 py-6 text-center text-xs text-stone-400">No stock in this warehouse.</td></tr>
-                  )}
-                  {!lots && (
-                    <tr><td colSpan={4} className="px-4 py-6 text-center text-xs text-stone-400">Loading lots…</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </>
-      ) : (
-        <div className="border border-amber-200 bg-amber-50/50 rounded-xl p-4 text-center">
+      <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400 mb-2">
+        Lots in this warehouse ({rowsLoading ? '…' : rows.length})
+      </p>
+      <div className="border border-stone-200 rounded-xl overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse text-sm min-w-[640px] resp-table">
+            <thead>
+              <tr className="bg-stone-50 text-[10px] uppercase text-stone-400">
+                <th className="px-4 py-2 font-bold">Product</th>
+                <th className="px-4 py-2 font-bold">Variant</th>
+                <th className="px-4 py-2 font-bold">Source</th>
+                <th className="px-4 py-2 font-bold">Lot No.</th>
+                <th className="px-4 py-2 font-bold">Expiry</th>
+                <th className="px-4 py-2 font-bold text-right">Qty</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-stone-100">
+              {rows.map((l) => (
+                <tr key={`${l.source}-${l._id}`}>
+                  <td data-label="Product" className="px-4 py-2 text-stone-700">{l.productName}</td>
+                  <td data-label="Variant" className="px-4 py-2 text-xs text-stone-500">{l.variantSku || '—'}</td>
+                  <td data-label="Source" className="px-4 py-2">
+                    <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${l.source === 'mine' ? 'bg-emerald-50 text-emerald-700' : 'bg-stone-100 text-stone-500'}`}>
+                      {l.source === 'mine' ? 'My Product' : 'Company'}
+                    </span>
+                  </td>
+                  <td data-label="Lot No." className="px-4 py-2 font-mono text-xs font-bold text-stone-900">{l.lotNumber}</td>
+                  <td data-label="Expiry" className="px-4 py-2 text-xs text-stone-500">{l.expiryDate ? fmtDate(l.expiryDate) : '—'}</td>
+                  <td data-label="Qty" className="px-4 py-2 text-right font-bold text-stone-900">{fmtUnits(l.availableStock)}</td>
+                </tr>
+              ))}
+              {!rowsLoading && rows.length === 0 && (
+                <tr><td colSpan={6} className="px-4 py-6 text-center text-xs text-stone-400">No stock in this warehouse.</td></tr>
+              )}
+              {rowsLoading && (
+                <tr><td colSpan={6} className="px-4 py-6 text-center text-xs text-stone-400">Loading lots…</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* The Pro gate only affects COMPANY-supplied lot detail — My Products
+          rows above are never gated, so a Free-plan seller still sees every
+          lot they added themselves, just not the company side's. */}
+      {!canViewLots && (
+        <div className="border border-amber-200 bg-amber-50/50 rounded-xl p-4 text-center mt-3">
           <span className="material-symbols-outlined text-amber-500 text-3xl">lock</span>
-          <p className="text-sm font-bold text-amber-800 mt-1">Per-lot detail is a Pro feature</p>
-          <p className="text-xs text-amber-700 mt-0.5">Occupancy is shown above. Upgrade to see every lot (product · lot no. · qty · expiry) in this warehouse.</p>
+          <p className="text-sm font-bold text-amber-800 mt-1">Company-supplied lot detail is a Pro feature</p>
+          <p className="text-xs text-amber-700 mt-0.5">Your own My Products stock is always shown above. Upgrade to also see company-supplied lots (product · lot no. · qty · expiry) here.</p>
           <button onClick={onViewLots} className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-white bg-[#EA2831] hover:bg-red-600 rounded-lg px-4 py-2">
-            <span className="material-symbols-outlined text-base">workspace_premium</span> Upgrade to view lots
+            <span className="material-symbols-outlined text-base">workspace_premium</span> Upgrade to view company lots
           </button>
         </div>
       )}
@@ -463,6 +499,57 @@ const CreateWarehouseModal = ({ warehouse, onClose, onDone }) => {
   };
   const managerFilled = !!(m.name.trim() && m.email.trim() && m.phone.trim() && m.password.trim());
 
+  // EDIT-MODE manager block — a SEPARATE piece of state from the create block
+  // above, because it edits an account that already exists rather than
+  // describing one to create. Prefilled from the row the list already carries
+  // (GET returns manager + managerCount), so no extra request.
+  const assignedManager = isEdit ? warehouse?.manager || null : null;
+  const managerCount = isEdit ? warehouse?.managerCount || 0 : 0;
+  // The password is ALWAYS blank: the backend never returns it, and a blank
+  // field means "keep the current one". The modal is mounted fresh on every
+  // open, so this re-runs and the box is empty every time.
+  const [em, setEm] = useState({
+    name: assignedManager?.name || '',
+    email: assignedManager?.email || '',
+    phone: assignedManager?.phone || '',
+    password: '',
+  });
+  const [emErrors, setEmErrors] = useState({});
+  // The server's own message (e.g. a 409 duplicate email) shown INSIDE the
+  // modal, next to the fields that caused it.
+  const [saveError, setSaveError] = useState('');
+  const uem = (k) => (e) => {
+    setEm((prev) => ({ ...prev, [k]: e.target.value }));
+    if (emErrors[k]) setEmErrors((prev) => ({ ...prev, [k]: undefined }));
+    setSaveError('');
+  };
+  const onEditManagerPhone = (e) => {
+    const digits = e.target.value.replace(/\D/g, '').slice(0, 10);
+    setEm((prev) => ({ ...prev, phone: digits }));
+    if (emErrors.phone) setEmErrors((prev) => ({ ...prev, phone: undefined }));
+    setSaveError('');
+  };
+
+  /**
+   * Only what the user ACTUALLY changed, plus the password when one was typed.
+   * Returns undefined when nothing changed, so the PUT is byte-for-byte what
+   * it is today and the backend's manager branch is never entered.
+   */
+  const managerPatch = () => {
+    if (!assignedManager) return undefined;
+    const patch = {};
+    const name = em.name.trim();
+    const email = em.email.trim();
+    const phone = em.phone.trim();
+    if (name !== (assignedManager.name || '')) patch.name = name;
+    if (email !== (assignedManager.email || '')) patch.email = email;
+    if (phone !== (assignedManager.phone || '')) patch.phone = phone;
+    // A blank box is not a change — the key is OMITTED entirely so the
+    // existing password is never touched.
+    if (em.password.trim()) patch.password = em.password.trim();
+    return Object.keys(patch).length ? patch : undefined;
+  };
+
   const [stateIso, setStateIso] = useState(initialStateIso);
   const cities = React.useMemo(() => (stateIso ? City.getCitiesOfState('IN', stateIso) : []), [stateIso]);
   const [cityChoice, setCityChoice] = useState(initialCityChoice); // a listed city name or OTHER_CITY
@@ -505,6 +592,19 @@ const CreateWarehouseModal = ({ warehouse, onClose, onDone }) => {
       setMErrors(me);
       if (Object.keys(me).length) return;
     }
+    // EDIT: only the fields actually shown are checked, and the password only
+    // when one was typed — a blank box is a valid "keep it".
+    if (isEdit && assignedManager) {
+      const ee = {};
+      if (!em.name.trim()) ee.name = 'Manager name is required';
+      if (!em.email.trim()) ee.email = 'Manager email is required';
+      if (!em.phone.trim()) ee.phone = 'Manager phone is required';
+      const pw = em.password.trim();
+      if (pw && pw.length < 6) ee.password = 'Password must be at least 6 characters';
+      setEmErrors(ee);
+      if (Object.keys(ee).length) return;
+    }
+    setSaveError('');
     // Edit keeps '' so the server can clear capacity; create omits it (undefined).
     const capacity = f.capacityUnits === '' ? (isEdit ? '' : undefined) : Number(f.capacityUnits);
     const payload = {
@@ -524,7 +624,9 @@ const CreateWarehouseModal = ({ warehouse, onClose, onDone }) => {
     setBusy(true);
     try {
       if (isEdit) {
-        await updateSellerWarehouse(warehouse._id, payload);
+        // Warehouse + manager in the SAME PUT — never a second request.
+        const manager = managerPatch();
+        await updateSellerWarehouse(warehouse._id, manager ? { ...payload, manager } : payload);
         toast('success', 'Warehouse updated');
       } else {
         // Warehouse + its manager in ONE call — the backend creates both
@@ -551,7 +653,12 @@ const CreateWarehouseModal = ({ warehouse, onClose, onDone }) => {
       onDone();
     } catch (err) {
       // 403 on create usually means the plan limit — server enforces it.
-      toast('error', err?.response?.data?.message || `Could not ${isEdit ? 'update' : 'create'} warehouse`);
+      const msg = err?.response?.data?.message || `Could not ${isEdit ? 'update' : 'create'} warehouse`;
+      // The whole save was rejected (a 409 duplicate email/phone is the likely
+      // one), so the modal STAYS OPEN with everything the user typed intact —
+      // onDone() above is never reached from here.
+      setSaveError(msg);
+      toast('error', msg);
     } finally {
       setBusy(false);
     }
@@ -559,12 +666,12 @@ const CreateWarehouseModal = ({ warehouse, onClose, onDone }) => {
 
   return (
     <Modal title={isEdit ? 'Edit Warehouse' : 'Add Warehouse'} onClose={onClose}>
-      <Field label="Name *">
-        <input className={inputCls} value={f.name} onChange={u('name')} />
+      <Field label="Warehouse Name *">
+        <input className={inputCls} value={f.name} onChange={u('name')} placeholder="e.g. Dhamnod Warehouse" />
         <FieldError msg={wErrors.name} />
       </Field>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4">
-        <Field label="Code"><input className={inputCls} value={f.code} onChange={u('code')} placeholder="WH-JBP" /></Field>
+        <Field label="Warehouse Code"><input className={inputCls} value={f.code} onChange={u('code')} placeholder="WH-JBP" /></Field>
         <Field label="Capacity (units)"><input type="number" className={inputCls} value={f.capacityUnits} onChange={u('capacityUnits')} /></Field>
         <Field label="State *">
           <select className={inputCls} value={stateIso} onChange={onStateChange}>
@@ -661,6 +768,80 @@ const CreateWarehouseModal = ({ warehouse, onClose, onDone }) => {
             <FieldError msg={mErrors.password} />
           </Field>
         </div>
+      )}
+
+      {/* WAREHOUSE MANAGER — EDIT. The same heading, spacing and inputs the
+          create block above uses; only the password rule differs. */}
+      {isEdit && (
+        <div className="mt-6 pt-5 border-t border-stone-200">
+          <div className="flex items-start gap-2 mb-4">
+            <span className="material-symbols-outlined text-[#EA2831] text-[20px]">badge</span>
+            <div>
+              <h4 className="text-sm font-bold text-stone-900">Warehouse Manager</h4>
+              {assignedManager ? (
+                <p className="text-xs text-stone-500 mt-0.5">
+                  They sign in with the email below. Changing it changes how they log in.
+                </p>
+              ) : (
+                // Created before managers existed: the backend rejects a manager
+                // object for such a warehouse, so empty inputs would only produce
+                // a confusing error.
+                <p className="text-xs text-stone-500 mt-0.5">No manager is assigned to this warehouse.</p>
+              )}
+            </div>
+          </div>
+
+          {assignedManager && (
+            <>
+              {managerCount > 1 && (
+                <p className="text-xs text-stone-500 mb-3">
+                  This warehouse has {managerCount} managers. Editing the first.
+                </p>
+              )}
+              <Field label="Full Name *">
+                <input className={inputCls} value={em.name} onChange={uem('name')} placeholder="Manager's full name" />
+                <FieldError msg={emErrors.name} />
+              </Field>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4">
+                <Field label="Email *">
+                  <input className={inputCls} type="email" value={em.email} onChange={uem('email')} placeholder="manager@example.com" />
+                  <FieldError msg={emErrors.email} />
+                </Field>
+                <Field label="Phone Number *">
+                  <input
+                    className={inputCls}
+                    type="tel"
+                    inputMode="numeric"
+                    maxLength={10}
+                    value={em.phone}
+                    onChange={onEditManagerPhone}
+                    placeholder="10-digit mobile number"
+                  />
+                  <FieldError msg={emErrors.phone} />
+                </Field>
+              </div>
+              <Field label="New password">
+                <input
+                  className={inputCls}
+                  type="password"
+                  value={em.password}
+                  onChange={uem('password')}
+                  autoComplete="new-password"
+                  placeholder="At least 6 characters"
+                />
+                <p className="text-xs text-stone-400 mt-1">Leave blank to keep the current password.</p>
+                <FieldError msg={emErrors.password} />
+              </Field>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* The server's own words — a duplicate email/phone reads clearly here. */}
+      {saveError && (
+        <p className="mt-4 text-sm font-semibold text-[#EA2831] bg-red-50 border border-red-100 rounded-lg px-3 py-2">
+          {saveError}
+        </p>
       )}
 
       <PrimaryBtn

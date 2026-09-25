@@ -2,8 +2,10 @@ const express = require("express");
 const router = express.Router();
 
 const auth = require("../../middlewares/authMiddlewares");
-const requireApprovedSeller = require("../../middlewares/requireApprovedSeller");
 const authorize = require("../../middlewares/authorize");
+const loadSubscription = require("../../middlewares/loadSubscription");
+const requireFeature = require("../../middlewares/requireFeature");
+const { FEATURES } = require("../../config/plans");
 // The delivery challan may be ANY file — an image OR a PDF — so it rides the
 // UNRESTRICTED uploader, exactly as the company warehouse transfer does
 // (routes/Transport/tmsRoutes.js). The shared document uploader is deliberately
@@ -12,11 +14,13 @@ const authorize = require("../../middlewares/authorize");
 const uploadChallan = require("../../middlewares/uploadAny");
 const { listTransfers, createTransfer, directTransfer, acceptTransfer, rejectTransfer, warehouseStock, accountWarehouses } = require("../../controller/Seller/sellerTransferController");
 
-// Seller inter-warehouse transfer REQUESTS (request → accept → shipment).
-// Approved sellers only; reads need transfer:read, write actions need
-// transfer:create (seller_admin "*" and seller_manager "transfer:*" hold both;
-// seller_staff is read-only). Dispatch + scan-receive live on /seller/shipments.
-router.use(auth, requireApprovedSeller);
+// Seller inter-warehouse transfer REQUESTS (request → accept → shipment) — a
+// PAID feature (STOCK_TRANSFERS), enforced here and not only in the sidebar so
+// a locked module cannot be reached by calling the API. Reads need
+// transfer:read, write actions need transfer:create (seller_admin "*" and
+// seller_manager "transfer:*" hold both; seller_staff is read-only). Dispatch +
+// scan-receive live on /seller/shipments.
+router.use(auth, loadSubscription, requireFeature(FEATURES.STOCK_TRANSFERS));
 router.get("/", authorize("transfer:read"), listTransfers);
 router.get("/warehouses", authorize("transfer:read"), accountWarehouses); // ALL seller-account warehouses (destination picker)
 router.get("/stock", authorize("transfer:read"), warehouseStock); // products held in a warehouse (for the picker)

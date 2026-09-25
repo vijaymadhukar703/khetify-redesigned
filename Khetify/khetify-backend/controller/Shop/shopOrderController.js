@@ -1,5 +1,28 @@
 const orderService = require("../../services/shopOrderService");
 
+/**
+ * POST /api/shop/checkout/review
+ *
+ * Prices the basket and hands back a summary — WITHOUT placing anything.
+ *
+ * This is the COD twin of POST /payments/initiate. Both lanes now show the
+ * shopper a final "this is exactly what you are about to order" screen before
+ * anything is committed, and both get the numbers on that screen from the
+ * SERVER rather than from whatever the browser was carrying. A review page that
+ * shows a client-computed total is worse than no review page: it confirms a
+ * figure nobody checked.
+ *
+ * Writes nothing. Burns no order number. Safe to call on every render.
+ */
+exports.review = async (req, res) => {
+  try {
+    const quote = await orderService.quoteCheckout(req.consumer.id, req.body);
+    res.json({ success: true, data: quote });
+  } catch (err) {
+    res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
+  }
+};
+
 exports.checkout = async (req, res) => {
   try {
     const orders = await orderService.checkout(req.consumer.id, req.body);

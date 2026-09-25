@@ -2,14 +2,19 @@ const express = require("express");
 const router = express.Router();
 
 const auth = require("../../middlewares/authMiddlewares");
-const requireApprovedSeller = require("../../middlewares/requireApprovedSeller");
 const authorize = require("../../middlewares/authorize");
+const loadSubscription = require("../../middlewares/loadSubscription");
+const requireFeature = require("../../middlewares/requireFeature");
+const { FEATURES } = require("../../config/plans");
 const { getSellerProducts, getSellerProduct } = require("../../controller/Seller/sellerCatalogController");
 
-// Read-only catalog of the linked company's products. Approved sellers only.
-// Gated by catalog:read — a warehouse manager (seller_manager) has NO catalog
-// capability, so they are blocked here server-side (the nav is also hidden).
-router.use(auth, requireApprovedSeller, authorize("catalog:read"));
+// Read-only catalog of the linked company's products — a PAID feature
+// (BASIC_CATALOG). No approval gate; the PLAN is the gate, and it is enforced
+// here and not only in the sidebar, so a locked module cannot be reached by
+// calling the API directly.
+// Also gated by catalog:read — a warehouse manager (seller_manager) has NO
+// catalog capability, so they are blocked here server-side too.
+router.use(auth, authorize("catalog:read"), loadSubscription, requireFeature(FEATURES.BASIC_CATALOG));
 router.get("/", getSellerProducts);
 router.get("/:id", getSellerProduct);
 

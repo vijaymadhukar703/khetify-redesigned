@@ -138,12 +138,7 @@ const ImsLotDetails = () => {
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <button
-            onClick={() => navigate(-1)}
-            className="text-[11px] font-bold text-stone-400 hover:text-stone-700 inline-flex items-center gap-1 mb-1"
-          >
-            <span className="material-symbols-outlined text-sm">arrow_back</span> Back
-          </button>
+         
           <h1 className="text-2xl font-bold text-stone-900">Lot Details</h1>
           <p className="font-mono text-sm text-stone-500 break-all">{lotNo}</p>
         </div>

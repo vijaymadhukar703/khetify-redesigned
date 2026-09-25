@@ -1,7 +1,16 @@
 import React, { useState, useEffect } from "react";
 import { useSearchParams, useNavigate, Link } from "react-router-dom";
 import { useShopAuth } from "../../context/ShopAuthContext";
-import { Icon, TextField, PasswordField, PrimaryButton, ErrorNote, AuthShell } from "../../Components/shop/authUi";
+import { useT } from "../../context/ShopLanguageContext";
+import {
+  Icon,
+  TextField,
+  PasswordField,
+  PrimaryButton,
+  ErrorNote,
+  AuthShell,
+  AuthDivider,
+} from "../../Components/shop/authUi";
 
 /* Customer LOGIN page (separate from Register). UI recreated in the reference
    style with a full-height split shell; auth logic UNCHANGED:
@@ -10,6 +19,7 @@ import { Icon, TextField, PasswordField, PrimaryButton, ErrorNote, AuthShell } f
 
 export default function ShopLogin() {
   const [params] = useSearchParams();
+  const t = useT();
   const navigate = useNavigate();
   const { login } = useShopAuth();
   // Always land on the customer dashboard after login — never the previous page
@@ -17,6 +27,7 @@ export default function ShopLogin() {
   // the destination doesn't depend on where the user opened login from.
   const HOME = "/customer-shop/home";
   const registerHref = "/customer-shop/register";
+  const forgotHref = "/customer-shop/forgot-password";
 
   const [form, setForm] = useState({ identifier: "", password: "" });
   const [busy, setBusy] = useState(false);
@@ -24,19 +35,38 @@ export default function ShopLogin() {
 
   // Legacy header link support: /customer-shop/login?mode=register → register page.
   useEffect(() => {
-    if (params.get("mode") === "register") navigate(registerHref, { replace: true });
+    if (params.get("mode") === "register")
+      navigate(registerHref, { replace: true });
   }, [params, navigate, registerHref]);
+
+    /* ===== Google login (signup page jaisa hi, same backend route) ===== */
+  const API_URL = import.meta.env.VITE_API_URL;
+  const googleLogin = () => {
+    window.location.href = `${API_URL}/api/auth/google`;
+  };
+
+  // Google fail hone par backend ?error=google_failed ke saath yahin bhejta hai
+  useEffect(() => {
+    const e = params.get("error");
+    if (e === "google_failed" || e === "auth_failed") {
+      setError("Google sign-in failed. Please try again.");
+    }
+  }, [params]);
+  /* ===== END: Google login ===== */
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
   const submit = async (e) => {
     e.preventDefault();
-    setError(""); setBusy(true);
+    setError("");
+    setBusy(true);
     try {
       await login(form.identifier, form.password);
       navigate(HOME, { replace: true });
     } catch (err) {
-      setError(err?.response?.data?.message || "Something went wrong");
+      // The SERVER's message is data and passes through untouched; only the
+      // generic fallback is translated.
+      setError(err?.response?.data?.message || t("login.genericError"));
     } finally {
       setBusy(false);
     }
@@ -45,46 +75,75 @@ export default function ShopLogin() {
   return (
     <AuthShell variant="login">
       <span className="mb-5 inline-flex items-center gap-2 rounded-full bg-[#E9F2EA] px-3.5 py-1.5 text-[13px] font-semibold text-[#2E6B3E]">
-        <Icon.Shield className="h-[13px] w-[13px]" /> Secure sign in
+        <Icon.Shield className="h-[13px] w-[13px]" /> {t("login.badge")}
       </span>
 
       <h1 className="mb-2 font-heading text-2xl font-extrabold tracking-tight text-[#14201A] sm:text-3xl md:text-4xl">
-        Welcome back
+        {t("login.title")}
       </h1>
       <p className="mb-6 text-[15px] leading-normal text-[#6B6A62] sm:mb-7 sm:text-base">
-        Log in to track orders, manage your cart and shop from verified Khetify sellers.
+        {t("login.subtitle")}
       </p>
 
       <form onSubmit={submit} className="flex flex-col gap-[18px]">
         {error && <ErrorNote>{error}</ErrorNote>}
 
         <TextField
-          label="Email"
+          label={t("login.emailLabel")}
           icon={Icon.Mail}
           type="text"
           required
           value={form.identifier}
           onChange={set("identifier")}
-          placeholder="Enter your email"
+          placeholder={t("login.emailPlaceholder")}
           autoComplete="username"
         />
 
-        <PasswordField
-          required
-          value={form.password}
-          onChange={set("password")}
-          placeholder="Enter your password"
-          autoComplete="current-password"
-        />
+               {/* Password + "Forgot password?" link just below the field (right side) */}
+        <div className="flex flex-col gap-2">
+          <PasswordField
+            required
+            value={form.password}
+            onChange={set("password")}
+            placeholder={t("login.passwordPlaceholder")}
+            autoComplete="current-password"
+          />
+          <div className="flex justify-end">
+            <Link
+              to={forgotHref}
+              className="text-sm font-semibold text-[#EA2831] hover:text-[#c91e26]"
+            >
+              Forgot password?
+            </Link>
+          </div>
+        </div>
 
         <PrimaryButton type="submit" disabled={busy}>
-          {busy ? "Please wait…" : "Log in"}
+          {busy ? t("login.pleaseWait") : t("login.submit")}
         </PrimaryButton>
       </form>
+      
+      {/* ===== Google login button ===== */}
+      <AuthDivider className="my-5" />
+      <button
+        type="button"
+        onClick={googleLogin}
+        disabled={busy}
+        className="flex h-[54px] w-full items-center justify-center gap-3 rounded-full border-[1.5px] border-[#E2E0D6] bg-white text-[15px] font-semibold text-[#14201A] transition-colors hover:border-[#c9c7bb] hover:bg-[#FAFAF7] disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        <Icon.Google className="h-5 w-5" />
+        Continue With Google
+      </button>
+
 
       <p className="mt-6 text-center text-[15px] text-[#6B6A62]">
-        Don't have an account?{" "}
-        <Link to={registerHref} className="font-bold text-[#EA2831] hover:text-[#c91e26]">Register</Link>
+        {t("login.noAccount")}{" "}
+        <Link
+          to={registerHref}
+          className="font-bold text-[#EA2831] hover:text-[#c91e26]"
+        >
+          {t("login.register")}
+        </Link>
       </p>
     </AuthShell>
   );

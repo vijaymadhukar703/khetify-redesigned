@@ -42,12 +42,37 @@ certificates.get("/", pc.listCertificates);
 certificates.get("/:id", pc.getCertificate);
 certificates.get("/:id/download", pc.downloadCertificate);
 
-/* /api/seller/listings — marketplace publish, gated by an ACTIVE PC */
+/* /api/seller/listings — marketplace publish, gated by an ACTIVE PC.
+   READ IS SPLIT FROM WRITE on this router: seeing whether a product is live is
+   "listing:read" (managers/staff hold it, so My Products can render a truthful
+   Published / Not published badge), while publish and unpublish stay on
+   manageCerts. The capability therefore sits per-route, not on the router. */
 const listings = express.Router();
-listings.use(auth, sellerOnly, manageCerts);
-listings.get("/", pc.listListings);
-listings.post("/publish", requireActivePC((req) => req.body.companyId), pc.publishListing);
+listings.use(auth, sellerOnly);
+listings.get("/", authorize("listing:read"), pc.listListings);
+/**
+ * PC GATE, ONLY WHERE THERE IS A COMPANY TO BE CERTIFIED BY.
+ *
+ * A Principal Certificate authorises a seller to resell A COMPANY'S products —
+ * so publishing a COMPANY product still requires an active PC for that company,
+ * byte for byte the same call as before. Publishing the seller's OWN product
+ * (My Products) has no company and therefore nothing a PC could certify, so
+ * demanding one would make the gate unsatisfiable: requireActivePC 400s on a
+ * missing companyId, which is why My Products could not publish at all.
+ *
+ * Ownership of a seller-own product is not left unchecked — it moves to
+ * publishListing, which proves the product is `ownerType: "seller"` AND
+ * `sellerId` = the caller before writing anything.
+ *
+ * middlewares/requireActivePC.js is untouched and still used verbatim.
+ */
+const pcGateWhenCompanyProduct = (req, res, next) =>
+  req.body?.companyId
+    ? requireActivePC((r) => r.body.companyId)(req, res, next)
+    : next();
+
+listings.post("/publish", manageCerts, pcGateWhenCompanyProduct, pc.publishListing);
 // Unpublish is intentionally NOT PC-gated — a seller can always pull a listing.
-listings.patch("/:id/unpublish", pc.unpublishListing);
+listings.patch("/:id/unpublish", manageCerts, pc.unpublishListing);
 
 module.exports = { documents, applications, certificates, listings };

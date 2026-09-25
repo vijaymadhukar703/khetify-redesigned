@@ -2,7 +2,6 @@ const express = require("express");
 const router = express.Router();
 
 const auth = require("../../middlewares/authMiddlewares");
-const requireApprovedSeller = require("../../middlewares/requireApprovedSeller");
 const authorize = require("../../middlewares/authorize");
 const loadSubscription = require("../../middlewares/loadSubscription");
 const enforceLimit = require("../../middlewares/enforceLimit");
@@ -16,9 +15,16 @@ const {
   deactivateSellerWarehouse,
 } = require("../../controller/Seller/sellerWarehouseController");
 
-// All seller warehouse routes require an APPROVED seller principal and are
-// scoped to req.user.sellerId in the controller.
-router.use(auth, requireApprovedSeller);
+// NO APPROVAL GATE. A brand-new seller must be able to create a warehouse
+// before any company issues them a Principal Certificate — My Products' "Add
+// stock" form asks for a warehouse, so gating this would leave a seller with
+// products they can never stock, and My Products (deliberately ungated) would
+// be useless. Every route is still scoped to req.user.sellerId in the
+// controller, and middlewares/principalRouteGuard refuses a non-seller token.
+//
+// The PLAN LIMIT is untouched: loadSubscription + enforceLimit("warehouses")
+// still sit on POST / below, so free stays at one warehouse.
+router.use(auth);
 
 router.get("/", getSellerWarehouses);
 router.get("/:id/stock-summary", getSellerWarehouseStockSummary); // aggregate fill (free module)

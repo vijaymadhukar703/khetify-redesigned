@@ -4,10 +4,13 @@ const Customer = require("../model/Sales/Customer");
 const Consumer = require("../model/Shop/Consumer");
 const Seller = require("../model/Seller/Seller");
 const Product = require("../model/Company/productModel");
+const Inventory = require("../model/Inventory/Inventory");
+const Warehouse = require("../model/Warehouse/Warehouse");
 const catalog = require("./shopCatalogService");
 const customerService = require("./customerService");
 const tax = require("./taxService");
 const { nextSeq } = require("./counterService");
+const delivery = require("./deliveryService");
 
 /**
  * Storefront (customer-shop) checkout + order history.
@@ -81,6 +84,46 @@ async function upsertSellerCustomer(sellerId, consumer, shipAddr) {
   );
 }
 
+/**
+ * Find the best warehouse for a (seller, product) pair.
+ * Priority: most available stock (FEFO-friendly). Returns warehouseId or null.
+ */
+async function resolveWarehouseForSeller(sellerId, productId) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const rows = await Inventory.aggregate([
+    {
+      $match: {
+        ownerType: "seller",
+        ownerId: new mongoose.Types.ObjectId(String(sellerId)),
+        productId: new mongoose.Types.ObjectId(String(productId)),
+        warehouseId: { $ne: null },
+        availableStock: { $gt: 0 },
+      },
+    },
+    {
+      $match: {
+        $or: [
+          { expiryDate: null },
+          { expiryDate: { $exists: false } },
+          { expiryDate: { $gte: today } },
+        ],
+      },
+    },
+    {
+      $group: {
+        _id: "$warehouseId",
+        totalAvail: { $sum: "$availableStock" },
+      },
+    },
+    { $sort: { totalAvail: -1 } },
+    { $limit: 1 },
+  ]);
+
+  return rows.length ? rows[0]._id : null;
+}
+
 /** Compute priced/taxed line items for one seller's slice of the cart. */
 function buildLines(cartItems, resolved) {
   const lines = [];
@@ -92,7 +135,22 @@ function buildLines(cartItems, resolved) {
     // Only published + in-stock products may be ordered.
     if (!(r.availableStock > 0)) throw httpErr(`"${r.name}" is out of stock`, 409);
     if (qty > r.availableStock) throw httpErr(`Only ${r.availableStock} unit(s) of "${r.name}" are available`, 409);
-    const price = r.price;
+
+    /* VARIANT, IF ONE WAS CHOSEN. The client sends only an id; the price, the
+       image and the attributes are read from the SERVER'S copy of the product,
+       so a tampered cart cannot buy Green at Red's price. An id that no longer
+       matches any variant (the company edited the product mid-session) is
+       rejected rather than silently falling back to the base price — the
+       shopper would otherwise be charged for something they did not choose. */
+    const variant = ci.variantId
+      ? (r.variants || []).find((v) => String(v.id) === String(ci.variantId))
+      : null;
+    if (ci.variantId && !variant) {
+      throw httpErr(`The selected option for "${r.name}" is no longer available`, 409);
+    }
+    // The variant's own price when it carries one; otherwise the listing price
+    // still applies, exactly as before.
+    const price = variant && variant.mrp != null ? Number(variant.mrp) : r.price;
     // The customer total is price × qty ONLY — the marketplace price (MRP) is
     // treated as tax-inclusive, so no GST is ADDED on top. This keeps cart,
     // checkout, order-success and order-history totals identical. We record the
@@ -107,8 +165,14 @@ function buildLines(cartItems, resolved) {
       //    purchasable listing later (a product may be sold by many sellers).
       listingId: r.listingId,
       name: r.name,
-      // 🖼️ what the shopper actually saw when they bought it
-      image: r.image || null,
+      // 🖼️ what the shopper actually saw when they bought it — the variant's
+      //    own picture when they picked one.
+      image: variant?.image || r.image || null,
+      // 🎨 Snapshot of the chosen variant, so the order, the invoice and the
+      //    seller's pick list all say WHICH one was sold.
+      variantId: variant?.id || undefined,
+      variantLabel: variant?.label || undefined,
+      variantAttributes: variant?.attributes || undefined,
       qty,
       price,
       taxes: { hsnCode: r.hsnCode, gstRate: r.gstPercentage || 0, taxable, cgst: 0, sgst: 0, igst: 0 },
@@ -119,13 +183,69 @@ function buildLines(cartItems, resolved) {
   return { lines, totalUnits, totalAmount, totalTax: 0 };
 }
 
+/* ─────────────────────────────────────────────────────────────────────────────
+ * 💳 PAYMENT METHODS
+ *
+ * "cod" is exactly what it always was: the order is created immediately and the
+ * money moves at the door, so payment.status starts "pending".
+ *
+ * "online" NEVER reaches this file from a client. The client that picks online
+ * payment goes to services/shopPaymentService.js first; only once the gateway
+ * has confirmed the money does that service call checkout() back, passing a
+ * `paymentContext`. So an order can only ever exist as COD-pending or
+ * online-PAID — there is no such thing as an unpaid online order sitting in a
+ * seller's queue.
+ * ───────────────────────────────────────────────────────────────────────────── */
+const PAYMENT_METHODS = ["cod", "online"];
+
 /**
- * Place order(s) from a cart.
- * @param {string} consumerId
- * @param {object} body { items:[{listingId, qty}], shippingAddressId?, shippingAddress?, paymentMode }
- * @returns {Promise<Array>} the created orders
+ * Build the Order.payment sub-document.
+ *
+ * @param {object} body            the checkout body (may carry paymentMethod)
+ * @param {object|null} paymentContext  ONLY supplied by shopPaymentService after
+ *        a confirmed gateway payment: { txnRef, provider, paidAt, paymentId }
  */
-async function checkout(consumerId, { items = [], shippingAddressId, shippingAddress } = {}) {
+function buildOrderPayment(body = {}, paymentContext = null) {
+  // Trusted path: the payment service has already verified the gateway.
+  if (paymentContext) {
+    return {
+      mode: "online",
+      status: "paid",
+      txnRef: paymentContext.txnRef,
+      provider: paymentContext.provider || "mock",
+      paidAt: paymentContext.paidAt || new Date(),
+      paymentId: paymentContext.paymentId,
+    };
+  }
+
+  const requested = String(body.paymentMethod || "cod").toLowerCase();
+
+  if (!PAYMENT_METHODS.includes(requested)) {
+    throw httpErr("Unsupported payment method", 400);
+  }
+
+  // Refusing this is the whole security of the online lane: without it a client
+  // could POST /checkout { paymentMethod: "online" } and mint a paid order.
+  if (requested === "online") {
+    throw httpErr("Online payment must be completed before the order is placed", 400);
+  }
+
+  // ── UNCHANGED COD BEHAVIOUR ── (provider is additive and informational)
+  return { mode: "cod", status: "pending", provider: "cod" };
+}
+
+/**
+ * Everything checkout() must work out BEFORE it writes anything: the shopper,
+ * the shipping address, the server-priced lines, and the per-seller split.
+ *
+ * Split out of checkout() (behaviour-identical) so the online-payment flow can
+ * PRICE a basket without creating orders. That matters: the amount shown on the
+ * payment screen and the amount the orders are finally created with now come
+ * from the same code path, so they cannot drift apart.
+ *
+ * Pure read — no writes, no counters burned, safe to call for a quote.
+ */
+async function prepareCheckout(consumerId, { items = [], shippingAddressId, shippingAddress } = {}) {
   if (!Array.isArray(items) || !items.length) throw httpErr("Your cart is empty");
 
   const consumer = await Consumer.findById(consumerId);
@@ -148,15 +268,48 @@ async function checkout(consumerId, { items = [], shippingAddressId, shippingAdd
     throw httpErr("A shipping address (with pincode) is required");
   }
 
+  // ── DELIVERY ELIGIBILITY CHECK ────────────────────────────────────────────
+  // Resolve which warehouse pincodes the logistics network can reach from the
+  // customer's pincode. Block checkout for any item whose warehouse is outside
+  // the customer's branch service area.
+  const deliverablePins = await delivery.getDeliverableWarehousePincodes(shipAddr.pincode);
+
   // Trust the server for prices/sellers — never the client.
   const resolved = await catalog.resolveForCheckout(items.map((i) => i.listingId));
   if (!resolved.size) throw httpErr("None of the products in your cart are available", 409);
 
-  // Group cart items by seller.
+  // Group cart items by seller, enforcing delivery eligibility per item.
   const bySeller = new Map();
   for (const ci of items) {
     const r = resolved.get(String(ci.listingId));
     if (!r) throw httpErr("A product in your cart is no longer available", 409);
+
+    // ── DELIVERY GATE ────────────────────────────────────────────────────────
+    // When the logistics network has no branch for this pincode, block checkout
+    // entirely. When a branch exists, block individual items whose warehouse is
+    // outside its service area.
+    if (deliverablePins === null) {
+      throw httpErr(
+        `Delivery is not available to your pincode (${shipAddr.pincode}). ` +
+        `Please check if your area is serviceable or choose a different address.`,
+        422
+      );
+    }
+
+    // Build delivery map for this item
+    const itemDeliveryMap = await delivery.buildDeliveryEligibilityMap(
+      [{ sellerId: r.sellerId, productId: r.productId }],
+      deliverablePins
+    );
+    const isEligible = itemDeliveryMap.get(`${r.sellerId}:${r.productId}`) ?? false;
+    if (!isEligible) {
+      throw httpErr(
+        `"${r.name}" cannot be delivered to your selected address (pincode ${shipAddr.pincode}). ` +
+        `Please remove it from your cart or choose a different delivery address.`,
+        422
+      );
+    }
+
     if (!bySeller.has(r.sellerId)) bySeller.set(r.sellerId, []);
     bySeller.get(r.sellerId).push(ci);
   }
@@ -174,31 +327,147 @@ async function checkout(consumerId, { items = [], shippingAddressId, shippingAdd
     pincode: shipAddr.pincode,
   };
 
-  const created = [];
+  // Price each seller's slice ONCE. checkout() writes these exact lines.
+  const groups = [];
   for (const [sellerId, cartItems] of bySeller) {
-    const customer = await upsertSellerCustomer(sellerId, consumer, shipAddr);
-    const { lines, totalUnits, totalAmount, totalTax } = buildLines(cartItems, resolved);
-    const orderNumber = await nextWebOrderNumber(sellerId);
+    const built = buildLines(cartItems, resolved);
+    groups.push({ sellerId, ...built });
+  }
 
-    const order = await Order.create({
-      ownerType: "seller",
-      ownerId: new mongoose.Types.ObjectId(sellerId),
-      orderNumber,
-      consumerId: consumer._id,
-      customerId: customer._id,
-      customerName: customer.name,
-      shippingAddress: orderShipAddress,
-      billingAddress: orderShipAddress,
-      items: lines,
-      totalUnits,
-      totalAmount: tax.round2(totalAmount),
-      totalTax: tax.round2(totalTax),
-      channel: "online",
-      salesChannel: "website",
-      payment: { mode: "cod", status: "pending" },
-      status: "pending",
-    });
-    created.push(order);
+  const grandTotal = tax.round2(groups.reduce((sum, g) => sum + g.totalAmount, 0));
+  const totalUnits = groups.reduce((sum, g) => sum + g.totalUnits, 0);
+
+  // Fetch delivery charge (baseFreight) from logistics branch for this pincode
+  let deliveryCharge = 0;
+  const serviceability = await delivery.checkPincodeServiceability(shipAddr.pincode);
+  if (serviceability.serviceable && serviceability.freightAmount != null) {
+    deliveryCharge = tax.round2(serviceability.freightAmount);
+  }
+
+  return { consumer, shipAddr, orderShipAddress, groups, grandTotal, totalUnits, deliveryCharge };
+}
+
+/**
+ * 💳 Price a basket WITHOUT placing it — what the online-payment screen charges.
+ *
+ * Returns a display-safe summary only (no Mongoose documents), because it is
+ * serialised into the ShopPayment row and sent to the browser.
+ */
+async function quoteCheckout(consumerId, body = {}) {
+  const { orderShipAddress, groups, grandTotal, totalUnits, deliveryCharge } = await prepareCheckout(consumerId, body);
+  return {
+    amount: grandTotal,
+    deliveryCharge,
+    grandTotal: tax.round2(grandTotal + deliveryCharge),
+    currency: "INR",
+    totalUnits,
+    orderCount: groups.length,
+    shippingAddress: orderShipAddress,
+    sellers: groups.map((g) => ({
+      sellerId: String(g.sellerId),
+      amount: tax.round2(g.totalAmount),
+      units: g.totalUnits,
+      items: g.lines.map((l) => ({
+        name: l.name,
+        image: l.image || null,
+        variantLabel: l.variantLabel || null,
+        qty: l.qty,
+        price: l.price,
+      })),
+    })),
+  };
+}
+
+/**
+ * Place order(s) from a cart.
+ * @param {string} consumerId
+ * @param {object} body { items:[{listingId, qty, variantId}], shippingAddressId?, shippingAddress?, paymentMethod? }
+ * @param {object|null} paymentContext  set ONLY by shopPaymentService after a
+ *        verified online payment — see buildOrderPayment() above.
+ * @returns {Promise<Array>} the created orders
+ */
+async function checkout(consumerId, body = {}, paymentContext = null) {
+  const { consumer, shipAddr, orderShipAddress, groups, deliveryCharge } = await prepareCheckout(consumerId, body);
+
+  // Resolved BEFORE any write: an unsupported method must not leave half the
+  // cart ordered and half not.
+  const payment = buildOrderPayment(body, paymentContext);
+
+  const created = [];
+  let freightApplied = false; // delivery charge added to first order only
+  for (const g of groups) {
+    const { sellerId, lines } = g;
+    const customer = await upsertSellerCustomer(sellerId, consumer, shipAddr);
+
+    // ── STEP 1: resolve warehouse for each line ───────────────────────────
+    // Find which warehouse holds stock for each product.
+    const linesWithWarehouse = await Promise.all(
+      lines.map(async (line) => {
+        const warehouseId = await resolveWarehouseForSeller(sellerId, line.productId);
+        return { ...line, sourceWarehouseId: warehouseId || null };
+      })
+    );
+
+    // ── STEP 2: group lines by warehouse ─────────────────────────────────
+    // Products in different warehouses → separate orders so each warehouse
+    // manager sees only their items in Sales and can approve/process them
+    // independently.
+    const byWarehouse = new Map();
+    for (const line of linesWithWarehouse) {
+      const key = line.sourceWarehouseId
+        ? String(line.sourceWarehouseId)
+        : "__none__";
+      if (!byWarehouse.has(key)) {
+        byWarehouse.set(key, { warehouseId: line.sourceWarehouseId, lines: [] });
+      }
+      byWarehouse.get(key).lines.push(line);
+    }
+
+    // ── STEP 3: one order per warehouse group ────────────────────────────
+    for (const { warehouseId, lines: whLines } of byWarehouse.values()) {
+      const orderNumber = await nextWebOrderNumber(sellerId);
+
+      const whTotalUnits  = whLines.reduce((s, l) => s + (l.qty || 0), 0);
+      const whTotalAmount = tax.round2(
+        whLines.reduce((s, l) => s + (l.taxes?.taxable || l.price * l.qty || 0), 0)
+      );
+      const whTotalTax = tax.round2(
+        whLines.reduce(
+          (s, l) => s + ((l.taxes?.cgst || 0) + (l.taxes?.sgst || 0) + (l.taxes?.igst || 0)),
+          0
+        )
+      );
+
+      // Delivery charge on first order only (one delivery, one address)
+      const orderFreight = freightApplied ? 0 : deliveryCharge;
+      if (!freightApplied && deliveryCharge > 0) freightApplied = true;
+
+      const order = await Order.create({
+        ownerType: "seller",
+        ownerId: new mongoose.Types.ObjectId(String(sellerId)),
+        orderNumber,
+        consumerId: consumer._id,
+        customerId: customer._id,
+        customerName: customer.name,
+        shippingAddress: orderShipAddress,
+        billingAddress: orderShipAddress,
+        items: whLines,
+        totalUnits: whTotalUnits,
+        totalAmount: whTotalAmount,
+        totalTax: whTotalTax,
+        deliveryCharge: tax.round2(orderFreight),
+        grandTotal: tax.round2(whTotalAmount + orderFreight),
+        channel: "online",
+        salesChannel: "website",
+        sourceWarehouseId: warehouseId
+          ? new mongoose.Types.ObjectId(String(warehouseId))
+          : null,
+        // COD → { cod, pending }.  Online → { online, paid } (already collected).
+        payment,
+        status: "pending",
+      });
+      created.push(order);
+    }
   }
 
   return created;
@@ -407,6 +676,8 @@ async function setDefaultAddress(consumerId, addressId) {
 
 module.exports = {
   checkout,
+  quoteCheckout, // 💳 ONLINE PAYMENT — price a basket without placing it
+  PAYMENT_METHODS, // 💳 ONLINE PAYMENT
   listOrders,
   getOrder,
   cancelOrder, // 🛒 STOREFRONT

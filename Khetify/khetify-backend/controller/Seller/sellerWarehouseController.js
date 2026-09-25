@@ -7,6 +7,13 @@ const { warehouseScope, inScope } = require("../../services/warehouseScope");
 const { withTransaction } = require("../../services/txn");
 const sellerMember = require("../../services/sellerMemberService");
 const { locationFromMapsUrl } = require("../../utils/mapsUrl");
+const User = require("../../model/User/User");
+const audit = require("../../services/auditService");
+const bcrypt = require("bcryptjs");
+// sellerMemberService re-exports the company service's WELCOME mailer by name
+// only, so the update mailer is taken from its home module directly. Same
+// single template — nothing is duplicated on the seller side.
+const { sendWarehouseManagerUpdatedEmail } = require("../../services/companyMemberService");
 
 /**
  * Aggregate the seller's owner-scoped inventory grouped by warehouse:
@@ -67,6 +74,37 @@ function pickWarehouseFields(body = {}) {
 /** GET /api/seller/warehouses — the authenticated seller's warehouses, each
  * enriched with its real owner-scoped fill (usedUnits/lotCount) so cards show
  * occupancy without an extra call. */
+/**
+ * The warehouse manager(s) assigned to the given seller warehouses.
+ *
+ * The seller mirror of the company helper: matched exactly as
+ * createSellerWarehouse assigns them — a seller user (ownerType/ownerId, the
+ * way every seller-scoped query keys off) carrying the seller warehouse-manager
+ * role with this warehouse in `warehouseIds`. Oldest first, so "the manager"
+ * is stable.
+ *
+ * The projection is EXPLICIT and narrow: passwordHash must never leave this
+ * process. `warehouseIds` is read only to group rows and never returned.
+ */
+const SELLER_MANAGER_PUBLIC_FIELDS = "_id name email phone";
+
+async function findSellerWarehouseManagers(sellerId, warehouseIds, session) {
+  return User.find({
+    ownerType: "seller",
+    ownerId: sellerId,
+    role: sellerMember.SELLER_WAREHOUSE_MANAGER_ROLE,
+    warehouseIds: { $in: warehouseIds },
+  })
+    .select(SELLER_MANAGER_PUBLIC_FIELDS + " warehouseIds")
+    .sort({ createdAt: 1 })
+    .session(session || null)
+    .lean();
+}
+
+/** Only ever the four public fields — never the whole user document. */
+const publicSellerManager = (u) =>
+  (u ? { _id: u._id, name: u.name, email: u.email, phone: u.phone } : null);
+
 exports.getSellerWarehouses = async (req, res) => {
   try {
     // Warehouse-level scoping: a seller_manager (or any non-"*" seller role with
@@ -76,10 +114,32 @@ exports.getSellerWarehouses = async (req, res) => {
     if (scope) filter._id = { $in: scope };
     const rows = await Warehouse.find(filter).sort({ createdAt: -1 });
     const fill = await stockByWarehouse(req.user.sellerId);
+    // The Edit Warehouse modal reads this list (there is no single-warehouse
+    // GET), so the assigned manager rides along with each row. One query for
+    // the whole page. A warehouse created before managers existed carries null.
+    const managers = await findSellerWarehouseManagers(req.user.sellerId, rows.map((w) => w._id));
+    const byWarehouse = new Map();
+    for (const u of managers) {
+      for (const id of u.warehouseIds || []) {
+        const k = String(id);
+        if (!byWarehouse.has(k)) byWarehouse.set(k, []);
+        byWarehouse.get(k).push(u);
+      }
+    }
     const data = rows.map((w) => {
       const s = fill.get(String(w._id)) || { usedUnits: 0, lotCount: 0 };
       const usedPct = w.capacityUnits ? Math.min(100, Math.round((s.usedUnits / w.capacityUnits) * 100)) : null;
-      return { ...w.toObject(), usedUnits: s.usedUnits, lotCount: s.lotCount, usedPct };
+      const found = byWarehouse.get(String(w._id)) || [];
+      return {
+        ...w.toObject(),
+        usedUnits: s.usedUnits,
+        lotCount: s.lotCount,
+        usedPct,
+        // First by createdAt, plus a count so the frontend can tell when a
+        // warehouse somehow ended up with more than one manager.
+        manager: publicSellerManager(found[0]),
+        managerCount: found.length,
+      };
     });
     res.json({ success: true, count: data.length, data });
   } catch (err) {
@@ -285,8 +345,157 @@ exports.updateSellerWarehouse = async (req, res) => {
       }
     }
 
-    await wh.save();
-    res.json({ success: true, message: "Warehouse updated", data: wh });
+    // ── MANAGER (optional) ──
+    // Absent key → this handler behaves exactly as it always has: save the
+    // warehouse and return. Every manager field below is likewise optional.
+    const { manager } = req.body;
+    if (manager === undefined || manager === null) {
+      await wh.save();
+      return res.json({ success: true, message: "Warehouse updated", data: wh });
+    }
+    if (typeof manager !== "object" || Array.isArray(manager)) {
+      return res.status(400).json({ success: false, message: "manager must be an object" });
+    }
+
+    // Editing a manager, never creating one — creation belongs to the create
+    // flow, which also assigns the role and the warehouse.
+    const [assigned] = await findSellerWarehouseManagers(req.user.sellerId, [wh._id]);
+    if (!assigned) {
+      return res.status(400).json({
+        success: false,
+        message: "This warehouse has no manager to edit. Managers are assigned when the warehouse is created.",
+      });
+    }
+
+    // Normalised the same way sellerMemberService writes them, so the login
+    // lookup (a case-insensitive email match) keeps resolving.
+    const nextName = manager.name !== undefined ? String(manager.name || "").trim() : undefined;
+    const nextEmail = manager.email !== undefined ? String(manager.email || "").trim().toLowerCase() : undefined;
+    const nextPhone = manager.phone !== undefined ? String(manager.phone || "").trim() : undefined;
+    // ONLY a non-empty string is a password change. Missing, null or "" means
+    // keep the existing one — a manager must never be locked out by a save
+    // that simply didn't retype it.
+    const rawPassword = typeof manager.password === "string" ? manager.password.trim() : "";
+
+    if (nextName !== undefined && !nextName) return res.status(400).json({ success: false, message: "Manager name cannot be empty" });
+    if (nextEmail !== undefined && !nextEmail) return res.status(400).json({ success: false, message: "Manager email cannot be empty" });
+    if (nextPhone !== undefined && !nextPhone) return res.status(400).json({ success: false, message: "Manager phone cannot be empty" });
+
+    // Snapshot for the no-session fallback below.
+    const before = await Warehouse.findById(wh._id).lean();
+
+    const saved = await withTransaction(async (session) => {
+      const opts = session ? { session } : {};
+      let warehouseWritten = false;
+      try {
+        // The SAME duplicate check the create path runs, excluding this very
+        // user — otherwise re-saving an unchanged email fails against itself.
+        // Runs BEFORE any write, so the likeliest rejection leaves the
+        // warehouse untouched even where transactions aren't available.
+        if (nextEmail !== undefined || nextPhone !== undefined) {
+          await sellerMember.assertUniqueIdentity({
+            email: nextEmail,
+            phone: nextPhone,
+            excludeId: assigned._id,
+            session,
+          });
+        }
+
+        const $set = {};
+        if (nextName !== undefined) $set.name = nextName;
+        if (nextEmail !== undefined) $set.email = nextEmail;
+        if (nextPhone !== undefined) $set.phone = nextPhone;
+        // Same algorithm and same cost factor as createSellerMember.
+        if (rawPassword) $set.passwordHash = await bcrypt.hash(rawPassword, 10);
+
+        await wh.save(opts);
+        warehouseWritten = true;
+
+        // role, ownerType/ownerId and warehouseIds are deliberately NOT in
+        // $set: this endpoint edits a manager's details, not their permissions.
+        if (Object.keys($set).length) {
+          await User.updateOne({ _id: assigned._id, ownerType: "seller", ownerId: req.user.sellerId }, { $set }, opts);
+        }
+
+        const fresh = await User.findById(assigned._id)
+          .select(SELLER_MANAGER_PUBLIC_FIELDS)
+          .session(session || null)
+          .lean();
+        return fresh;
+      } catch (err) {
+        // No session (standalone mongod) → put the warehouse back by hand, so a
+        // rejected manager edit can't leave a renamed warehouse behind.
+        if (!session && warehouseWritten && before) {
+          await Warehouse.replaceOne({ _id: wh._id }, before).catch(() => {});
+        }
+        throw err;
+      }
+    });
+
+    // The company flow writes "user.created" on create; this is the update
+    // equivalent for the seller side. The password is never part of it.
+    await audit.log({
+      req,
+      action: "user.updated",
+      entityType: "User",
+      entityId: assigned._id,
+      after: {
+        name: saved?.name,
+        email: saved?.email,
+        role: sellerMember.SELLER_WAREHOUSE_MANAGER_ROLE,
+        passwordChanged: !!rawPassword,
+      },
+    });
+
+    // ── CHANGE NOTIFICATION ──
+    // Past withTransaction and past the audit entry, so the record is already
+    // committed. Deliberately NON-FATAL, exactly like the create path: a
+    // bounced mailbox must never turn a successful save into a 500, so the
+    // outcome is reported as `managerEmailSent` instead. The raw password is
+    // handed to the mailer and never written to a log.
+    const changedFields = [];
+    if (nextName !== undefined && nextName !== (assigned.name || "")) changedFields.push("Name");
+    if (nextEmail !== undefined && nextEmail !== (assigned.email || "")) changedFields.push("Email");
+    if (nextPhone !== undefined && nextPhone !== (assigned.phone || "")) changedFields.push("Phone");
+    if (rawPassword) changedFields.push("Password");
+
+    let managerEmailSent = false;
+    if (changedFields.length) {
+      try {
+        const seller = await Seller.findById(req.user.sellerId)
+          .select("sellerInfo.businessName contact.ownerName")
+          .lean();
+        const companyName = seller?.sellerInfo?.businessName || seller?.contact?.ownerName;
+
+        // When the LOGIN EMAIL moved, both addresses are told: the old one so a
+        // manager who did not expect this can raise the alarm, the new one so
+        // they know where they sign in now. `assigned` was read before the
+        // update, so it still holds the old address.
+        const recipients = [saved?.email];
+        if (changedFields.includes("Email") && assigned.email) recipients.unshift(assigned.email);
+        const unique = [...new Set(recipients.filter(Boolean))];
+
+        for (const to of unique) {
+          await sendWarehouseManagerUpdatedEmail({
+            managerName: saved?.name,
+            to,
+            changedFields,
+            password: rawPassword || undefined, // plaintext, request-scoped, email only
+            companyName,
+            warehouseName: wh.name,
+            // The seller's manager signs in on the SELLER page, as the welcome
+            // mail already does.
+            loginPath: "/seller/login",
+          });
+        }
+        managerEmailSent = unique.length > 0;
+      } catch (mailErr) {
+        console.error("updateSellerWarehouse: manager update email failed:", mailErr.message);
+      }
+    }
+
+    const updated = await Warehouse.findById(wh._id);
+    res.json({ success: true, message: "Warehouse updated", data: updated, manager: publicSellerManager(saved), managerEmailSent });
   } catch (err) {
     console.error("updateSellerWarehouse error:", err);
     res.status(err.status || 500).json({ success: false, message: err.status ? err.message : "Server error" });

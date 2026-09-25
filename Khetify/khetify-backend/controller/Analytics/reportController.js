@@ -2,6 +2,7 @@ const reportService = require("../../services/reportService");
 const Inventory = require("../../model/Inventory/Inventory");
 const Shipment = require("../../model/Transport/Shipment");
 const Order = require("../../model/Order/Order");
+const SupplyOrder = require("../../model/Supply/SupplyOrder");
 const { resolveFeatures, FEATURES } = require("../../config/plans");
 const { effectivePlan } = require("../../services/subscriptionService");
 const { warehouseScope, inScope } = require("../../services/warehouseScope");
@@ -71,6 +72,23 @@ exports.dashboard = async (req, res) => {
       ? { $or: [{ fromWarehouseId: { $in: scope.map((id) => new mongoose.Types.ObjectId(id)) } }, { toWarehouseId: { $in: scope.map((id) => new mongoose.Types.ObjectId(id)) } }] }
       : {};
 
+    /* Scoping for SALES TO SELLERS. `sourceWarehouseId` is the warehouse the
+       goods LEFT — the one making the sale. (`warehouseId` on SupplyOrder is
+       the seller's destination, so it would credit the wrong side.) No scope =
+       admin = every warehouse = the company total. */
+    const supplyWh = scope
+      ? { sourceWarehouseId: { $in: scope.map((id) => new mongoose.Types.ObjectId(id)) } }
+      : {};
+
+    /* WHICH DATE THE PERIOD FILTER APPLIES TO.
+       The dispatch timestamp lives at `shipment.dispatchedAt` — a NESTED field,
+       not a root one — and is only set once the goods actually leave. Rows
+       dispatched before that field was being written have it null, so the
+       filter falls back to `createdAt` rather than dropping those sales
+       entirely: `$ifNull` picks whichever exists, and the comparison runs
+       against that. */
+    const supplySaleDate = { $ifNull: ["$shipment.dispatchedAt", "$createdAt"] };
+
     // Headline "Stock Value" is ALWAYS valued at MRP × availableStock, using the
     // same lot rows and math as the Inventory page's "Total Stock Value" so the
     // three surfaces (Inventory, Dashboard, Home) never disagree. (Previously
@@ -97,7 +115,7 @@ exports.dashboard = async (req, res) => {
       { $unwind: { path: "$p", preserveNullAndEmptyArrays: true } },
     ];
 
-    const [valAgg, expAgg, openShipments, todayAgg] = await Promise.all([
+    const [valAgg, expAgg, openShipments, todayAgg, supplySalesAgg] = await Promise.all([
       Inventory.aggregate([
         // Count ACTUAL LOTS only (batchNumber != null) — identical to the source
         // behind the Inventory page's "Total Stock Value" (lotService.getLots).
@@ -114,6 +132,54 @@ exports.dashboard = async (req, res) => {
       ]),
       Shipment.countDocuments({ companyId, status: { $in: ["planned", "approved", "loading", "dispatched", "in_transit", "arrived"] }, ...shipWh }),
       Order.aggregate([{ $match: { companyId: companyOid, placedAt: placedRange, status: { $in: ["confirmed", "packed", "shipped", "delivered"] } } }, { $group: { _id: null, amt: { $sum: "$totalAmount" }, n: { $sum: 1 } } }]),
+
+      /* ── SALES TO SELLERS ──────────────────────────────────────────────
+         The "Sales" tile is the value of stock this company has DISPATCHED to
+         its sellers, not customer-order revenue. Those are two different money
+         flows and adding them would double-count the same goods, so this is a
+         separate aggregation over SupplyOrder and the Order figure above is
+         left exactly as it was for the Sales-overview panel.
+
+         VALUED AT PRODUCT MRP × QUANTITY. `SupplyOrder.items[].unitPrice`
+         exists on the schema but NO code path ever writes it — every create
+         site (companySellerTransferService, sellerSupplyController,
+         supplyController) omits it — so summing it would return a flat zero.
+         MRP is the same basis the dashboard's Stock Value tile already uses,
+         so a warehouse's stock and its dispatched sales are valued the same way.
+
+         COUNTED ONCE, AT DISPATCH. Only orders that have actually left
+         (dispatched onwards, excluding rejected/cancelled) are included, and an
+         order contributes exactly one row per item — a later status change from
+         `dispatched` to `received` moves it along the list but never adds it twice.
+
+         WAREHOUSE SCOPING uses `sourceWarehouseId` — the warehouse the goods
+         physically left. `warehouseId` on this model is the seller's DESTINATION
+         warehouse, so scoping on it would credit the sale to the wrong side.
+         An admin (no scope) gets every warehouse, which is the company total. */
+      SupplyOrder.aggregate([
+        { $match: {
+          companyId: companyOid,
+          status: { $in: ["dispatched", "in_transit", "arrived", "partially_received", "received", "delivered"] },
+          ...supplyWh,
+        } },
+        // The date test is an $expr because the field is computed ($ifNull),
+        // which a plain range query cannot express.
+        { $match: { $expr: {
+          $and: [
+            { $gte: [supplySaleDate, salesFrom] },
+            ...(salesTo ? [{ $lte: [supplySaleDate, salesTo] }] : []),
+          ],
+        } } },
+        { $unwind: "$items" },
+        { $lookup: { from: "products", localField: "items.productId", foreignField: "_id", as: "p" } },
+        { $unwind: { path: "$p", preserveNullAndEmptyArrays: true } },
+        { $group: {
+          _id: null,
+          amt: { $sum: { $multiply: [{ $ifNull: ["$items.quantity", 0] }, { $ifNull: ["$p.mrp", 0] }] } },
+          orders: { $addToSet: "$_id" },
+        } },
+        { $project: { amt: 1, n: { $size: "$orders" } } },
+      ]),
     ]);
 
     res.json({
@@ -127,6 +193,12 @@ exports.dashboard = async (req, res) => {
         // Range-aware aliases (same numbers when no from/to is passed).
         rangeSales: Math.round(todayAgg[0]?.amt || 0),
         rangeOrders: todayAgg[0]?.n || 0,
+        /* SALES TO SELLERS for the selected period — company-wide for an admin,
+           this warehouse only for a scoped manager. Additive: every field above
+           is unchanged, so the Sales-overview panel and any other caller keep
+           the exact numbers they had. */
+        supplySales: Math.round(supplySalesAgg[0]?.amt || 0),
+        supplyOrders: supplySalesAgg[0]?.n || 0,
       },
     });
   } catch (err) { fail(res, err); }

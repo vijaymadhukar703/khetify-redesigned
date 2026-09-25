@@ -19,6 +19,8 @@ app.set('trust proxy', 1); // correct client IPs behind a proxy (rate-limit/logs
 /* ----- existing marketplace routes (stay under routes/Company/) ----- */
 const companyRoutes = require("./routes/Company/companyRoutes");
 const productRoutes = require("./routes/Company/productRoutes");
+const hsnRoutes = require("./routes/Master/hsnRoutes");
+const sellerCategoryRoutes = require("./routes/Master/sellerCategoryRoutes"); // seller product-category master (onboarding dropdown)
 
 /* ----- NEW: IMS routes (siblings of Company, NOT inside it) ----- */
 const subscriptionRoutes = require("./routes/Subscription/subscriptionRoutes");
@@ -39,6 +41,7 @@ const userRoutes = require("./routes/User/userRoutes");
 const purchasingRoutes = require("./routes/Purchase/purchasingRoutes");
 const authRoutes = require("./routes/Auth/authRoutes");
 const adminRoutes = require("./routes/Admin/adminRoutes"); // Platform admin (company review/approval)
+const adminProductRoutes = require("./routes/Admin/adminProductRoutes"); // admin product library
 const locationRoutes = require("./routes/Warehouse/locationRoutes"); // data API retained: Operations (Receive Stock) uses storage bins
 const grnRoutes = require("./routes/Inventory/grnRoutes");
 const putawayRoutes = require("./routes/Inventory/putawayRoutes");
@@ -58,9 +61,15 @@ const shipmentCostRoutes = require("./routes/Transport/shipmentCostRoutes");
 const ownerRoutes = require("./routes/Analytics/ownerRoutes");
 const auditRoutes = require("./routes/Audit/auditRoutes");
 const shopRoutes = require("./routes/Shop/shopRoutes"); // Public customer storefront (/customer-shop) — browse + consumer auth + checkout
+const shopNotificationRoutes = require("./routes/Shop/shopNotificationRoutes"); // Customer stock notifications
+const quantityRequestRoutes = require("./routes/Shop/quantityRequestRoutes"); // Customer quantity requests
 const sellerRoutes = require("./routes/Seller/sellerRoutes"); // Seller-side IMS (Phase 1: auth + portal)
+const sellerStockRequestRoutes = require("./routes/Seller/sellerStockRequestRoutes"); // Seller demand monitoring
+const sellerQuantityRequestRoutes = require("./routes/Seller/sellerDemandMonitorRoutes"); // Seller quantity request responses
 const sellerWarehouseRoutes = require("./routes/Seller/sellerWarehouseRoutes"); // Seller warehouses (Phase 2b)
 const sellerCatalogRoutes = require("./routes/Seller/sellerCatalogRoutes"); // Seller read-only catalog (Phase 2c)
+const sellerMyProductRoutes = require("./routes/Seller/sellerMyProductRoutes"); // Seller's OWN products + own stock ("My Products")
+const sellerLibraryRoutes = require("./routes/Seller/sellerLibraryRoutes"); // seller: read admin product library names
 const sellerSupplyRoutes = require("./routes/Seller/sellerSupplyRoutes"); // Seller-initiated supply requests (Phase 3)
 const sellerInventoryRoutes = require("./routes/Seller/sellerInventoryRoutes"); // Seller read-only inventory/lots (Phase 4a)
 const sellerTransferRoutes = require("./routes/Seller/sellerTransferRoutes"); // Seller inter-warehouse transfers
@@ -80,6 +89,10 @@ const principalRouteGuard = require("./middlewares/principalRouteGuard"); // sel
 /* ----- NEW: realtime ----- */
 const { initSocket } = require("./sockets");
 
+/* ----- NEW: Passport for Google OAuth ----- */
+const session = require('express-session');
+const passport = require('./config/googleAuth');
+
 // Absolute path so local-served file URLs (/uploads/<key>) resolve regardless
 // of the process working directory — matches where services/storage.js writes.
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
@@ -93,7 +106,24 @@ const corsAllow = env.corsOrigins;
 app.use(cors({
   origin: corsAllow.includes("*") ? true : corsAllow,
 }));
-app.use(express.json({ limit: "2mb" }));
+/* 🔔 RAW BODY FOR THE RAZORPAY WEBHOOK — the only reason this line is not a
+   plain express.json({ limit }).
+
+   Razorpay signs the EXACT BYTES it sent. Once express.json() has parsed the
+   body those bytes are gone: JSON.stringify(req.body) re-orders keys and drops
+   whitespace, so the HMAC would never match and every webhook would be
+   rejected as a forgery.
+
+   The verify callback runs before parsing and hands us the original buffer. It
+   is stored for the ONE webhook path only — keeping it for every request would
+   double the memory of every upload on the server for no reason. */
+const RAZORPAY_WEBHOOK_PATH = "/api/shop/payments/webhook";
+app.use(express.json({
+  limit: "2mb",
+  verify: (req, res, buf) => {
+    if (req.originalUrl === RAZORPAY_WEBHOOK_PATH) req.rawBody = buf;
+  },
+}));
 app.use(requestId);
 app.use(pinoHttp({ logger, customProps: (req) => ({ reqId: req.id }), autoLogging: { ignore: (req) => req.url === "/healthz" } }));
 
@@ -102,6 +132,23 @@ const globalLimiter = rateLimit({ windowMs: 60 * 1000, max: 300, standardHeaders
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 30, standardHeaders: true, legacyHeaders: false, message: { success: false, message: "Too many attempts, try again later" } });
 app.use("/api", globalLimiter);
 app.use(["/api/company/login", "/api/company/register", "/api/company/forgot-password", "/api/company/reset-password", "/api/driver/login", "/api/seller/login", "/api/seller/register", "/api/admin/login", "/api/shop/auth/login", "/api/shop/auth/register"], authLimiter);
+
+/* ===== NEW: Session + Passport middleware (MUST be before routes) ===== */
+app.use(session({
+  secret: env.jwtSecret || 'your-secret-key',
+  resave: false,
+  saveUninitialized: false,
+  cookie: { 
+    secure: env.nodeEnv === 'production', // HTTPS only in production
+    httpOnly: true,
+    maxAge: 24 * 60 * 60 * 1000 // 24 hours
+  }
+}));
+
+// Passport middleware
+app.use(passport.initialize());
+app.use(passport.session());
+/* ===== END: Session + Passport middleware ===== */
 
 // Defence in depth: a seller token may only reach /api/seller/*, and no other
 // principal may. Runs before every route mount; no-ops for tokenless/public
@@ -169,10 +216,12 @@ app.use("/api/company/certificates", companyCertRoutes); // PC: company certific
 app.use("/api/company/seller-documents", companySellerDocRoutes); // PC: verify/reject seller docs
 app.use("/api/company", companyRoutes);
 app.use("/api/product", productRoutes);
+app.use("/api/hsn", hsnRoutes); // GST rate master lookup (read-only)
 
 // Auth (identity + capabilities for the frontend)
 app.use("/api/auth", authRoutes);
 app.use("/api/admin/chats", adminChatRoutes); // live support chat (admin) — before /api/admin so the specific path wins
+app.use("/api/admin/products", adminProductRoutes); // admin product library
 app.use("/api/admin", adminRoutes); // platform admin: company review/approval + dashboard
 
 // IMS
@@ -214,7 +263,30 @@ app.use("/api/analytics", analyticsRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/purchasing", purchasingRoutes);
 app.use("/api/shop", shopRoutes); // public customer storefront (browse + consumer auth + checkout)
+app.use("/api/shop/notifications", shopNotificationRoutes); // customer stock notifications & inbox
+app.use("/api/shop/quantity-requests", quantityRequestRoutes); // customer quantity requests
+app.use("/api/seller/quantity-requests", sellerQuantityRequestRoutes); // seller quantity request responses
 app.use("/api/seller/warehouses", sellerWarehouseRoutes); // before /api/seller so the specific path wins
+// GST RATE MASTER, REACHABLE BY A SELLER TOKEN.
+//
+// The same read-only router already mounted at /api/hsn below — not a copy, not
+// a fork: `hsnRoutes` verbatim, and its controller carries no company scope
+// because a GST rate is public statutory data, identical for everyone.
+//
+// It needs a second mount because middlewares/principalRouteGuard (line ~128)
+// refuses a SELLER token on every path outside /api/seller ("Company access
+// only"), so the seller upload form could not reach /api/hsn at all — the HSN
+// autocomplete and GST auto-fill 403'd on every keystroke. Mounting the same
+// router inside the seller namespace satisfies that guard without weakening it
+// and without editing the guard, the route file or the controller.
+//
+// MUST stay above the /api/seller mount, which would otherwise swallow it.
+app.use("/api/seller/hsn", hsnRoutes); // GST master for the seller portal (same read-only router as /api/hsn)
+// Product-category master for the onboarding dropdown. Like the HSN mount above
+// it must stay ABOVE /api/seller, which would otherwise swallow the path.
+app.use("/api/seller/categories", sellerCategoryRoutes);
+app.use("/api/seller/my-products", sellerMyProductRoutes); // seller's own products + own stock (ungated, free)
+app.use("/api/seller/library", sellerLibraryRoutes);
 app.use("/api/seller/products", sellerCatalogRoutes); // read-only catalog of the linked company
 app.use("/api/seller/supply-orders", sellerSupplyRoutes); // seller-initiated supply requests
 app.use("/api/seller/lots", sellerInventoryRoutes); // read-only seller inventory/lots
@@ -232,6 +304,7 @@ app.use("/api/seller/documents", sellerDocumentsRoutes); // PC: KYC/business doc
 app.use("/api/seller/pc-applications", sellerPcAppRoutes); // PC: applications + agreement
 app.use("/api/seller/certificates", sellerCertRoutes); // PC: issued certificates + govt
 app.use("/api/seller/listings", sellerListingRoutes); // PC-gated marketplace listings
+app.use("/api/seller/stock-requests", sellerStockRequestRoutes); // seller demand monitoring
 app.use("/api/seller", sellerRoutes); // Seller-side IMS portal (additive; company mounts untouched)
 
 /* ----- 404 + central error handler (must be last) ----- */
@@ -246,6 +319,15 @@ initSocket(server); // attaches Socket.IO to the same HTTP server
 
 server.listen(PORT, () => {
   logger.info(`🔥 Server running on port ${PORT}`);
+  
+  // Start automatic product cleanup job
+  // Deletes soft-deleted products when all warehouses have 0 stock
+  try {
+    const { startAutoCleanupJob } = require("./controller/Company/productController");
+    startAutoCleanupJob();
+  } catch (error) {
+    logger.warn("Auto-cleanup job failed to start:", error.message);
+  }
 });
 
 /* ----- Graceful shutdown ----- */

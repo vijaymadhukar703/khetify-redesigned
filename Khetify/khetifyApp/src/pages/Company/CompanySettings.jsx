@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSubscription } from '../../context/SubscriptionContext';
-import BackButton from '../../Components/BackButton';
+
 
 const PREF_KEY = 'ims_prefs';
 const loadPrefs = () => {
@@ -39,7 +39,7 @@ const CompanySettings = () => {
   return (
     <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-white font-sora">
       <div className="max-w-3xl mx-auto space-y-6">
-        <BackButton />
+       
         <h2 className="text-xl font-bold text-stone-900">Settings</h2>
 
         {/* Subscription */}

@@ -59,6 +59,29 @@ const ALL_TABS = [
 ];
 const SHIPMENT_TABS = ['shipments', 'requests'];
 
+// Shipments table pagination — rows per page. Client-side over the already
+// filtered list, matching the Company Lots and Seller Requests tables. The
+// direction views and the search box run FIRST, so a page is always a slice of
+// what the operator actually chose to look at.
+const PAGE_SIZE = 10;
+
+/**
+ * Page numbers to render. Short runs list every page; longer ones show a window
+ * around the current page with the first and last always reachable and '…' for
+ * the gap, so the control never outgrows the row it sits in.
+ */
+const pageWindow = (current, total) => {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const pages = [1];
+  const from = Math.max(2, current - 1);
+  const to = Math.min(total - 1, current + 1);
+  if (from > 2) pages.push('start-gap');
+  for (let n = from; n <= to; n += 1) pages.push(n);
+  if (to < total - 1) pages.push('end-gap');
+  pages.push(total);
+  return pages;
+};
+
 const ImsTransport = () => {
   const { role } = usePermission();
   const restricted = role === 'company_admin' || WAREHOUSE_ROLES.has(role);
@@ -81,7 +104,7 @@ const ImsTransport = () => {
       <div className="w-full max-w-none space-y-6">
         <div className="flex items-center gap-1 border-b border-stone-200">
           {tabs.map(([k, l]) => (
-            <button key={k} onClick={() => setTab(k)} className={`px-4 py-2.5 text-sm font-bold border-b-2 -mb-px ${active === k ? 'border-[#EA2831] text-[#EA2831]' : 'border-transparent text-stone-400 hover:text-stone-700'}`}>{l}</button>
+            <button key={k} onClick={() => setTab(k)} className={`px-4 py-2.5 text-sm font-bold border-b-2 -mb-px whitespace-nowrap transition-colors ${active === k ? 'border-[#EA2831] text-[#EA2831]' : 'border-transparent text-stone-400 hover:text-stone-700'}`}>{l}</button>
           ))}
         </div>
         {active === 'shipments' && <ShipmentsTab />}
@@ -135,6 +158,7 @@ const ShipmentsTab = () => {
   // The shipment whose repack cartons are being listed, if any.
   const [boxesFor, setBoxesFor] = useState(null);
   const [view, setView] = useState('all'); // all | incoming
+  const [page, setPage] = useState(1); // 1-based, over `visible`
   // Warehouse-level access: the backend already scopes this list to the
   // user's assigned warehouses; warehouseIds drives the Incoming filter.
   const { warehouseIds, can, role } = usePermission();
@@ -213,6 +237,15 @@ const ShipmentsTab = () => {
           .some((f) => (f || '').toLowerCase().includes(needle)))
     : inView;
 
+  // Derived, never stored. currentPage is clamped so receiving/dispatching the
+  // last row of the last page cannot strand the table on a page that no longer
+  // exists, and a narrower view/search can't leave the operator on an empty one.
+  const totalPages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const rangeStart = visible.length === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1;
+  const rangeEnd = Math.min(currentPage * PAGE_SIZE, visible.length);
+  const paged = visible.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+
   const doApprove = async (s) => {
     try { await approveShipment(s._id); toast('success', 'Shipment approved'); refresh(); } catch (err) { apiError(err); }
   };
@@ -258,24 +291,29 @@ const ShipmentsTab = () => {
   return (
     <>
       <div className="flex flex-wrap justify-between items-center gap-3">
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="ml-3 flex items-center gap-2 flex-wrap">
           {/* Direction views answer "what is MY warehouse sending / receiving?" —
               meaningless for the unscoped main Company (it owns every
               warehouse), so it only shows the All view. */}
           {views.map(([k, l]) => (
-            <button key={k} onClick={() => setView(k)}
-              className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-all ${view === k ? 'bg-[#EA2831] border-[#EA2831] text-white' : 'border-stone-200 text-stone-500 hover:bg-stone-50'}`}>
+            <button key={k} onClick={() => { setView(k); setPage(1); }}
+              className={`h-9 px-4 rounded-full text-xs font-bold border transition-colors ${view === k ? 'bg-[#EA2831] border-[#EA2831] text-white' : 'border-stone-200 text-stone-500 hover:bg-stone-50'}`}>
               {l}
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-3">
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search ref (SH-…), warehouse or vehicle…"
-            className="w-56 sm:w-72 border border-stone-200 rounded-lg text-sm px-3 py-2 bg-white focus:ring-[#EA2831]"
-          />
+        <div className="flex items-center gap-2">
+          {/* Matching h-9 with the view chips and the button, and a leading icon
+              so the field reads as a search rather than an empty text box. */}
+          <div className="relative">
+            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-[18px] pointer-events-none">search</span>
+            <input
+              value={q}
+              onChange={(e) => { setQ(e.target.value); setPage(1); }}
+              placeholder="Search ref (SH-…)"
+              className="w-56 sm:w-72 h-9 border border-stone-200 rounded-lg text-sm pl-9 pr-3 bg-white outline-none transition-colors focus:bg-white focus:border-[#EA2831] focus:ring-2 focus:ring-[#EA2831]/10"
+            />
+          </div>
           {/* Shipments are raised by the warehouse that physically ships — the main
               Company's view is read-only oversight. Other roles keep the button. */}
           {!isMainCompany && (
@@ -323,7 +361,7 @@ const ShipmentsTab = () => {
           </colgroup>
           <thead><tr className="bg-stone-50 border-b border-stone-200"><Th pad="px-3">Shipment Ref.</Th><Th pad="px-3">Seller Request No.</Th><Th pad="px-3">Product Name</Th><Th pad="px-3">Type</Th>{/* Vehicle & Driver temporarily hidden — the data is still stored on the shipment and returned by the API. */}{/* <Th pad="px-3">Vehicle</Th><Th pad="px-3">Driver</Th> */}<Th pad="px-3">Challan</Th><Th pad="px-3">Bilty Number</Th><Th pad="px-3">Bill</Th><Th pad="px-3">Status</Th><Th pad="px-3">Dispatched</Th><Th pad="px-3" right>Actions</Th></tr></thead>
           <tbody className="divide-y divide-stone-100">
-            {visible.map((s) => {
+            {paged.map((s) => {
               const dir = directionOf(s);
               // Driver name/phone are stored on the shipment at creation
               // (driverName / driverPhone); fall back to a linked Driver record
@@ -332,7 +370,7 @@ const ShipmentsTab = () => {
               // const driverName = s.driverName || s.driver?.name || s.driverId?.userId?.name || s.driverId?.name || s.manifest?.driverName || '';
               // const driverPhone = s.driverPhone || s.driver?.phone || s.driverId?.phone || s.driverId?.userId?.phone || s.manifest?.driverPhone || '';
               return (
-              <tr key={s._id} className="hover:bg-stone-50/40">
+              <tr key={s._id} className="hover:bg-stone-50/60 transition-colors">
                 {/* The reference the backend derives (shipmentService.shipmentRef)
                     — the SAME value Transfer History and Supply Requests show, so
                     an operator can match a row across all three. Never rebuilt
@@ -500,6 +538,49 @@ const ShipmentsTab = () => {
           </tbody>
         </table>
       </div>
+
+      {/* Pagination — the same control as the Company Lots and Seller Requests
+          tables. Hidden when one page holds everything. */}
+      {visible.length > 0 && totalPages > 1 && (
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+          <p className="text-[11px] font-bold uppercase tracking-wider text-stone-400">
+            Showing {rangeStart}–{rangeEnd} of {visible.length} shipments
+          </p>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setPage((n) => Math.max(1, n - 1))}
+              disabled={currentPage <= 1}
+              className="inline-flex items-center gap-1 text-xs font-bold px-3 py-2 rounded-lg border border-stone-200 text-stone-600 hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <span className="material-symbols-outlined text-base">chevron_left</span> Previous
+            </button>
+            {pageWindow(currentPage, totalPages).map((n) => (
+              typeof n === 'string'
+                ? <span key={n} className="px-1 text-xs font-bold text-stone-300 select-none">…</span>
+                : (
+                  <button
+                    key={n}
+                    onClick={() => setPage(n)}
+                    className={`min-w-[36px] text-xs font-bold px-3 py-2 rounded-lg border transition-colors ${
+                      n === currentPage
+                        ? 'bg-[#EA2831] border-[#EA2831] text-white'
+                        : 'border-stone-200 text-stone-600 hover:bg-stone-50'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                )
+            ))}
+            <button
+              onClick={() => setPage((n) => Math.min(totalPages, n + 1))}
+              disabled={currentPage >= totalPages}
+              className="inline-flex items-center gap-1 text-xs font-bold px-3 py-2 rounded-lg border border-stone-200 text-stone-600 hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next <span className="material-symbols-outlined text-base">chevron_right</span>
+            </button>
+          </div>
+        </div>
+      )}
       {/* Guarded on the role too, so the modal can never be opened for the main
           Company through leftover/forced UI state — not just a hidden button. */}
       {showNew && !isMainCompany && <NewShipmentModal canTransfer={canTransfer} onClose={() => setShowNew(false)} onDone={() => { setShowNew(false); refresh(); }} />}
@@ -1328,6 +1409,7 @@ const REQ_STATUS_STYLES = {
 const RequestsTab = () => {
   const [rows, setRows] = useState([]);
   const [q, setQ] = useState('');
+  const [page, setPage] = useState(1); // 1-based, over `visible`
   const [showNew, setShowNew] = useState(false);
   const { warehouseIds, can } = usePermission();
   // Accepting a request creates a transfer shipment → needs inventory:transfer.
@@ -1347,6 +1429,16 @@ const RequestsTab = () => {
         [r.transferRef, r.productId?.productName, r.fromWarehouseId?.name, r.toWarehouseId?.name]
           .some((f) => (f || '').toLowerCase().includes(needle)))
     : rows;
+
+  // Derived, never stored. Search runs first, so a page is always a slice of
+  // what the operator is actually looking at; currentPage is clamped so
+  // accepting/rejecting the last row of the last page can't strand the table.
+  const totalPages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const rangeStart = visible.length === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1;
+  const rangeEnd = Math.min(currentPage * PAGE_SIZE, visible.length);
+  const paged = visible.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+
   const decide = async (id, ok) => {
     try {
       // Accept runs a server-side stock check: if the source warehouse lacks
@@ -1362,25 +1454,30 @@ const RequestsTab = () => {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap justify-between items-center gap-3">
-        <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400">{visible.length} request(s)</p>
-        <div className="flex items-center gap-3">
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search ref (SH-…), product or warehouse…"
-            className="w-56 sm:w-72 border border-stone-200 rounded-lg text-sm px-3 py-2 bg-white focus:ring-[#EA2831]"
-          />
+        <p className="ml-5 text-[10px] font-bold uppercase tracking-wider text-stone-400">{visible.length} request(s)</p>
+        <div className="flex items-center gap-2">
+          {/* Same search treatment as the All Transfers toolbar: leading icon,
+              h-9 to match the button, and a focus ring that is actually visible. */}
+          <div className="relative">
+            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-[18px] pointer-events-none">search</span>
+            <input
+              value={q}
+              onChange={(e) => { setQ(e.target.value); setPage(1); }}
+              placeholder="Search ref (SH-…)"
+              className="w-56 sm:w-72 h-9 border border-stone-200 rounded-lg text-sm pl-9 pr-3 bg-white outline-none transition-colors focus:border-[#EA2831] focus:ring-2 focus:ring-[#EA2831]/10"
+            />
+          </div>
           <PrimaryBtn onClick={() => setShowNew(true)}>
             <span className="material-symbols-outlined text-base">move_down</span> Request Stock
           </PrimaryBtn>
         </div>
       </div>
-      <div className="border border-stone-200 rounded-2xl overflow-x-auto">
+      <div className="border border-stone-200 rounded-2xl shadow-sm bg-white overflow-x-auto">
         <table className="w-full text-left border-collapse min-w-[920px] resp-table">
-          <thead><tr className="text-[10px] uppercase text-stone-400 bg-stone-50"><Th>Product</Th><Th right>Qty</Th><Th>From (source)</Th><Th>For (requester)</Th><Th>Transfer Ref.</Th><Th>Status</Th><Th>Requested</Th><Th right>Actions</Th></tr></thead>
+          <thead><tr className="text-[10px] uppercase text-stone-400 bg-stone-50 border-b border-stone-200"><Th>Product</Th><Th right>Qty</Th><Th>From (source)</Th><Th>For (requester)</Th><Th>Transfer Ref.</Th><Th>Status</Th><Th>Requested</Th><Th right>Actions</Th></tr></thead>
           <tbody className="divide-y divide-stone-100">
-            {visible.map((r) => (
-              <tr key={r._id} className="hover:bg-stone-50/40">
+            {paged.map((r) => (
+              <tr key={r._id} className="hover:bg-stone-50/60 transition-colors">
                 <td className="px-4 py-3 text-sm font-bold" data-label="Product">{r.productId?.productName || '—'}</td>
                 <td className="px-4 py-3 text-sm text-right" data-label="Qty">{r.qty}</td>
                 <td className="px-4 py-3 text-sm" data-label="From (source)">{r.fromWarehouseId?.name || '—'}</td>
@@ -1428,6 +1525,48 @@ const RequestsTab = () => {
           </tbody>
         </table>
       </div>
+
+      {/* Pagination — 10 requests per page, the same control as All Transfers. */}
+      {visible.length > 0 && totalPages > 1 && (
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+          <p className="text-[11px] font-bold uppercase tracking-wider text-stone-400">
+            Showing {rangeStart}–{rangeEnd} of {visible.length} requests
+          </p>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setPage((n) => Math.max(1, n - 1))}
+              disabled={currentPage <= 1}
+              className="inline-flex items-center gap-1 text-xs font-bold px-3 py-2 rounded-lg border border-stone-200 text-stone-600 hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <span className="material-symbols-outlined text-base">chevron_left</span> Previous
+            </button>
+            {pageWindow(currentPage, totalPages).map((n) => (
+              typeof n === 'string'
+                ? <span key={n} className="px-1 text-xs font-bold text-stone-300 select-none">…</span>
+                : (
+                  <button
+                    key={n}
+                    onClick={() => setPage(n)}
+                    className={`min-w-[36px] text-xs font-bold px-3 py-2 rounded-lg border transition-colors ${
+                      n === currentPage
+                        ? 'bg-[#EA2831] border-[#EA2831] text-white'
+                        : 'border-stone-200 text-stone-600 hover:bg-stone-50'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                )
+            ))}
+            <button
+              onClick={() => setPage((n) => Math.min(totalPages, n + 1))}
+              disabled={currentPage >= totalPages}
+              className="inline-flex items-center gap-1 text-xs font-bold px-3 py-2 rounded-lg border border-stone-200 text-stone-600 hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next <span className="material-symbols-outlined text-base">chevron_right</span>
+            </button>
+          </div>
+        </div>
+      )}
       {showNew && <NewRequestModal onClose={() => setShowNew(false)} onDone={() => { setShowNew(false); refresh(); toast('success', 'Request sent — the source warehouse and admin have been notified'); }} />}
     </div>
   );

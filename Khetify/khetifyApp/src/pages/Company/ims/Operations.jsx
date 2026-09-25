@@ -49,21 +49,21 @@ const Operations = () => {
   const active = tabs.find((t) => t.key === params.get('tab')) || tabs[0];
 
   /**
-   * THE TRANSFERS TAB GETS THE FULL PAGE WIDTH.
+   * EVERY TAB GETS THE FULL PAGE WIDTH.
    *
-   * `max-w-7xl` (1280px) minus `sm:px-8` was the real cap on the Transfers
-   * table — the table and its card are already w-full, so no amount of widening
-   * inside ImsTransport could get past this container.
+   * `max-w-7xl` (1280px) plus `sm:px-8` used to cap this shell, and the Transfers
+   * tab alone opted out of it — which is why that one table ran edge to edge
+   * while Seller Requests, Transfer to Seller and Traceability sat in a narrower
+   * column, with their tab strip and heading starting at a different x than the
+   * Transfers one. The cap is now gone for all of them, so the heading, the tab
+   * strip and each tab's card share one left edge and one width.
    *
-   * Scoped to that ONE tab on purpose: this shell is shared by Receive Stock,
-   * Seller Requests, Transfer to Seller and Traceability, and those are reading
-   * views whose line length 7xl deliberately keeps comfortable. Widening the
-   * container outright would have quietly re-laid-out all five.
+   * Nothing inside the tabs changed: their cards are already w-full and simply
+   * follow this container.
    */
-  const wide = active.key === 'shipments';
 
   return (
-    <div className={`${wide ? 'max-w-none' : 'max-w-7xl'} mx-auto px-4 ${wide ? 'sm:px-4' : 'sm:px-8'} py-6`}>
+    <div className="max-w-none mx-auto px-4 sm:px-4 py-6">
       <h1 className="text-2xl font-bold text-stone-900 mb-1">Stock Transfers</h1>
       <p className="text-stone-500 mb-5">
         {isMainCompany
@@ -77,6 +77,9 @@ const Operations = () => {
         .kt-tabstrip { scrollbar-width: none; -ms-overflow-style: none; }
         .kt-tabstrip::-webkit-scrollbar { display: none; }
       `}</style>
+      {/* Tabs sit at their natural label width, left-aligned. Stretching them to
+          equal shares of the (now full-width) shell spread them far apart and
+          read as four separate buttons rather than one tab strip. */}
       <div className="kt-tabstrip flex gap-1 border-b border-stone-200 mb-6 overflow-x-auto">
         {tabs.map((t) => (
           <button

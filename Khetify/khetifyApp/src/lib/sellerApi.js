@@ -9,7 +9,16 @@ import config from "../../config/config";
 const SELLER_TOKEN_KEY = "sellerToken";
 
 export const getSellerToken = () => localStorage.getItem(SELLER_TOKEN_KEY);
-export const setSellerToken = (t) => localStorage.setItem(SELLER_TOKEN_KEY, t);
+/* The "already asked about live location this session" marker. Cleared on every
+   fresh sign-in so a seller who DENIED is asked again after their next login,
+   while one who ALLOWED is never re-prompted (that answer lives on the account,
+   server-side, and is read from /me). */
+export const SELLER_LOCATION_PROMPT_KEY = "khetify:locationPrompt:seller";
+
+export const setSellerToken = (t) => {
+  localStorage.setItem(SELLER_TOKEN_KEY, t);
+  try { sessionStorage.removeItem(SELLER_LOCATION_PROMPT_KEY); } catch { /* private mode */ }
+};
 export const clearSellerToken = () => localStorage.removeItem(SELLER_TOKEN_KEY);
 export const isSellerAuthed = () => !!getSellerToken();
 
@@ -25,6 +34,8 @@ const data = (p) => p.then((r) => r.data);
 
 /* ---- auth ---- */
 export const registerSeller = (body) => data(api.post("register", body));
+export const sendSellerOtp = (body) => data(api.post("send-otp", body));
+export const verifySellerOtp = (body) => data(api.post("verify-otp", body));
 export const loginSeller = (body) => data(api.post("login", body));
 export const getSellerMe = () => data(api.get("me"));
 // Registration profile (identity + GSTIN/PAN + KYC docs as signed URLs),
@@ -33,11 +44,28 @@ export const getSellerProfile = () => data(api.get("profile"));
 // Edit own profile — multipart (identity/compliance fields + replacement docs).
 export const updateSellerProfile = (formData) => data(api.patch("profile", formData));
 
+/* ---- 📱 Phone verification (seller profile) ----
+   number optional: na do to account ka maujooda number verify hota hai; do to
+   wo naya number — aur verify hote hi wahi account ka number ban jata hai.
+   Server number ko token wale account se hi jodta hai, isliye koi kisi aur ka
+   number "verified" nahi karwa sakta.
+
+   verify safal hone par poora profile lautata hai (GET profile wala hi shape),
+   isliye badge badalne ke liye doosri request nahi karni padti. */
+export const sendSellerPhoneOtp = (number) =>
+  data(api.post("profile/phone/send-otp", number ? { number } : {}));
+export const verifySellerPhoneOtp = (code) =>
+  data(api.post("profile/phone/verify", { code }));
+
 /* ---- onboarding wizard ---- */
 export const saveSellerInfo = (body) => data(api.put("onboarding/info", body));
 export const saveSellerContact = (body) => data(api.put("onboarding/contact", body));
 export const saveSellerVerification = (body) => data(api.put("onboarding/verification", body));
 export const submitSellerOnboarding = () => data(api.post("onboarding/submit", {}));
+// Product-category master shared by every seller: the onboarding dropdown reads
+// it, and "Other" appends to it so the next seller sees the new category too.
+export const getSellerCategories = () => data(api.get("categories"));
+export const createSellerCategory = (name) => data(api.post("categories", { name }));
 
 /* ---- companies (derived from PC issuance) ---- */
 // The seller's companies with their PC status (active = certificate issued, or an
@@ -60,6 +88,16 @@ export const updateSellerMember = (id, body) => data(api.patch(`team/${id}`, bod
 export const deleteSellerMember = (id) => data(api.delete(`team/${id}`));
 
 /* ---- authorization status (read-only; now PC-derived) ---- */
+/* ---- ACCOUNT SECURITY -------------------------------------------------- */
+// CHANGE PASSWORD is seller-namespaced. The shared /api/users/change-password
+// would have suited it, but middlewares/principalRouteGuard refuses a seller
+// token on any route outside /api/seller ("Company access only"), so the seller
+// portal has its own endpoint with the identical rules.
+export const changeMySellerPassword = (body) => data(api.post("change-password", body));
+// FORGOT PASSWORD is seller-specific: /api/users/forgot-password only matches
+// company members, so the seller portal has its own public endpoint.
+export const requestSellerPasswordReset = (body) => data(api.post("forgot-password", body));
+
 export const getSellerLink = () => data(api.get("link"));
 export const ackSellerApproval = () => data(api.post("ack-approval"));
 
@@ -175,6 +213,9 @@ export const previewSellerBoxLabel = (id, body) => data(api.post(`shipments/${id
 export const getSellerDeliveryLabel = (id, packageId) =>
   data(api.get(`shipments/${id}/delivery-label`, packageId ? { params: { packageId } } : undefined));
 export const dispatchSellerOrder = (id, body) => data(api.post(`shipments/${id}/dispatch-order`, body));
+// Direct dispatch — no barcode scanning required. Deducts stock by qty from planned lines.
+// Optional tokens = any barcodes the seller DID scan (for serialized stock tracking).
+export const dispatchSellerDirect = (id, body = {}) => data(api.post(`shipments/${id}/dispatch-direct`, body));
 export const receiveSellerShipment = (id, body) => data(api.post(`shipments/${id}/receive`, body));
 
 /* ---- SELLER WAREHOUSE → WAREHOUSE TRANSFER ----------------------------- */
@@ -249,6 +290,22 @@ export const getSellerOrderSourceOptions = (id) => data(api.get(`orders/${id}/so
 export const updateSellerOrderStatus = (id, statusOrBody) =>
   data(api.patch(`orders/${id}/status`, typeof statusOrBody === "string" ? { status: statusOrBody } : statusOrBody));
 
+/* ---- POS counter sale ---- */
+// One call: creates the order (FEFO reservation + GST + invoice number)
+// AND commits the stock, because the goods leave the counter immediately.
+export const createSellerPosSale = (body) => data(api.post("pos/sale", body));
+// A4 GST invoice for a POS sale. Returns a PDF blob, not JSON — so it must
+// NOT go through the JSON data(...) wrapper.
+export const getSellerPosInvoicePdf = (id) =>
+  api.get(`pos/sale/${id}/invoice`, { responseType: "blob" }).then((r) => r.data);
+
+/* ---- live location consent ---- */
+// { status: "granted" | "denied", latitude?, longitude?, accuracy? }
+// Resolve coordinates to a readable address WITHOUT saving — the confirmation
+// step. { latitude, longitude } -> { latitude, longitude, address }
+export const previewSellerLocation = (body) => data(api.post("location/preview", body));
+export const saveSellerLocation = (body) => data(api.patch("location", body));
+
 /* ---- subscription / billing ---- */
 export const getSellerSubscription = () => data(api.get("subscription/me"));
 export const getSellerPlans = () => data(api.get("subscription/plans"));
@@ -260,8 +317,26 @@ export const SELLER_FEATURES = {
   UNIT_LABELS: "unit_labels",
   MULTI_WAREHOUSE: "multi_warehouse",
   ADVANCED_ANALYTICS: "advanced_analytics",
+  SALES_CHANNEL: "sales_channel",
 };
 
 /* ---- RBAC stub (Phase 1): seller_admin holds everything within its scope.
    Real gating (capabilities / subscription) is wired in later phases. ---- */
 export const sellerCan = () => true;
+
+/* ---- demand monitor (stock-request notifications from customers) ----
+   Routed through the shared `api` instance so the interceptor attaches the
+   Bearer token from the SAME "sellerToken" key the rest of the seller portal
+   uses — pages must not read localStorage / call fetch() directly for these. */
+export const getSellerPendingStockRequests = (params = {}) => data(api.get("stock-requests", { params }));
+export const getSellerInterestedCustomers = (productId, params = {}) =>
+  data(api.get(`stock-requests/${productId}`, { params }));
+export const getSellerStockRequestStats = () => data(api.get("stock-requests/stats/summary"));
+/* ---- 📦 Quantity Requests (Demand Monitor) ----
+   Seller views quantity requests from customers and responds to them. */
+export const getSellerQuantityRequests = (params = {}) => data(api.get("quantity-requests", { params }));
+export const getQuantityRequestsInterested = (productId, params = {}) =>
+  data(api.get(`quantity-requests/interested/${productId}`, { params }));
+export const updateQuantityRequestStatus = (requestId, body) =>
+  data(api.put(`quantity-requests/${requestId}/status`, body));
+export const getQuantityRequestsSummary = () => data(api.get("quantity-requests/summary"));

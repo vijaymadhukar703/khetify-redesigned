@@ -53,4 +53,5 @@ export const NOTIF_ICON = {
   shipment: { icon: 'local_shipping', cls: 'text-blue-500 bg-blue-50' },
   order: { icon: 'shopping_cart', cls: 'text-indigo-500 bg-indigo-50' },
   supply_status: { icon: 'sync_alt', cls: 'text-emerald-600 bg-emerald-50' },
+  lot_incoming: { icon: 'move_to_inbox', cls: 'text-violet-600 bg-violet-50' },
 };

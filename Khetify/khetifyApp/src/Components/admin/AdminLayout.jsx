@@ -11,6 +11,7 @@ import { disconnectAdminSocket } from '../../lib/socket';
 const ADMIN_ENTRIES = [
   { to: '/admin/dashboard', icon: 'grid_view', title: 'Dashboard' },
   { to: '/admin/companies', icon: 'apartment', title: 'Companies' },
+  { to: '/admin/my-products', icon: 'inventory_2', title: 'Product Library' },
   { to: '/admin/support', icon: 'chat', title: 'Support Chats' },
   // { to: '/admin/sellers', icon: 'storefront', title: 'Sellers' },
   // { to: '/admin/pending', icon: 'hourglass_empty', title: 'Pending Requests' },
@@ -55,7 +56,7 @@ const AdminLayout = () => {
     <div className="flex flex-col h-screen bg-stone-50 font-sora overflow-hidden text-stone-900">
       <TopNav
         onMenuClick={() => setMobileOpen(true)}
-        brand={{ label: 'Khetify', sublabel: 'Admin' }}
+        brand={{ label: "Khettify", sublabel: 'Admin' }}
         homePath="/admin/dashboard"
         profile={profile}
       />

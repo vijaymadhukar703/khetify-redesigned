@@ -31,6 +31,32 @@ const sellerSchema = new mongoose.Schema(
       required: true,
     },
 
+    // PHONE VERIFIED. Registration email OTP se hoti hai; phone baad me profile
+    // se verify hota hai — thik waise hi jaise company side par.
+    //
+    // Har maujooda seller par yeh false hai, aur wahi sach bhi hai: kisi ne
+    // abhi tak apna number saabit kiya hi nahi.
+    phoneVerified: {
+      type: Boolean,
+      default: false,
+    },
+
+    // Short-lived OTP for verifying `phone`. Alag collection banane ke bajaye
+    // yahin rehta hai, kyunki yeh hamesha ek maujooda account se hi juda hota
+    // hai. Hash rakha jata hai, kabhi raw code nahi.
+    phoneOtp: {
+      codeHash: { type: String, default: null },
+      expiresAt: { type: Date, default: null },
+      attempts: { type: Number, default: 0 },
+      lastSentAt: { type: Date, default: null },
+      resendCount: { type: Number, default: 0 },
+      // Jis number par code bheja gaya. Number BADAL kar verify karne par
+      // yahan naya number rehta hai — aur verify hote hi wahi `phone` ban
+      // jata hai. Naya number tabhi account par aaye jab uska maalik hona
+      // saabit ho jaye.
+      pendingNumber: { type: String, default: null },
+    },
+
     // STATUS ENUM (sellers start pending until the supplying company / admin
     // approves them — mirrors the company approval gate).
     status: {
@@ -65,6 +91,25 @@ const sellerSchema = new mongoose.Schema(
       gstin: { type: String, trim: true },
       pan: { type: String, trim: true },
       udyam: { type: String, trim: true },
+
+      // OTHER REGISTRATION LICENCES — number only; the certificate itself is
+      // a SellerDocument row of the matching docType.
+      //
+      // They live here rather than on that row because a seller may record a
+      // number WITHOUT uploading anything, and a SellerDocument cannot exist
+      // without a file (`fileKey` is required, and stays that way).
+      //
+      // ADDITIVE and optional: every field defaults to undefined, so no
+      // existing seller document changes and nothing that reads
+      // `verification` today is affected.
+      licences: {
+        tan: { type: String, trim: true },
+        gumasta: { type: String, trim: true },
+        udyam: { type: String, trim: true },
+        agriculture: { type: String, trim: true },
+        horticulture: { type: String, trim: true },
+      },
+
       docs: [{ type: String }], // uploaded document urls
     },
 
@@ -93,6 +138,58 @@ const sellerSchema = new mongoose.Schema(
     // to false whenever the seller is (re-)approved after being unlinked.
     linkApprovalAcknowledged: { type: Boolean, default: false },
 
+    // ── LIVE LOCATION (browser geolocation consent) ──────────────────────
+    // ADDITIVE. Recorded when the portal asks for live location right after
+    // registration / login. `status` is the ACCOUNT-level answer, which is what
+    // makes "granted → never ask again, denied → ask again next login" work
+    // across devices; the browser's own permission is only a hint and is not
+    // readable everywhere.
+    //
+    // Absent on every pre-existing account, which reads as "never asked" and
+    // simply means the prompt is shown once.
+    locationAccess: {
+      // "revoked" = switched off from the settings page; unlike "denied" it is a
+      // standing decision, so the login prompt does not reopen for it.
+      status: {
+        type: String,
+        enum: ["granted", "denied", "revoked"],
+        default: null,
+      },
+      // GeoJSON Point, [longitude, latitude] — the SAME shape and field order
+      // as Warehouse.location, so one $geoNear works against either collection
+      // and the nearest-warehouse lookup needs no translation layer.
+      //
+      // NO DEFAULTS on either key, deliberately. A default would make Mongoose
+      // materialise `point: { type: "Point" }` with no coordinates on every
+      // save — including for accounts that DENIED — and the 2dsphere index
+      // rejects a Point with an empty coordinate array. The whole object is
+      // written at once, only when consent is granted, or not at all.
+      point: {
+        type: { type: String, enum: ["Point"] },
+        coordinates: { type: [Number] }, // [lng, lat]
+      },
+      accuracy: { type: Number }, // metres, as reported by the device
+      // READABLE ADDRESS, resolved SERVER-SIDE from the point above. Stored so
+      // the account can be read, filtered and supported by a human without
+      // geocoding the coordinates again on every screen.
+      //
+      // Every field is optional: geocoding can fail or return a partial answer,
+      // and a missing village name is no reason to reject a good fix. `point`
+      // stays the machine-readable truth; this is the human-readable view of it.
+      address: {
+        state: { type: String },
+        district: { type: String },
+        city: { type: String }, // city / town / village
+        pincode: { type: String },
+        country: { type: String },
+        formatted: { type: String }, // full one-line address from the provider
+        provider: { type: String }, // "google" | "nominatim" — which one answered
+        resolvedAt: { type: Date },
+      },
+      capturedAt: { type: Date }, // when the coordinates were taken
+      decidedAt: { type: Date }, // when allow/deny was last answered
+    },
+
     // Placeholder for seller IMS settings — populated in later phases.
     imsSettings: {
       type: Object,
@@ -102,6 +199,14 @@ const sellerSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
-sellerSchema.index({ email: 1 });
+// Add unique index on email — ensures email uniqueness at database level
+sellerSchema.index({ email: 1 }, { unique: true, sparse: true });
+// Add unique index on phone — ensures phone uniqueness at database level
+sellerSchema.index({ phone: 1 }, { unique: true, sparse: true });
+
+// Nearest-warehouse / proximity lookups against the stored consent point.
+// 2dsphere skips documents with no point, so accounts that never answered
+// or denied simply are not in the index.
+sellerSchema.index({ "locationAccess.point": "2dsphere" });
 
 module.exports = mongoose.model("Seller", sellerSchema);

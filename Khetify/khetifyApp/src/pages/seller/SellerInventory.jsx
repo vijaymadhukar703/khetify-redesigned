@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { STATUS, statusOf, computeInventorySummary, formatINR } from '../../lib/inventoryData';
 import { daysToExpiry, expiryBadge, fmtDate } from '../../lib/imsApi';
-import { getSellerLink, getSellerLots } from '../../lib/sellerApi';
+import { getSellerLots } from '../../lib/sellerApi';
 
 // Seller Inventory — READ-ONLY unified view of the seller's own stock
 // (ownerType "seller"). Stock, lots and expiry batches are one lots-based page:
@@ -24,7 +24,6 @@ const lotKey = (l) =>
 
 const SellerInventory = () => {
   const navigate = useNavigate();
-  const [approved, setApproved] = useState(null);
   const [lots, setLots] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -46,32 +45,36 @@ const SellerInventory = () => {
       .finally(() => setLoading(false));
   }, []);
 
-  const load = useCallback(() => {
-    getSellerLink()
-      .then((r) => {
-        const ok = r?.data?.linkStatus === 'approved';
-        setApproved(ok);
-        if (ok) loadLots(); else setLoading(false);
-      })
-      .catch(() => { setApproved(false); setLoading(false); });
-  }, [loadLots]);
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadLots(); }, [loadLots]);
 
   // One row per lot — deduped, since the same lot may arrive from more than one
   // source. Field names match statusOf/computeInventorySummary's contract.
+  // For deleted products, use productNameSnapshot as fallback to preserve visibility.
   const rows = useMemo(() => {
     const byKey = new Map();
     for (const l of lots) {
       const key = lotKey(l);
       if (!key || byKey.has(key)) continue;
       const p = l.productId || {};
+      
+      // Use product name, fallback to snapshot if product deleted, then to "-"
+      const displayName = p.productName || l.productNameSnapshot || '—';
+      
+      // Check if product is expired (expiryDate has passed)
+      const isExpired = l.expiryDate && new Date(l.expiryDate) < new Date();
+      
+      // If expired, add visual indicator
+      const nameWithStatus = isExpired ? `${displayName} (Expired)` : displayName;
+      
       byKey.set(key, {
         id: key,
         lotId: l._id,
         lotNo: l.lotNumber || l.batchNumber || '—',
         batchNo: l.batchNumber || '—',
-        name: p.productName || '—',
+        name: nameWithStatus,  // ✅ Shows with status
+        originalName: displayName,  // ✅ For filtering/search
         sku: p.skuNumber || '',
+        productCode: p.product_code || '',
         category: p.category || 'Uncategorised',
         brand: p.brandName || '',
         packingSize: [p.packagingType, p.unit].filter(Boolean).join(' · '),
@@ -81,6 +84,7 @@ const SellerInventory = () => {
         stock: l.availableStock || 0,
         reorderLevel: l.lowStockThreshold || 0,
         price: p.mrp || 0, // value at MRP only — never cost
+        isExpired,  // ✅ For styling
       });
     }
     return Array.from(byKey.values());
@@ -93,7 +97,9 @@ const SellerInventory = () => {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return rows.filter((r) => {
-      const matchesSearch = !q || [r.name, r.lotNo, r.batchNo, r.brand, r.warehouse]
+      // Search against originalName (without the "(Expired)" suffix)
+      const searchName = r.originalName || r.name;
+      const matchesSearch = !q || [searchName, r.lotNo, r.batchNo, r.brand, r.warehouse]
         .some((f) => (f || '').toLowerCase().includes(q));
       const d = daysToExpiry(r.expiryDate);
       const matchesExpiry =
@@ -112,19 +118,6 @@ const SellerInventory = () => {
     () => filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE),
     [filtered, safePage],
   );
-
-  if (approved === null) return <div className="flex-1 p-8 text-center text-stone-400 font-sora">Loading…</div>;
-  if (!approved) {
-    return (
-      <div className="flex-1 p-4 sm:p-8 bg-white font-sora">
-        <div className="max-w-xl mx-auto mt-10 bg-amber-50 border border-amber-200 rounded-2xl p-6 text-center">
-          <span className="material-symbols-outlined text-amber-500 text-4xl">lock</span>
-          <h2 className="text-lg font-bold text-amber-800 mt-2">Inventory is locked</h2>
-          <p className="text-sm text-amber-700 mt-1">Available after your supplying company approves you.</p>
-        </div>
-      </div>
-    );
-  }
 
   const statusClasses = (s) => (s === STATUS.IN ? 'text-green-600' : s === STATUS.LOW ? 'text-orange-500' : s === STATUS.OUT ? 'text-red-600' : 'text-stone-600');
 
@@ -177,7 +170,7 @@ const SellerInventory = () => {
                   {/* Brand + Reorder At are intentionally not shown on Seller
                       Inventory. The reorder value still drives Stock Status and
                       the Low/Out-of-Stock card — it's just not a column here. */}
-                  {['Lot No.', 'Batch No.', 'Product', 'Category', 'Warehouse', 'Mfg', 'Expiry', 'Qty', 'Stock Status', 'Expiry Status', 'MRP', ''].map((h, i) => (
+                  {['Lot No.', 'Product', 'Category', 'Warehouse', 'Mfg', 'Expiry', 'Qty', 'Stock Status', 'Expiry Status', 'MRP', ''].map((h, i) => (
                     <th key={i} className={`px-4 py-4 text-[10px] font-bold text-stone-400 uppercase tracking-widest whitespace-nowrap ${h === '' ? 'text-right' : ''}`}>{h}</th>
                   ))}
                 </tr>
@@ -187,15 +180,17 @@ const SellerInventory = () => {
                   const status = statusOf(r);
                   const badge = expiryBadge(r.expiryDate);
                   return (
-                    <tr key={r.id} className="hover:bg-stone-50/30 transition-colors">
+                    <tr key={r.id} className={`hover:bg-stone-50/30 transition-colors ${r.isExpired ? 'bg-red-50/30' : ''}`}>
                       <td data-label="Lot No." className="px-4 py-5">
                         <span className="text-xs font-bold bg-stone-100 text-stone-600 px-2.5 py-1 rounded-full whitespace-nowrap">{r.lotNo}</span>
                       </td>
-                      <td data-label="Batch No." className="px-4 py-5 text-sm text-stone-500 font-medium">{r.batchNo}</td>
                       <td data-label="Product" className="px-4 py-5">
-                        <p className="font-bold text-stone-900 text-sm">{r.name}</p>
+                        <p className={`font-bold text-sm ${r.isExpired ? 'text-red-700' : 'text-stone-900'}`}>
+                          {r.name}
+                        </p>
                         {r.sku && <p className="text-[10px] font-bold text-stone-400 uppercase tracking-tight">SKU: {r.sku}</p>}
                       </td>
+                      {/* <td data-label="Product Code" className="px-4 py-5 text-sm text-stone-500 font-medium whitespace-nowrap">{r.productCode || '—'}</td> */}
                       <td data-label="Category" className="px-4 py-5 text-sm text-stone-500 font-medium">{r.category}</td>
                       {/* <td data-label="Packing Size" className="px-4 py-5 text-sm text-stone-500 font-medium">{r.packingSize || '—'}</td> */}
                       <td data-label="Warehouse" className="px-4 py-5 text-sm text-stone-900 font-medium">{r.warehouse}</td>
@@ -225,8 +220,8 @@ const SellerInventory = () => {
                     </tr>
                   );
                 })}
-                {!loading && filtered.length === 0 && <tr><td colSpan={13} className="px-6 py-12 text-center text-sm text-stone-400">{rows.length === 0 ? 'No stock yet — it appears after your company approves a supply request.' : 'No lots match these filters.'}</td></tr>}
-                {loading && <tr><td colSpan={13} className="px-6 py-12 text-center text-sm text-stone-400">Loading inventory…</td></tr>}
+                {!loading && filtered.length === 0 && <tr><td colSpan={12} className="px-6 py-12 text-center text-sm text-stone-400">{rows.length === 0 ? 'No stock yet — it appears after your company approves a supply request.' : 'No lots match these filters.'}</td></tr>}
+                {loading && <tr><td colSpan={12} className="px-6 py-12 text-center text-sm text-stone-400">Loading inventory…</td></tr>}
               </tbody>
             </table>
           </div>

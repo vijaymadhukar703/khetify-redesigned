@@ -14,11 +14,25 @@ const WishlistContext = createContext(null);
 
 const keyFor = (id) => `${KEY_PREFIX}${id || "guest"}`;
 
+/**
+ * THE WISHLIST ENTRY KEY — the same rule the cart uses.
+ *
+ * A saved item must remember WHICH variant was saved: "Red" and "Green" are two
+ * different things at two possible prices, so listingId alone can no longer
+ * identify an entry. With no variant the key IS the listingId, so every
+ * existing caller and every already-saved list keeps working untouched.
+ */
+export const wishKey = (listingId, variantId) =>
+  (variantId ? `${listingId}::${variantId}` : String(listingId));
+
+/** Lists saved before wishId existed; derive it on read. */
+const withWishId = (i) => (i.wishId ? i : { ...i, wishId: wishKey(i.listingId, i.variantId) });
+
 function read(key) {
   try {
     const raw = localStorage.getItem(key);
     const arr = raw ? JSON.parse(raw) : [];
-    return Array.isArray(arr) ? arr : [];
+    return Array.isArray(arr) ? arr.map(withWishId) : [];
   } catch { return []; }
 }
 function write(key, items) {
@@ -35,10 +49,10 @@ function migrateLegacy() {
   } catch { /* ignore */ }
 }
 
-// Union by listingId (wishlist has no quantities).
+// Union by wishId (wishlist has no quantities).
 function mergeLists(base, extra) {
-  const map = new Map(base.map((i) => [i.listingId, i]));
-  for (const g of extra) if (!map.has(g.listingId)) map.set(g.listingId, g);
+  const map = new Map(base.map((i) => [i.wishId, i]));
+  for (const g of extra) if (!map.has(g.wishId)) map.set(g.wishId, g);
   return [...map.values()];
 }
 
@@ -78,27 +92,50 @@ export function WishlistProvider({ children }) {
     return () => window.removeEventListener("storage", onStorage);
   }, []);
 
-  // ── Public API (unchanged behaviour) ──
+  /* ── Public API ──
+     `variant` is OPTIONAL everywhere. Omitted (every pre-existing caller) the
+     behaviour is byte-for-byte what it was: keyed on listingId alone. */
+
   const isWishlisted = useCallback(
-    (listingId) => items.some((i) => i.listingId === listingId),
+    (listingId, variantId) => {
+      const id = wishKey(listingId, variantId);
+      return items.some((i) => (i.wishId || i.listingId) === id);
+    },
     [items]
   );
 
-  const addItem = useCallback((product) => {
+  /** The saved entry: the product, plus a snapshot of the chosen variant so the
+   *  wishlist card can show ITS image, ITS price and ITS label — not the
+   *  product's default, which is not what the shopper saved. */
+  const entryFor = (product, variant) => ({
+    ...product,
+    wishId: wishKey(product.listingId, variant?.id),
+    variantId: variant?.id || null,
+    variantLabel: variant?.label || null,
+    variantAttributes: variant?.attributes || null,
+    variantImage: variant?.image || null,
+    variantPrice: variant?.mrp != null ? Number(variant.mrp) : null,
+  });
+
+  const addItem = useCallback((product, variant = null) => {
+    const entry = entryFor(product, variant);
     setItems((prev) =>
-      prev.some((i) => i.listingId === product.listingId) ? prev : [...prev, product]
+      prev.some((i) => (i.wishId || i.listingId) === entry.wishId) ? prev : [...prev, entry]
     );
   }, []);
 
-  const removeItem = useCallback((listingId) => {
-    setItems((prev) => prev.filter((i) => i.listingId !== listingId));
+  // `id` is a wishId. For an item with no variant that IS its listingId, so
+  // callers that still pass a listingId keep working unchanged.
+  const removeItem = useCallback((id) => {
+    setItems((prev) => prev.filter((i) => (i.wishId || i.listingId) !== id));
   }, []);
 
-  const toggleItem = useCallback((product) => {
+  const toggleItem = useCallback((product, variant = null) => {
+    const entry = entryFor(product, variant);
     setItems((prev) =>
-      prev.some((i) => i.listingId === product.listingId)
-        ? prev.filter((i) => i.listingId !== product.listingId)
-        : [...prev, product]
+      prev.some((i) => (i.wishId || i.listingId) === entry.wishId)
+        ? prev.filter((i) => (i.wishId || i.listingId) !== entry.wishId)
+        : [...prev, entry]
     );
   }, []);
 

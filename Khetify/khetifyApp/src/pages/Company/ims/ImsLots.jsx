@@ -10,7 +10,7 @@ import {
   sortableKeyboardCoordinates, useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical } from 'lucide-react';
+import { GripVertical, ChevronDown } from 'lucide-react';
 import {
   getLots, receiveLot, createTmsShipment, dispatchShipment, getWarehouses, getWarehouseDirectory, getProducts,
   generateUnits, getUnits, markUnitsPrinted,
@@ -80,6 +80,22 @@ const statusFor = (l, original) => {
   return statusOf({ stock, reorderLevel: l.lowStockThreshold || 0 });
 };
 
+// Register-only: how much of the created quantity is still at the
+// warehouse. Live views use statusFor() instead.
+const MOVE = { ALL: 'All here', PART: 'Partly moved out', GONE: 'Fully moved out' };
+// Reserved goods are physically on the shelf and in-transit goods are a lot the
+// destination has not confirmed yet — counting either as moved out would be wrong.
+const heldQty = (l) =>
+  Number(l.availableStock || 0) + Number(l.reservedStock || 0) + Number(l.inTransitStock || 0);
+const movementFor = (l) => {
+  const created = originalQty(l);
+  if (created === null) return null;      // unproven row → "Unknown", same as statusFor
+  const held = heldQty(l);
+  if (held <= 0) return MOVE.GONE;
+  if (held >= created) return MOVE.ALL;
+  return MOVE.PART;
+};
+
 // The stock-status option that shows ONLY the lots this warehouse has nothing
 // left of. Deliberately not one of STATUS.*: those describe how much stock a lot
 // has, this one is about whether the lot still belongs in the working list.
@@ -118,6 +134,90 @@ const PAGE_SIZE = 10; // Company Lots pagination — lots per page
  *                     every other role, so the Company Warehouse view keeps
  *                     showing live balances exactly as before.
  */
+
+
+
+
+const STOCK_STATUS_OPTIONS = [
+  { value: 'all', label: 'All Stock Status' },
+  { value: STATUS.IN, label: 'In Stock', dot: 'bg-green-500' },
+  { value: STATUS.LOW, label: 'Low Stock', dot: 'bg-orange-500' },
+  { value: STATUS.OUT, label: 'Out of Stock', dot: 'bg-red-500' },
+  { value: STOCK_ZERO, label: 'Zero quantity (moved out)', dot: 'bg-stone-400' },
+];
+
+// The register's own filter list. Deliberately NO STOCK_ZERO entry — "Fully
+// moved out" is the same set, and two options for one filter would be noise.
+// RETAINED BUT UNREFERENCED: the register now shows Product Code instead of
+// Movement, so it filters on stock status like every other view. Kept here
+// (with MOVE and movementFor) because the movement reading may be wanted again.
+const MOVEMENT_OPTIONS = [
+  { value: 'all', label: 'All Movement' },
+  { value: MOVE.ALL, label: 'All here', dot: 'bg-green-500' },
+  { value: MOVE.PART, label: 'Partly moved out', dot: 'bg-orange-500' },
+  { value: MOVE.GONE, label: 'Fully moved out', dot: 'bg-stone-400' },
+];
+
+const StockStatusDropdown = ({ value, onChange, options = STOCK_STATUS_OPTIONS }) => {
+  const [open, setOpen] = useState(false);
+  const ref = React.useRef(null);
+
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const current = options.find((o) => o.value === value) || options[0];
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className={`inline-flex items-center gap-2 text-xs font-bold px-4 py-2 rounded-full border transition-colors cursor-pointer ${
+          open ? 'border-[#EA2831] text-[#EA2831] bg-[#EA2831]/5' : 'border-stone-200 text-stone-600 hover:bg-stone-50'
+        }`}
+      >
+        {current.label}
+        <ChevronDown className={`size-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <ul
+          role="listbox"
+          className="absolute z-20 mt-1.5 min-w-[210px] rounded-xl border border-stone-200 bg-white py-1.5 shadow-lg shadow-stone-900/10"
+        >
+          {options.map((opt) => {
+            const selected = opt.value === value;
+            return (
+              <li key={opt.value} role="option" aria-selected={selected}>
+                <button
+                  type="button"
+                  onClick={() => { onChange(opt.value); setOpen(false); }}
+                  className={`flex w-full items-center gap-2 px-3.5 py-2 text-left text-xs font-bold transition-colors ${
+                    selected ? 'text-[#EA2831] bg-[#EA2831]/5' : 'text-stone-600 hover:bg-stone-50'
+                  }`}
+                >
+                  {opt.dot && <span className={`size-1.5 rounded-full shrink-0 ${opt.dot}`} />}
+                  {opt.label}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+};
+
+
+
+
+
+
 const ImsLots = ({
   showSummary = false, showStockStatus = false, hideReceive = false,
   paginate = false, showBatchNo = false, fluid = false, requireWarehouse = false,
@@ -180,6 +280,10 @@ const ImsLots = ({
     getProducts().then((r) => setProducts(r?.data || r?.products || [])).catch(() => {});
   }, []);
 
+  // The two modes have disjoint filter vocabularies — a value picked in one
+  // would silently match nothing in the other, so switching tabs resets it.
+  useEffect(() => { setStockFilter('all'); setPage(1); }, [originalRegister]);
+
   /**
    * A lot this warehouse no longer holds any of. Its record STAYS in the
    * database for traceability — it is only hidden from the working list, and
@@ -197,7 +301,11 @@ const ImsLots = ({
     // at this warehouse is hidden by default — it is finished business, not
     // working stock — unless the operator asks for exactly those.
     let out = showSummary ? lots.slice() : lots.filter((l) => l.availableStock > 0);
-    out = stockFilter === STOCK_ZERO ? out.filter(isEmptyHere) : out.filter((l) => !isEmptyHere(l));
+    // The ORIGINAL LOT REGISTER keeps a lot forever, at its created quantity —
+    // a lot whose stock has fully moved out is exactly what the register
+    // exists to record. Live-stock views still hide spent lots as before.
+    if (stockFilter === STOCK_ZERO) out = out.filter(isEmptyHere);
+    else if (!originalRegister) out = out.filter((l) => !isEmptyHere(l));
     if (filter === 'expiring') out = out.filter((l) => { const d = daysToExpiry(l.expiryDate); return d !== null && d >= 0 && d <= 90; });
     else if (filter === 'expired') out = out.filter((l) => daysToExpiry(l.expiryDate) < 0);
     if (showStockStatus && stockFilter !== 'all' && stockFilter !== STOCK_ZERO) {
@@ -206,10 +314,21 @@ const ImsLots = ({
     return out;
   }, [lots, filter, stockFilter, showSummary, showStockStatus, originalRegister]);
 
-  // The lots the SUMMARY CARDS describe — the same set the table works on, so a
-  // hidden zero-quantity lot is not counted in Total Lots, Units in Stock or
-  // Total Stock Value either.
-  const countedLots = useMemo(() => lots.filter((l) => !isEmptyHere(l)), [lots]);
+  // The lots the SUMMARY CARDS describe — the same set the table works on. The
+  // ORIGINAL LOT REGISTER counts every lot it has ever minted, including one
+  // whose stock has fully moved out; live-stock views skip those spent lots, so
+  // a hidden zero-quantity lot is not counted in their cards at all.
+  const countedLots = useMemo(
+    () => (originalRegister ? lots : lots.filter((l) => !isEmptyHere(l))),
+    [lots, originalRegister]
+  );
+
+  // Register only — how many of those recorded lots have nothing left here.
+  // Live-stock views never show this figure, so they compute nothing.
+  const movedOutCount = useMemo(
+    () => (originalRegister ? lots.filter(isEmptyHere).length : 0),
+    [lots, originalRegister]
+  );
 
   // Company summary — reuse the SAME shared helper the dashboard uses, over the
   // SAME lot dataset, so the numbers can never disagree. No dummy/duplicated maths.
@@ -219,9 +338,9 @@ const ImsLots = ({
         const p = l.productId || {};
         return {
           id: l._id,
-          // Register: the ORIGINAL created quantity, so "Units in Stock" and
-          // "Total Stock Value" describe the lots as created, not as they stand
-          // now. An unproven row contributes 0 rather than a guess.
+          // Register: the ORIGINAL created quantity, so the cards read
+          // "Units Created" / "Created Value" and describe the lots as created,
+          // not as they stand now. An unproven row contributes 0 rather than a guess.
           stock: qtyFor(l, originalRegister) ?? 0,
           reorderLevel: l.lowStockThreshold || 0,
           price: p.mrp || 0,
@@ -247,12 +366,24 @@ const ImsLots = ({
             helper, so they match the dashboard exactly. */}
         {showSummary && (
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
-            {[
-              { label: 'Total Lots', value: summary.total },
-              { label: 'Low / Out of Stock', value: summary.lowStock + summary.outOfStock },
-              { label: 'Units in Stock', value: rows.reduce((s, r) => s + r.stock, 0).toLocaleString('en-IN') },
-              { label: 'Total Stock Value', value: formatINR(summary.stockValue) },
-            ].map((stat, i) => (
+            {(originalRegister
+              ? [
+                  // Register mode: the figures are created quantities, frozen at
+                  // minting, so the labels say so. A low-stock warning is
+                  // meaningless on a historical record — how many lots have fully
+                  // moved out is the useful count instead.
+                  { label: 'Total Lots Created', value: summary.total },
+                  { label: 'Fully Moved Out', value: movedOutCount },
+                  { label: 'Units Created', value: rows.reduce((s, r) => s + r.stock, 0).toLocaleString('en-IN') },
+                  { label: 'Created Value', value: formatINR(summary.stockValue) },
+                ]
+              : [
+                  { label: 'Total Lots', value: summary.total },
+                  { label: 'Low / Out of Stock', value: summary.lowStock + summary.outOfStock },
+                  { label: 'Units in Stock', value: rows.reduce((s, r) => s + r.stock, 0).toLocaleString('en-IN') },
+                  { label: 'Total Stock Value', value: formatINR(summary.stockValue) },
+                ]
+            ).map((stat, i) => (
               <div key={i} className="min-w-0 bg-white border border-stone-200 rounded-xl p-5 sm:p-6 shadow-sm">
                 <p className="text-stone-500 text-[10px] font-bold uppercase mb-2 tracking-wider">{stat.label}</p>
                 <p className="text-xl sm:text-2xl lg:text-3xl font-bold text-stone-900 break-words leading-tight tabular-nums">{stat.value}</p>
@@ -282,23 +413,13 @@ const ImsLots = ({
             ))}
             {/* Stock-status filter (Company) — operates on the SAME lot dataset and
                 the SAME statusOf rule as the cards, so "Low/Out" here == the card. */}
-            {showStockStatus && (
-              <select
-                value={stockFilter}
-                onChange={(e) => { setStockFilter(e.target.value); setPage(1); }}
-                className="text-xs font-bold border border-stone-200 rounded-full px-4 py-2 bg-white text-stone-600 focus:ring-[#EA2831]"
-                aria-label="Filter by stock status"
-              >
-                <option value="all">All Stock Status</option>
-                <option value={STATUS.IN}>In Stock</option>
-                <option value={STATUS.LOW}>Low Stock</option>
-                <option value={STATUS.OUT}>Out of Stock</option>
-                {/* The lots hidden from every other view — nothing left at this
-                    warehouse. The records still exist; this is how you reach
-                    them. */}
-                <option value={STOCK_ZERO}>Zero quantity (moved out)</option>
-              </select>
-            )}
+       {showStockStatus && (
+  <StockStatusDropdown
+    value={stockFilter}
+    onChange={(v) => { setStockFilter(v); setPage(1); }}
+    options={STOCK_STATUS_OPTIONS}
+  />
+)}
           </div>
           {/* Create + Receive — both available to admin AND operations manager
               (anyone holding lot:receive). Create = manual lot; Receive = scan.
@@ -339,9 +460,9 @@ const ImsLots = ({
             <table className={`w-full text-left border-collapse resp-table ${showBatchNo ? 'min-w-[1150px]' : 'min-w-[1000px]'}`}>
               <thead>
                 <tr className="bg-stone-50 border-b border-stone-200">
-                  <Th>Lot No.</Th><Th>Product</Th><Th>Warehouse</Th>
+                  <Th>Lot No.</Th><Th>Product</Th><Th>Product Code</Th><Th>Category</Th><Th>Warehouse</Th>
                   <Th>Mfg</Th><Th>Expiry</Th><Th>Qty</Th>
-                  {showStockStatus && <Th>Stock Status</Th>}
+                  {showStockStatus && !originalRegister && <Th>Stock Status</Th>}
                   <Th>{showStockStatus ? 'Expiry Status' : 'Status'}</Th><Th right>Actions</Th>
                 </tr>
               </thead>
@@ -376,6 +497,17 @@ const ImsLots = ({
                         <p className="font-bold text-stone-900 text-sm">{p.productName || '—'}</p>
                         <p className="text-[10px] font-bold text-stone-400 uppercase">{p.category || ''}</p>
                       </td>
+                      {/* The product's own code, beside the product it names, in
+                          every view. An ADDITION for the warehouse and seller —
+                          their Stock Status column is untouched below. */}
+                      <td className="px-6 py-5 text-sm font-mono font-semibold text-stone-700 whitespace-nowrap" data-label="Product Code">
+                        {p.product_code || <span className="text-stone-300">—</span>}
+                      </td>
+                      {/* Category rides beside the code in every view — register,
+                          warehouse and seller alike — never gated on the register. */}
+                      <td className="px-6 py-5 text-sm text-stone-500 font-medium" data-label="Category">
+                        {p.category || <span className="text-stone-300">—</span>}
+                      </td>
                       <td className="px-6 py-5 text-sm text-stone-500 font-medium" data-label="Warehouse">{lot.warehouseId?.name || 'Unassigned'}</td>
                       <td className="px-6 py-5 text-sm text-stone-500 font-medium" data-label="Mfg">{fmtDate(lot.mfgDate)}</td>
                       <td className="px-6 py-5 text-sm text-stone-500 font-medium" data-label="Expiry">{fmtDate(lot.expiryDate)}</td>
@@ -389,7 +521,7 @@ const ImsLots = ({
                           </span>
                         )}
                       </td>
-                      {showStockStatus && (
+                      {showStockStatus && !originalRegister && (
                         <td className="px-6 py-5" data-label="Stock Status">
                           <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${stockCls}`}>{stock ?? 'Unknown'}</span>
                         </td>
@@ -422,7 +554,7 @@ const ImsLots = ({
                   );
                 })}
                 {!loading && visible.length === 0 && (
-                  <tr><td colSpan={8 + (showStockStatus ? 1 : 0) + (showBatchNo ? 1 : 0)} className="px-6 py-12 text-center text-sm text-stone-400">No lots here.</td></tr>
+                  <tr><td colSpan={10 + (showStockStatus ? 1 : 0) + (showBatchNo ? 1 : 0)} className="px-6 py-12 text-center text-sm text-stone-400">No lots here.</td></tr>
                 )}
               </tbody>
             </table>

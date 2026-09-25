@@ -120,7 +120,7 @@ const CompanySubmissionComplete = () => {
       {/* Navbar */}
       <nav className="w-full bg-white border-b border-stone-200 px-6 py-4 flex items-center justify-between sticky top-0 z-50">
         <h1 className="text-[#f20d0d] text-xl font-bold tracking-tight">
-          Khetify
+          Khettify
         </h1>
 
         <div className="flex items-center gap-4">

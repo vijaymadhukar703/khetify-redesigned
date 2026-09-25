@@ -2,17 +2,16 @@ const express = require("express");
 const router = express.Router();
 
 const auth = require("../../middlewares/authMiddlewares");
-const requireApprovedSeller = require("../../middlewares/requireApprovedSeller");
 const authorize = require("../../middlewares/authorize");
 const loadSubscription = require("../../middlewares/loadSubscription");
 const requireFeature = require("../../middlewares/requireFeature");
 const { FEATURES } = require("../../config/plans");
 const ctrl = require("../../controller/Seller/sellerReportController");
 
-// Seller analytics. Approved sellers with report:read (seller_admin + the
+// Seller analytics. Any seller with report:read (seller_admin + the
 // warehouse manager; seller_staff has none). Numbers are owner-scoped to the
 // seller and warehouse-scoped for a manager.
-router.use(auth, requireApprovedSeller, authorize("report:read"));
+router.use(auth, authorize("report:read"));
 
 // The dashboard summary is an aggregate (like the free warehouse stock-summary)
 // — available on any plan.

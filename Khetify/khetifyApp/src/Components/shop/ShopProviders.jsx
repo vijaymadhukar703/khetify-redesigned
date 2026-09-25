@@ -3,6 +3,7 @@ import { Outlet } from "react-router-dom";
 import { ShopAuthProvider } from "../../context/ShopAuthContext";
 import { CartProvider } from "../../context/CartContext";
 import { WishlistProvider } from "../../context/WishlistContext";
+import { ShopLanguageProvider } from "../../context/ShopLanguageContext";
 
 /**
  * The storefront's context layer, with NO chrome of its own.
@@ -23,12 +24,17 @@ import { WishlistProvider } from "../../context/WishlistContext";
  */
 export default function ShopProviders() {
   return (
-    <ShopAuthProvider>
-      <CartProvider>
-        <WishlistProvider>
-          <Outlet />
-        </WishlistProvider>
-      </CartProvider>
-    </ShopAuthProvider>
+    // ShopLanguageProvider sits OUTSIDE the rest so every storefront page and
+    // the bare no-chrome routes (order-success) can translate. Mounted here and
+    // nowhere else, it cannot reach the Company/Seller/Admin apps.
+    <ShopLanguageProvider>
+      <ShopAuthProvider>
+        <CartProvider>
+          <WishlistProvider>
+            <Outlet />
+          </WishlistProvider>
+        </CartProvider>
+      </ShopAuthProvider>
+    </ShopLanguageProvider>
   );
 }

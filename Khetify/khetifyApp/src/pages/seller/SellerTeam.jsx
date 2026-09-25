@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import { GhostBtn } from '../Company/ims/ImsUi';
-import BackButton from '../../Components/BackButton';
+
 import {
   getSellerTeam, updateSellerMember, deleteSellerMember, SELLER_TEAM_ROLES,
 } from '../../lib/sellerApi';
@@ -65,7 +65,7 @@ const SellerTeam = () => {
   return (
     <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-stone-50/50 font-sora">
       <div className="max-w-5xl mx-auto space-y-5">
-        <BackButton to="/seller/admin" />
+       
         <div>
           <h1 className="text-xl font-bold text-stone-900">Team &amp; Roles</h1>
           <p className="text-sm text-stone-500">{rows.length} member(s) across your seller portal.</p>

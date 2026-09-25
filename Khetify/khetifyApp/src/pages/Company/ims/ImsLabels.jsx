@@ -10,6 +10,7 @@ import LotLabel from '../../../Components/ims/LotLabel';
 import BulkPackageLabel from '../../../Components/ims/BulkPackageLabel';
 import { usePermission } from '../../../context/PermissionContext';
 import { isWarehouseRole } from '../../../lib/roles';
+import { ChevronDown } from 'lucide-react';
 
 // Child unit serials are minted and controlled by the MAIN COMPANY. A Company
 // Warehouse works the labels it has received — view, print, reprint — but never
@@ -32,6 +33,128 @@ const LAYOUTS = {
   '65': { cols: 5, w: 38, h: 21, label: '65 / page · 38×21mm' },
   '24': { cols: 3, w: 64, h: 34, label: '24 / page · 64×34mm' },
 };
+
+
+
+
+
+// Custom dropdown replacing the native Lot <select> — same inputCls sizing,
+// themed open menu. Options can be long (product · lot · avail count), so each
+// row wraps rather than truncating silently.
+const LotSelectDropdown = ({ lots, value, lotLabel, onChange }) => {
+  const [open, setOpen] = useState(false);
+  const ref = React.useRef(null);
+
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const current = lots.find((l) => l._id === value);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className={`${inputCls} flex items-center justify-between gap-2 text-left ${
+          open ? 'border-[#EA2831] ring-2 ring-[#EA2831]/20' : ''
+        }`}
+      >
+        <span className="truncate">{current ? lotLabel(current) : 'Select lot…'}</span>
+        <ChevronDown className={`size-4 shrink-0 text-stone-400 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <ul
+          role="listbox"
+          className="absolute z-20 mt-1.5 w-full min-w-[280px] rounded-xl border border-stone-200 bg-white py-1.5 shadow-lg shadow-stone-900/10 max-h-72 overflow-y-auto"
+        >
+          {lots.map((l) => {
+            const selected = l._id === value;
+            return (
+              <li key={l._id} role="option" aria-selected={selected}>
+                <button
+                  type="button"
+                  onClick={() => { onChange(l._id); setOpen(false); }}
+                  className={`flex w-full items-center px-3.5 py-2 text-left text-sm font-medium transition-colors ${
+                    selected ? 'text-[#EA2831] bg-[#EA2831]/5 font-bold' : 'text-stone-600 hover:bg-stone-50'
+                  }`}
+                >
+                  {lotLabel(l)}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+};
+
+// Custom dropdown replacing the native Layout <select> (65/page, 24/page,
+// Custom size…) — compact, matches its small pill-style sizing.
+const LayoutSelectDropdown = ({ value, onChange }) => {
+  const [open, setOpen] = useState(false);
+  const ref = React.useRef(null);
+
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const options = [...Object.entries(LAYOUTS).map(([k, v]) => [k, v.label]), ['custom', 'Custom size…']];
+  const currentLabel = options.find(([k]) => k === value)?.[1] || options[0][1];
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className={`border rounded-lg text-xs px-2 py-1.5 bg-white flex items-center gap-1.5 transition-colors ${
+          open ? 'border-[#EA2831] ring-2 ring-[#EA2831]/20' : 'border-stone-200 hover:bg-stone-50'
+        }`}
+      >
+        {currentLabel}
+        <ChevronDown className={`size-3.5 text-stone-400 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <ul
+          role="listbox"
+          className="absolute z-20 mt-1.5 min-w-[160px] rounded-xl border border-stone-200 bg-white py-1.5 shadow-lg shadow-stone-900/10"
+        >
+          {options.map(([k, label]) => {
+            const selected = k === value;
+            return (
+              <li key={k} role="option" aria-selected={selected}>
+                <button
+                  type="button"
+                  onClick={() => { onChange(k); setOpen(false); }}
+                  className={`flex w-full items-center px-3.5 py-2 text-left text-xs font-bold transition-colors ${
+                    selected ? 'text-[#EA2831] bg-[#EA2831]/5' : 'text-stone-600 hover:bg-stone-50'
+                  }`}
+                >
+                  {label}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+};
+
+
+
+
 
 const PRINT_CSS = `
 /* The MASTER lot label — rendered ONCE for the whole sheet, above and outside
@@ -142,6 +265,19 @@ const lotOriginalQty = (l) =>
   typeof l?.originalQuantity === 'number'
     ? l.originalQuantity
     : Number(l?.availableStock || 0) + Number(l?.inTransitStock || 0);
+
+/**
+ * What the warehouse PHYSICALLY holds of this lot right now.
+ *
+ * Separate from lotOriginalQty on purpose: that is how many unit labels the lot
+ * may ever have, this is stock. All three buckets count — `reservedStock` is on
+ * the shelf but allocated to an order, and `inTransitStock` is on its way in and
+ * not yet confirmed. Omitting either would hide a lot the warehouse really has.
+ */
+const heldQty = (l) =>
+  Number(l?.availableStock || 0)
+  + Number(l?.reservedStock || 0)
+  + Number(l?.inTransitStock || 0);
 
 // Unit labels per row inside a Bulk Packaging page card. Capped at 3 so a
 // 5-unit box reads as a balanced 3 + 2 instead of one stretched line.
@@ -255,6 +391,24 @@ const ImsLabels = () => {
 
   const lot = useMemo(() => lots.find((l) => l._id === lotId), [lots, lotId]);
 
+  // A warehouse user should not see lots it no longer physically holds —
+  // e.g. stock that has been transferred away. Company-level roles still
+  // see every lot, since they mint labels for lots held anywhere.
+  const visibleLots = useMemo(
+    () => (isWarehouse ? lots.filter((l) => heldQty(l) > 0) : lots),
+    [lots, isWarehouse]
+  );
+
+  // The mount effect picks its initial lot from the RAW list, which for a
+  // warehouse user can land on a lot the filter above hides. Re-point the
+  // selection at the first visible lot so the dropdown never reads blank
+  // with a lot still loaded behind it.
+  useEffect(() => {
+    if (!lotId) return;
+    if (visibleLots.some((l) => l._id === lotId)) return;
+    setLotId(visibleLots[0]?._id || '');
+  }, [visibleLots, lotId]);
+
   const loadUnits = () => {
     if (!lotId) return;
     // Load the FULL set (backend caps at 10000) so large lots render completely
@@ -352,7 +506,9 @@ const ImsLabels = () => {
    */
   const lotLabel = (l) =>
     `${l.productId?.productName || 'Item'} · ${l.lotNumber || l.batchNumber}`
-    + ` (avail ${labelsLeftFor(l).toLocaleString('en-IN')})`;
+    // A warehouse never generates labels, so the count is noise for them —
+    // Main Company keeps it. Same figure as before, just not shown there.
+    + (isWarehouse ? '' : ` (avail ${labelsLeftFor(l).toLocaleString('en-IN')})`);
 
   const qtyNum = Number(qty) || 0;
   // GENERATE availability — how many NEW labels may still be minted.
@@ -500,12 +656,8 @@ const ImsLabels = () => {
           <div className="flex flex-wrap items-end gap-3">
             <div className="flex-1 min-w-[220px]">
               <Field label="Lot">
-                <select className={inputCls} value={lotId} onChange={(e) => setLotId(e.target.value)}>
-                  {/* A fully-labelled lot stays in the list — you still print,
-                      reprint and recall from here — and reads "Labels remaining 0". */}
-                  {lots.map((l) => <option key={l._id} value={l._id}>{lotLabel(l)}</option>)}
-                </select>
-              </Field>
+  <LotSelectDropdown lots={visibleLots} value={lotId} lotLabel={lotLabel} onChange={setLotId} />
+</Field>
             </div>
             <Field label="Generate qty">
               <div className="inline-flex items-center gap-1" title={isWarehouse ? GENERATE_LOCKED_MSG : undefined}>
@@ -580,10 +732,7 @@ const ImsLabels = () => {
                 <option value="unprinted">Unprinted only</option>
                 <option value="all">All units</option>
               </select> */}
-              <select className="border border-stone-200 rounded-lg text-xs px-2 py-1.5 bg-white" value={layout} onChange={(e) => setLayout(e.target.value)}>
-                {Object.entries(LAYOUTS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-                <option value="custom">Custom size…</option>
-              </select>
+              <LayoutSelectDropdown value={layout} onChange={setLayout} />
               {layout === 'custom' && (
                 <div className="no-print flex items-center gap-2">
                   {[

@@ -62,7 +62,7 @@ const AdminLogin = () => {
         <div className="w-full max-w-[440px] bg-white rounded-xl shadow-lg p-8 sm:p-10 border border-gray-100">
           <div className="mb-6 text-center">
             <h1 className="text-[#ea2a33] text-4xl font-bold tracking-tight inline-flex items-center gap-2">
-              Khetify
+              Khettify
               <span className="text-[10px] font-bold uppercase tracking-wider text-stone-400 bg-stone-100 rounded-full px-2 py-0.5 align-middle">
                 Admin
               </span>
