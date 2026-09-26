@@ -1,3 +1,4 @@
+const { rollback } = require("../../middlewares/productUploadCleanup");
 const express = require("express");
 const router = express.Router();
 
@@ -31,7 +32,7 @@ router.post(
   "/",
   upload.uploadProductFields,
   applyUploadedImages,
-  validate({ body: createAdminProductBody }),
+  validate({ body: createAdminProductBody }, rollback),
   createAdminProduct
 );
 
@@ -40,7 +41,7 @@ router.put(
   "/:id",
   upload.uploadProductFields,
   applyUploadedImages,
-  validate({ body: updateAdminProductBody }),
+  validate({ body: updateAdminProductBody }, rollback),
   updateAdminProduct
 );
 

@@ -1,3 +1,4 @@
+const uploadCleanup = require("../../middlewares/productUploadCleanup");
 const Product = require("../../model/Company/productModel");
 const Company = require("../../model/Company/Company");
 const Inventory = require("../../model/Inventory/Inventory");  // ✅ FIXED: Add missing import
@@ -246,12 +247,14 @@ const validateProductPayload = (body, { existing = {}, requireUnitValue = false,
 
 /* ================= CREATE PRODUCT ================= */
 exports.createProduct = async (req, res) => {
+  let writeStarted = false;
   try {
     const { companyId, variantType } = req.body;
 
     // ================= COMPANY CHECK =================
     const company = await Company.findById(companyId);
     if (!company) {
+      await uploadCleanup.rollback(req);
       return res.status(404).json({
         success: false,
         message: "Company not found",
@@ -292,6 +295,7 @@ exports.createProduct = async (req, res) => {
       requireUpload: !isDraft,
     });
     if (invalid) {
+      await uploadCleanup.rollback(req);
       return res.status(400).json({ success: false, message: invalid });
     }
 
@@ -358,6 +362,7 @@ exports.createProduct = async (req, res) => {
       strict: req.body.productUpload !== "saveDraft",
     });
     if (badBulkVariants) {
+      await uploadCleanup.rollback(req);
       return res.status(400).json({ success: false, message: badBulkVariants });
     }
     if (variantType === "single") {
@@ -380,7 +385,9 @@ exports.createProduct = async (req, res) => {
     for (let attempt = 1; ; attempt++) {
       try {
         newProduct = new Product(req.body);
+        writeStarted = true;
         await newProduct.save();
+        uploadCleanup.commit(req);
         break;
       } catch (err) {
         // Two products racing on the same random code: regenerate and retry.
@@ -423,6 +430,7 @@ exports.createProduct = async (req, res) => {
       data: newProduct,
     });
   } catch (error) {
+    await uploadCleanup.rollbackRejected(req, error, writeStarted);
     console.error("Create Product Error:", error);
     // Mongoose validation errors carry per-field detail — surface them instead
     // of a blank 500 so the upload form can tell the user what to fix.
@@ -490,9 +498,11 @@ exports.getAllProducts = async (req, res) => {
 
 /* ================= UPDATE PRODUCT ================= */
 exports.updateProduct = async (req, res) => {
+  let writeStarted = false;
   try {
     const { productId } = req.params;
     if (!mongoose.Types.ObjectId.isValid(productId)) {
+      await uploadCleanup.rollback(req);
       return res.status(400).json({ success: false, message: "Invalid product ID" });
     }
     // The edit form loads the product with companyId POPULATED (an object), so
@@ -504,6 +514,7 @@ exports.updateProduct = async (req, res) => {
     if (req.body.companyId && mongoose.Types.ObjectId.isValid(req.body.companyId)) {
       const company = await Company.findById(req.body.companyId);
       if (!company) {
+        await uploadCleanup.rollback(req);
         return res.status(404).json({ success: false, message: "Company not found" });
       }
     } else {
@@ -511,11 +522,13 @@ exports.updateProduct = async (req, res) => {
     }
     const existingProduct = await Product.findById(productId);
     if (!existingProduct) {
+      await uploadCleanup.rollback(req);
       return res.status(404).json({ success: false, message: "Product not found" });
     }
 
     // Cannot edit a deleted product
     if (existingProduct.deletedAt) {
+      await uploadCleanup.rollback(req);
       return res.status(400).json({ success: false, message: "Cannot edit a deleted product" });
     }
 
@@ -538,6 +551,7 @@ exports.updateProduct = async (req, res) => {
     deriveShelfLife(req.body);
     const invalid = validateProductPayload(req.body, { existing: existingProduct });
     if (invalid) {
+      await uploadCleanup.rollback(req);
       return res.status(400).json({ success: false, message: invalid });
     }
 
@@ -652,6 +666,7 @@ exports.updateProduct = async (req, res) => {
     // for it (a form that can't send the object has it dropped above anyway).
     const badBulkVariants = normalizeBulkVariants(req.body, { strict: false });
     if (badBulkVariants) {
+      await uploadCleanup.rollback(req);
       return res.status(400).json({ success: false, message: badBulkVariants });
     }
 
@@ -669,10 +684,13 @@ exports.updateProduct = async (req, res) => {
     let updatedProduct;
     for (let attempt = 1; ; attempt++) {
       try {
+        writeStarted = true;
         updatedProduct = await Product.findByIdAndUpdate(productId, req.body, {
           new: true,
           runValidators: true,
         });
+        if (updatedProduct) uploadCleanup.commit(req);
+        else await uploadCleanup.rollback(req);
         break;
       } catch (err) {
         // Only reachable on the self-heal path above (a normal edit never
@@ -693,6 +711,7 @@ exports.updateProduct = async (req, res) => {
       data: updatedProduct,
     });
   } catch (error) {
+    await uploadCleanup.rollbackRejected(req, error, writeStarted);
     console.error("Update Product Error:", error);
     // Mongoose validation errors carry per-field detail — surface them.
     if (error?.name === "ValidationError") {

@@ -64,9 +64,37 @@ const upload = multer({
 // Pre-configured fields() middleware for product create/update routes.
 // Accepts up to 5 product gallery images and up to 10 per-variant images in
 // one multipart request, keeping them in separate req.files buckets.
-upload.uploadProductFields = upload.fields([
+const { randomUUID } = require("crypto");
+const { pipeline } = require("stream");
+const cleanup = require("./productUploadCleanup");
+// Exclusive creation prevents failed requests from overwriting existing assets.
+const productStorage = {
+  _handleFile(req, file, cb) {
+    const destination = cleanup.PRODUCT_UPLOAD_DIRECTORY;
+    fs.mkdir(destination, { recursive: true }, (err) => {
+      if (err) return cb(err);
+      const filename = randomUUID() + path.extname(file.originalname);
+      const target = path.join(destination, filename);
+      fs.open(target, "wx", (openError, fd) => {
+        if (openError) return cb(openError);
+        const output = fs.createWriteStream(target, { fd });
+        pipeline(file.stream, output, (streamError) => {
+          if (streamError) fs.unlink(target, () => cb(streamError));
+          else cb(null, { destination, filename, path: target, size: output.bytesWritten });
+        });
+      });
+    });
+  },
+  _removeFile(req, file, cb) { fs.unlink(file.path, cb); },
+};
+const productFields = multer({ storage: productStorage, limits: { fileSize: 25 * 1024 * 1024 }, fileFilter }).fields([
   { name: "productImages", maxCount: 5 },
   { name: "variantImages", maxCount: 30 },
 ]);
 
+upload.uploadProductFields = (req, res, next) => productFields(req, res, (error) => {
+  if (error) return next(error); // Multer handles upload-stage rollback.
+  cleanup.capture(req, cleanup.PRODUCT_UPLOAD_DIRECTORY);
+  next();
+});
 module.exports = upload;

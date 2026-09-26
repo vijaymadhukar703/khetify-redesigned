@@ -1,3 +1,4 @@
+const uploadCleanup = require("../../middlewares/productUploadCleanup");
 const mongoose = require("mongoose");
 const AdminProduct = require("../../model/Admin/AdminProduct");
 const { applyUploadedImages } = require("../Seller/sellerMyProductController");
@@ -135,11 +136,13 @@ exports.getAdminProduct = async (req, res) => {
  * the Product schema); `createdByAdmin` is stamped from the token.
  */
 exports.createAdminProduct = async (req, res) => {
+  let writeStarted = false;
   try {
     const body = { ...req.body };
     deriveShelfLife(body);
     deriveVariantType(body);
 
+    writeStarted = true;
     const product = await AdminProduct.create({
       ...body,
       createdByAdmin: req.admin.id,
@@ -147,8 +150,10 @@ exports.createAdminProduct = async (req, res) => {
       productUpload: "uploaded",
     });
 
+    uploadCleanup.commit(req);
     res.status(201).json({ success: true, data: product });
   } catch (err) {
+    await uploadCleanup.rollbackRejected(req, err, writeStarted);
     if (err?.name === "ValidationError") {
       return res.status(400).json({ success: false, message: err.message });
     }
@@ -160,8 +165,10 @@ exports.createAdminProduct = async (req, res) => {
 
 /** PUT /api/admin/products/:id — product_code is never updated. */
 exports.updateAdminProduct = async (req, res) => {
+  let writeStarted = false;
   try {
     if (!mongoose.isValidObjectId(req.params.id)) {
+      await uploadCleanup.rollback(req);
       return res.status(404).json({ success: false, message: "Product not found" });
     }
     const body = { ...req.body };
@@ -171,15 +178,18 @@ exports.updateAdminProduct = async (req, res) => {
     deriveShelfLife(body);
     deriveVariantType(body);
 
+    writeStarted = true;
     const product = await AdminProduct.findByIdAndUpdate(
       req.params.id,
       { $set: body },
       { new: true, runValidators: true }
     );
-    if (!product) return res.status(404).json({ success: false, message: "Product not found" });
+    if (!product) { await uploadCleanup.rollback(req); return res.status(404).json({ success: false, message: "Product not found" }); }
 
+    uploadCleanup.commit(req);
     res.json({ success: true, data: product });
   } catch (err) {
+    await uploadCleanup.rollbackRejected(req, err, writeStarted);
     if (err?.name === "ValidationError") {
       return res.status(400).json({ success: false, message: err.message });
     }

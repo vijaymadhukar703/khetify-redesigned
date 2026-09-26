@@ -1,3 +1,4 @@
+const uploadCleanup = require("../../middlewares/productUploadCleanup");
 const mongoose = require("mongoose");
 const Product = require("../../model/Company/productModel");
 const Seller = require("../../model/Seller/Seller");
@@ -86,6 +87,7 @@ const blockedOnHorticultureDocs = async (req, res) => {
   if (!String(req.body?.horticultureProduct || "").trim()) return false;
   const missing = await missingHorticultureDocs(req.user.sellerId);
   if (!missing.length) return false;
+  await uploadCleanup.rollback(req);
   res.status(400).json({
     success: false,
     code: "HORTICULTURE_DOCS_REQUIRED",
@@ -293,7 +295,7 @@ const applyUploadedImages = (req, res, next) => {
 
     return next();
   } catch (err) {
-    return next(err);
+    return uploadCleanup.rollback(req).then(() => next(err));
   }
 };
 
@@ -415,12 +417,14 @@ exports.listMyProducts = async (req, res) => {
  * other product.
  */
 exports.createMyProduct = async (req, res) => {
+  let writeStarted = false;
   try {
     if (await blockedOnHorticultureDocs(req, res)) return;
     const body = { ...req.body };
     deriveShelfLife(body);
     deriveVariantType(body);
 
+    writeStarted = true;
     const product = await Product.create({
       ...body,
       ownerType: "seller",
@@ -432,8 +436,10 @@ exports.createMyProduct = async (req, res) => {
       productUpload: "uploaded",
     });
 
+    uploadCleanup.commit(req);
     res.status(201).json({ success: true, data: product });
   } catch (err) {
+    await uploadCleanup.rollbackRejected(req, err, writeStarted);
     if (err?.name === "ValidationError") {
       return res.status(400).json({ success: false, message: err.message });
     }
@@ -649,8 +655,10 @@ exports.getMyProduct = async (req, res) => {
  * validated body and are never assignable here.
  */
 exports.updateMyProduct = async (req, res) => {
+  let writeStarted = false;
   try {
     if (!mongoose.isValidObjectId(req.params.id)) {
+      await uploadCleanup.rollback(req);
       return res.status(404).json({ success: false, message: "Product not found" });
     }
     if (await blockedOnHorticultureDocs(req, res)) return;
@@ -658,15 +666,18 @@ exports.updateMyProduct = async (req, res) => {
     deriveShelfLife(body);
     deriveVariantType(body);
 
+    writeStarted = true;
     const product = await Product.findOneAndUpdate(
       { _id: req.params.id, ...ownerFilter(req) },
       { $set: body },
       { new: true, runValidators: true }
     );
-    if (!product) return res.status(404).json({ success: false, message: "Product not found" });
+    if (!product) { await uploadCleanup.rollback(req); return res.status(404).json({ success: false, message: "Product not found" }); }
 
+    uploadCleanup.commit(req);
     res.json({ success: true, data: product });
   } catch (err) {
+    await uploadCleanup.rollbackRejected(req, err, writeStarted);
     if (err?.name === "ValidationError") {
       return res.status(400).json({ success: false, message: err.message });
     }

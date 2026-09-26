@@ -14,8 +14,8 @@ const { ZodError } = require("zod");
  *
  * Accepts any subset of { body, query, params }.
  */
-function validate(schemas = {}) {
-  return (req, res, next) => {
+function validate(schemas = {}, onFailure) {
+  return async (req, res, next) => {
     try {
       if (schemas.body) req.body = schemas.body.parse(req.body);
       if (schemas.query) {
@@ -32,6 +32,7 @@ function validate(schemas = {}) {
       return next();
     } catch (err) {
       if (err instanceof ZodError) {
+        if (onFailure) await onFailure(req);
         return res.status(400).json({
           success: false,
           message: "Validation failed",
