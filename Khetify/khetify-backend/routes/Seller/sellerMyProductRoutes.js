@@ -1,3 +1,4 @@
+const { prepare } = require("../../services/variantEditCompatibility");
 const { rollback } = require("../../middlewares/productUploadCleanup");
 const express = require("express");
 const router = express.Router();
@@ -98,6 +99,7 @@ router.put(
   authorize("myproduct:manage"),
   upload.uploadProductFields,
   applyUploadedImages,
+  prepare("seller"),
   validate({ body: updateMyProductBody }, rollback),
   updateMyProduct
 );

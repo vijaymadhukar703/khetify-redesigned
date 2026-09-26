@@ -156,3 +156,17 @@ test('uncertain database write outcome does not delete possibly referenced files
   await cleanup.rollbackRejected(req, new Error('write acknowledgement lost'), true);
   expect(fs.existsSync(file)).toBe(true);
 });
+
+test.each(['post', 'put'])('Company measurement rejection awaits cleanup on %s', async method => {
+  const before = await Product.findById(product._id).lean();
+  const url = method === 'post' ? '/company/create' : '/company/' + product._id;
+  const res = await attach(request(app)[method](url).set('Authorization', tokens.company)
+    .field('companyId', String(owner)).field('kept_images', retained)
+    .field('variants', JSON.stringify([{ label: 'Red', measurements: { length: 2 } }])));
+  expect(res.status).toBe(400);
+  expect(res.body.message).toContain('Variant Red:');
+  expect(observed).toHaveLength(3);
+  expect(observed.every(file => !fs.existsSync(file))).toBe(true);
+  expect(fs.existsSync(retained)).toBe(true);
+  expect(await Product.findById(product._id).lean()).toEqual(before);
+});

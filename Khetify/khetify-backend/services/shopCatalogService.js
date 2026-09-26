@@ -154,13 +154,29 @@ function toShopVariants(product) {
   const list = Array.isArray(product?.variants) ? product.variants : [];
   return list
     .filter((v) => v && (v.label || v.image || v.mrp != null))
-    .map((v) => ({
+    .map((v) => {
+      // Some already-saved seller products used dimensions for this same block.
+      // Prefer the canonical block as a whole; never mix different sources.
+      const measurements = v.measurements ?? v.dimensions;
+      return ({
       id: String(v._id),
       label: v.label || "",
       attributes: v.attributes instanceof Map
         ? Object.fromEntries(v.attributes)
         : { ...(v.attributes || {}) },
       sku: v.sku || null,
+      // Preserve the saved admin -> seller measurement names. No product fallback.
+      ...(measurements ? { measurements: {
+        packagingType: measurements.packagingType,
+        unit: measurements.unit,
+        unitValue: measurements.unitValue,
+        length: measurements.length,
+        width: measurements.width,
+        height: measurements.height,
+        dimensionUnit: measurements.dimensionUnit,
+        weight: measurements.weight,
+        weightUnit: measurements.weightUnit,
+      } } : {}),
       // ALL of this variant's photos, for the detail page's gallery. Empty for
       // a company product and for any variant saved before multi-image was
       // added — the page then falls back to the single `image` below, so
@@ -171,7 +187,8 @@ function toShopVariants(product) {
       mrp: v.mrp ?? null,
       stock: v.stock ?? null,
       image: v.image || null,
-    }));
+      });
+    });
 }
 
 /** Shape one listing+product+seller into the card/detail payload sent to the UI. */

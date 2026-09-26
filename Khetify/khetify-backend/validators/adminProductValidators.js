@@ -35,7 +35,12 @@ const cinNo = z
   .refine((v) => v === "" || CIN_REGEX.test(v), "Enter a valid 21-character CIN")
   .optional();
 
+const measurements = require("./variantMeasurements");
+// Absent measurements remain valid for legacy variants.
+const adminVariants = z.array(createMyProductBody.shape.variants.unwrap().element.extend({ measurements: measurements.optional() })).max(100).optional();
+
 const createAdminProductBody = createMyProductBody.extend({
+  variants: adminVariants,
   companyName: requiredName("Company Name"),
   legalName: requiredName("Legal Name"),
   licNo,
@@ -43,6 +48,7 @@ const createAdminProductBody = createMyProductBody.extend({
 });
 
 const updateAdminProductBody = updateMyProductBody.extend({
+  variants: adminVariants,
   companyName: optionalName("Company Name"),
   legalName: optionalName("Legal Name"),
   licNo,

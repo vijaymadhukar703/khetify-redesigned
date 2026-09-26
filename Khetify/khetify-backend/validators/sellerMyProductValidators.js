@@ -69,6 +69,7 @@ const requiredDate = (label) =>
  * moves it. The form enforces the same rule by rendering that cell read-only.
  */
 const variantBody = z.object({
+  measurements: require("./variantMeasurements").optional(),
   label: z.string({ required_error: "Variant label is required" }).trim().min(1).max(200),
   // { "Size": "500g", "Color": "Red" } — mirrors the Map on the product schema.
   attributes: z.record(z.string().trim().max(60)).optional(),

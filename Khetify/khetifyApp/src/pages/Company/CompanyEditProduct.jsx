@@ -2,6 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import Swal from 'sweetalert2';
+import CompanyVariantMeasurements from './CompanyVariantMeasurements.jsx';
+import { editMeasurementError } from '../admin/measurementEdit.js';
+import { hydrateCompanyEditProduct, companyProductEditPayload } from './companyProductEditPayload.js';
 import { getProductCosts, formatINR } from '../../lib/imsApi';
 import SelectWithOther from '../../Components/ims/SelectWithOther';
 import { getProductImage } from '../../lib/productImage';
@@ -14,6 +17,7 @@ const CompanyEditProduct = () => {
   
   // --- States ---
   const [loading, setLoading] = useState(true);
+  const [expandedVariant, setExpandedVariant] = useState(null);
   const [selectedFiles, setSelectedFiles] = useState([]); // Sirf Nayi Images (Files)
   const [previews, setPreviews] = useState([]); // UI Previews (Old URLs + New Blobs)
   const [currentImgIndex, setCurrentImgIndex] = useState(0); // Slider Index
@@ -55,7 +59,7 @@ const CompanyEditProduct = () => {
           
           // Date Fix (YYYY-MM-DD for input fields)
           
-          setFormData(data);
+          setFormData(hydrateCompanyEditProduct(data));
 
           // Purani Images ko Preview mein dikhana. Shared helper tolerates clean
           // relative paths, legacy absolute Windows paths, and http(s) URLs.
@@ -128,21 +132,17 @@ const CompanyEditProduct = () => {
   // 4. Update Logic (Database Sync)
   const handleUpdate = async (e) => {
     e.preventDefault();
+    for (const [index, row] of (formData.variants || []).entries()) {
+      const problem = editMeasurementError(row);
+      if (problem) {
+        setExpandedVariant(index);
+        return Swal.fire({ title: 'Check variant measurements', text: row.label + ': ' + problem, icon: 'warning' });
+      }
+    }
     setLoading(true);
     try {
       const token = localStorage.getItem('token');
-      const data = new FormData();
-      
-      // Saari Text Fields append karo. Manufacturing & expiry dates are now
-      // captured per lot at stock-receive, so we no longer send them here.
-      // product_code is server-owned and immutable — never send it back (the
-      // backend drops it too, this just keeps the payload honest).
-      const SKIP_KEYS = ['productImages', '_id', '__v', 'createdAt', 'updatedAt', 'manufacturingDate', 'expiryDate', 'batchNumber', 'product_code'];
-      Object.keys(formData).forEach(key => {
-        if (!SKIP_KEYS.includes(key)) {
-             data.append(key, formData[key] || '');
-        }
-      });
+      const data = companyProductEditPayload(formData);
 
       // 🔥 CRITICAL: Purani Images (Jo user ne delete NAHI ki)
       const keptImages = previews
@@ -371,6 +371,27 @@ const CompanyEditProduct = () => {
                <div><label className={labelClass}>Safety Instructions</label><input name="safetyInstructions" value={formData.safetyInstructions} onChange={handleChange} className={inputClass} /></div>
             </div>
           </section>
+
+          {formData.variants?.length > 0 && <section className="space-y-4">
+            <h3 className="text-lg font-bold text-stone-900">Product Variants</h3>
+            <div className="overflow-x-auto rounded-xl border border-stone-200">
+              <div className="min-w-[720px]">
+                <div className="grid grid-cols-[1.5fr_1.5fr_1fr_1fr_72px_100px] gap-3 bg-stone-100 px-4 py-2.5 text-[10px] font-black uppercase tracking-widest text-stone-400">
+                  {['Variant', 'SKU', 'MRP', 'Stock', 'Photo', 'Dimensions'].map(label => <span key={label}>{label}</span>)}
+                </div>
+                {formData.variants.map((row, i) => <div key={row._id || i} className="grid grid-cols-[1.5fr_1.5fr_1fr_1fr_72px_100px] items-center gap-3 border-t border-stone-100 px-4 py-3 text-sm">
+                  <span>{row.label}</span><span>{row.sku}</span><span>{row.mrp ?? ''}</span><span>{row.stock ?? ''}</span>
+                  <div className="flex flex-wrap gap-1">{(row.images?.length ? row.images : row.image ? [row.image] : []).map((image, index) => <img key={index} src={getProductImage(image)} alt={row.label} className="size-8 rounded object-cover" />)}</div>
+                  <button type="button" className="rounded-lg border border-stone-200 p-2 text-xl font-bold text-[#EA2831]" aria-label={'Dimensions for ' + row.label}
+                    aria-expanded={expandedVariant === i} onClick={() => setExpandedVariant(current => current === i ? null : i)}>+</button>
+                  {expandedVariant === i && <div className="col-span-full border-t border-stone-100 bg-white p-4">
+                    <CompanyVariantMeasurements value={row.measurements} idPrefix={'company-edit-variant-' + i}
+                      onChange={measurements => setFormData(prev => ({ ...prev, variants: prev.variants.map((v, index) => index === i ? { ...v, measurements, _measurementCleared: measurements === undefined } : v) }))} />
+                  </div>}
+                </div>)}
+              </div>
+            </div>
+          </section>}
 
           {/* Action Buttons */}
           <div className="flex flex-col sm:flex-row gap-4 pt-10 border-t border-stone-50">

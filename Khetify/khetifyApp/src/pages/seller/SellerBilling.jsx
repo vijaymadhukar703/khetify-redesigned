@@ -81,6 +81,10 @@ const SellerBilling = () => {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         {Object.entries(plans).map(([key, p]) => {
           const isCurrent = key === sellerPlan;
+          // 🚧 Pro / Enterprise upgrades are not live yet — the switch button for
+          // either is commented out below and replaced with a "Coming soon"
+          // badge next to the plan name. Free is unaffected.
+          const isComingSoon = key !== 'free';
           const feats = p.features === 'ALL'
             ? ['Everything in Pro', 'All current & future features']
             : key === 'free'
@@ -91,6 +95,7 @@ const SellerBilling = () => {
               <div className="flex items-center justify-between">
                 <h3 className="text-lg font-bold text-stone-900">{p.label || key}</h3>
                 {isCurrent && <span className="text-[10px] font-bold uppercase tracking-wider text-[#EA2831] bg-[#EA2831]/10 rounded-full px-2 py-0.5">Current</span>}
+                {!isCurrent && isComingSoon && <span className="text-[10px] font-bold uppercase tracking-wider text-stone-500 bg-stone-100 rounded-full px-2 py-0.5">Coming soon</span>}
               </div>
               <p className="text-2xl font-black text-stone-900 mt-2">{PLAN_PRICE[key] || '—'}</p>
               <p className="text-[11px] text-stone-400 mt-1">
@@ -103,14 +108,28 @@ const SellerBilling = () => {
                   </li>
                 ))}
               </ul>
-              <button
-                onClick={() => choose(key)}
-                disabled={isCurrent || busy === key || !canManage}
-                title={!canManage ? 'Only your seller admin can change the plan' : undefined}
-                className={`mt-5 rounded-lg px-4 py-2.5 text-sm font-bold transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${isCurrent ? 'bg-stone-100 text-stone-500' : 'bg-[#EA2831] text-white hover:bg-red-600'}`}
-              >
-                {isCurrent ? 'Your plan' : !canManage ? 'Admin only' : busy === key ? 'Switching…' : `Switch to ${p.label || key}`}
-              </button>
+              {/* 🚧 "Switch to Pro" / "Switch to Enterprise" — commented out
+                  until upgrades go live. Free's button is untouched below. */}
+              {/* {isComingSoon && (
+                <button
+                  onClick={() => choose(key)}
+                  disabled={isCurrent || busy === key || !canManage}
+                  title={!canManage ? 'Only your seller admin can change the plan' : undefined}
+                  className={`mt-5 rounded-lg px-4 py-2.5 text-sm font-bold transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${isCurrent ? 'bg-stone-100 text-stone-500' : 'bg-[#EA2831] text-white hover:bg-red-600'}`}
+                >
+                  {isCurrent ? 'Your plan' : !canManage ? 'Admin only' : busy === key ? 'Switching…' : `Switch to ${p.label || key}`}
+                </button>
+              )} */}
+              {!isComingSoon && (
+                <button
+                  onClick={() => choose(key)}
+                  disabled={isCurrent || busy === key || !canManage}
+                  title={!canManage ? 'Only your seller admin can change the plan' : undefined}
+                  className={`mt-5 rounded-lg px-4 py-2.5 text-sm font-bold transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${isCurrent ? 'bg-stone-100 text-stone-500' : 'bg-[#EA2831] text-white hover:bg-red-600'}`}
+                >
+                  {isCurrent ? 'Your plan' : !canManage ? 'Admin only' : busy === key ? 'Switching…' : `Switch to ${p.label || key}`}
+                </button>
+              )}
             </div>
           );
         })}

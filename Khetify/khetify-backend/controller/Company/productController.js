@@ -1,3 +1,4 @@
+const variantEdit = require("../../services/variantEditCompatibility");
 const uploadCleanup = require("../../middlewares/productUploadCleanup");
 const Product = require("../../model/Company/productModel");
 const Company = require("../../model/Company/Company");
@@ -505,21 +506,11 @@ exports.updateProduct = async (req, res) => {
       await uploadCleanup.rollback(req);
       return res.status(400).json({ success: false, message: "Invalid product ID" });
     }
-    // The edit form loads the product with companyId POPULATED (an object), so
-    // multipart form-data stringifies it to the literal "[object Object]".
-    // Validate only a real ObjectId; anything else is dropped so the product
-    // keeps its existing company (a product's owner never changes on edit).
-    // Without this, Company.findById("[object Object]") throws a CastError on
-    // path _id ("Invalid value for _id: [object Object]").
-    if (req.body.companyId && mongoose.Types.ObjectId.isValid(req.body.companyId)) {
-      const company = await Company.findById(req.body.companyId);
-      if (!company) {
-        await uploadCleanup.rollback(req);
-        return res.status(404).json({ success: false, message: "Company not found" });
-      }
-    } else {
-      delete req.body.companyId;
-    }
+    // Ownership is immutable on edit. Older clients send null/empty sellerId
+    // and populated companyId; never cast or apply these client-owned values.
+    delete req.body.companyId;
+    delete req.body.sellerId;
+    delete req.body.ownerType;
     const existingProduct = await Product.findById(productId);
     if (!existingProduct) {
       await uploadCleanup.rollback(req);
@@ -685,7 +676,7 @@ exports.updateProduct = async (req, res) => {
     for (let attempt = 1; ; attempt++) {
       try {
         writeStarted = true;
-        updatedProduct = await Product.findByIdAndUpdate(productId, req.body, {
+        updatedProduct = variantEdit.hasPlan(req) ? await variantEdit.update(req, req.body) : await Product.findByIdAndUpdate(productId, req.body, {
           new: true,
           runValidators: true,
         });
@@ -712,6 +703,7 @@ exports.updateProduct = async (req, res) => {
     });
   } catch (error) {
     await uploadCleanup.rollbackRejected(req, error, writeStarted);
+    if (error?.status === 409) return res.status(409).json({ success: false, message: error.message });
     console.error("Update Product Error:", error);
     // Mongoose validation errors carry per-field detail — surface them.
     if (error?.name === "ValidationError") {

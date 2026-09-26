@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { shopVariantSpecs } from "./shopVariantSpecs.js";
 import { useParams, useNavigate, useSearchParams, Link } from "react-router-dom";
 import { getShopProduct, getShopProducts, submitQuantityRequest } from "../../lib/shopApi";
 import { getProductImage } from "../../lib/productImage";
@@ -318,11 +319,13 @@ export default function ShopProductDetail() {
      are prepended to the existing spec rows and inherit that table's layout for
      free. `variantSpecs` is empty when nothing is selected, so the table looks
      exactly as it does today. */
+  const measurementSpecs = shopVariantSpecs(selectedVariant, lang);
   const variantSpecs = selectedVariant
     ? [
         [variantLabelFor(variants), selectedVariant.label],
         ...attrEntries.filter(([key]) => key !== variantLabelFor(variants)),
         ...(selectedVariant.sku ? [[t("pd.specVariantSku"), selectedVariant.sku]] : []),
+        ...measurementSpecs,
       ]
     : [];
 
@@ -949,7 +952,7 @@ const actionButtons = (
                 {specs.map(([label, value]) => (
                   <div key={label} className="flex justify-between gap-4 border-b border-stone-100 py-2.5 text-sm last:border-0">
                     <dt className="text-stone-500">{label}</dt>
-                    <dd className="text-right font-semibold capitalize text-stone-800">{value}</dd>
+                    <dd className={`text-right font-semibold text-stone-800 ${measurementSpecs.some(([key]) => key === label) ? "normal-case" : "capitalize"}`}>{value}</dd>
                   </div>
                 ))}
               </dl>

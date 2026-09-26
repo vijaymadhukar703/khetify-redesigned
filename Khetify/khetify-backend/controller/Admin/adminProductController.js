@@ -1,3 +1,4 @@
+const variantEdit = require("../../services/variantEditCompatibility");
 const uploadCleanup = require("../../middlewares/productUploadCleanup");
 const mongoose = require("mongoose");
 const AdminProduct = require("../../model/Admin/AdminProduct");
@@ -179,7 +180,7 @@ exports.updateAdminProduct = async (req, res) => {
     deriveVariantType(body);
 
     writeStarted = true;
-    const product = await AdminProduct.findByIdAndUpdate(
+    const product = variantEdit.hasPlan(req) ? await variantEdit.update(req, body) : await AdminProduct.findByIdAndUpdate(
       req.params.id,
       { $set: body },
       { new: true, runValidators: true }

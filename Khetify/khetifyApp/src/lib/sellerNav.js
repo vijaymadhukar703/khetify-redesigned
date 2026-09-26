@@ -34,8 +34,8 @@ export const SELLER_MODULES = [
   { key: "warehouses", label: "Warehouses", icon: "warehouse", phase: 2, desc: "Your storage locations.", path: "/seller/warehouses", live: true, cap: "warehouse:read", noApproval: true },
   { key: "operations", label: "Stock Transfers", icon: "sync_alt", phase: 4, desc: "Receive, send, transfer & trace stock.", path: "/seller/operations", live: true, cap: "transfer:read" },
   { key: "labels", label: "Barcodes & Labels", icon: "qr_code_2", phase: 4, desc: "Print & scan your unit barcodes.", path: "/seller/labels", live: true, feature: "unit_labels", cap: "label:read" },
-  { key: "pos", label: "POS", icon: "point_of_sale", phase: 5, desc: "Counter billing — sell and deduct stock instantly.", path: "/seller/pos", live: true, cap: "order:create", noApproval: true },
-  { key: "outbound", label: "Sales", icon: "point_of_sale", phase: 5, desc: "Sell to customers and dealers.", path: "/seller/outbound", live: true, feature: "sales_channel", cap: "order:read", noApproval: true },
+    { key: "pos", label: "POS", icon: "point_of_sale", phase: 5, desc: "Counter billing — sell and deduct stock instantly.", path: "/seller/pos", live: true, feature: "sales_channel", cap: "order:create", noApproval: true },
+  { key: "outbound", label: "Sales", icon: "point_of_sale", phase: 5, desc: "Sell to customers and dealers.", path: "/seller/outbound", live: true, cap: "order:read", noApproval: true },
   { key: "analytics", label: "Stock Valuation", icon: "monitoring", phase: 4, desc: "Stock, aging, expiry & movement reports.", path: "/seller/analytics", live: true, feature: "inventory_view", cap: "report:read" },
   { key: "customers", label: "Customers & Dealers", icon: "groups", phase: 5, desc: "Your end customers and dealers.", path: "/seller/customers", live: true, cap: "customer:read" },
   // NEW ENTRY (add to SELLER_MODULES array):
